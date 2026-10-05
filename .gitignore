@@ -1,5 +1,5 @@
-   jarvis.db
-   reports/
-   .env
-   __pycache__/
-   *.log
+jarvis.db
+reports/
+.env
+__pycache__/
+*.log
