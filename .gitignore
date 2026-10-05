@@ -1,0 +1,5 @@
+   jarvis.db
+   reports/
+   .env
+   __pycache__/
+   *.log
