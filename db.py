@@ -3,7 +3,7 @@
 import json
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from config import DB_PATH, SCHEMA_PATH
 
@@ -95,6 +95,32 @@ def get_recent_knowledge(category: str | None = None, since: str | None = None) 
     query += " ORDER BY created_at DESC"
     conn = get_connection()
     rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return rows
+
+
+def search_knowledge(keyword: str | None = None, since_days: int = 14, limit: int = 20) -> list[sqlite3.Row]:
+    """質問文でKnowledgeをLIKE検索する。0件の場合は直近since_days日の最新Knowledgeにフォールバックする。"""
+    since = (datetime.now() - timedelta(days=since_days)).isoformat()
+
+    if keyword:
+        conn = get_connection()
+        rows = conn.execute(
+            "SELECT * FROM nodes WHERE type = 'Knowledge' AND created_at >= ? "
+            "AND (title LIKE ? OR content LIKE ?) "
+            "ORDER BY created_at DESC LIMIT ?",
+            (since, f"%{keyword}%", f"%{keyword}%", limit),
+        ).fetchall()
+        conn.close()
+        if rows:
+            return rows
+
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM nodes WHERE type = 'Knowledge' AND created_at >= ? "
+        "ORDER BY created_at DESC LIMIT ?",
+        (since, limit),
+    ).fetchall()
     conn.close()
     return rows
 

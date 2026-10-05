@@ -30,6 +30,11 @@
 - `generate_report.py`: Markdownレポート生成
 - `run_daily.py`: エントリポイント
 
+## 3.1 モジュール構成（Phase 2）
+
+- `db.py`: `search_knowledge()` を追加（キーワードLIKE検索＋直近N日フォールバック）
+- `ask.py`: 質問文を受け取り、`search_knowledge()` の結果をコンテキストとしてClaude APIに渡し、出典URL付きで回答するCLI
+
 ## 4. 実行基盤
 
 - 開発: Windows、本番: Mac mini（48GB）

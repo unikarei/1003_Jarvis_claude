@@ -26,6 +26,14 @@ python run_daily.py
 
 各ステップは個別にも実行できる（`python fetch_news.py` など）。
 
+## 質問応答（Phase 2）
+
+```powershell
+python ask.py "先週のAIニュースで重要だったのは？"
+```
+
+蓄積したKnowledgeをSQLiteで検索し、出典URL付きで回答する。引数を省略すると対話入力になる。
+
 ## 定期実行（タスクスケジューラ）
 
 `config.py` はすべてのパスを `__file__` 基準で解決するため、作業ディレクトリに依存しない。PowerShellで以下を実行してタスクを登録する（`python.exe`のパスは環境に合わせて変更）。
