@@ -27,9 +27,14 @@
 
 ## Phase 3: 音声対話
 
-- [ ] 音声認識（faster-whisper等）の選定と動作確認
-- [ ] 音声合成（VOICEVOX等）の選定と動作確認
-- [ ] Phase 2の窓口に入出力を接続
+- [x] 検証範囲をファイルベースI/Oに限定し spec.md に明記（実機マイク/スピーカーは本番環境で確認）
+- [x] speech_to_text.py（faster-whisperで音声ファイル→テキスト）の実装と動作確認 — Windows SAPIで生成した日本語音声で文字起こし成功
+- [x] text_to_speech.py（VOICEVOX ENGINEでテキスト→音声ファイル）の実装 — ENGINE未起動時に明確なエラーを返すことを確認（実際の音声合成はENGINE起動後にユーザー側で確認）
+- [x] talk.py（音声ファイル→文字起こし→ask.answer()→音声合成）の実装 — STT→ask部分は動作確認済み。TTS部分はVOICEVOX ENGINE起動後に確認
+- [x] VOICEVOX ENGINEをWindows開発機にセットアップ — v0.25.2（windows-cpu版、.vvppはzip形式）を`voicevox_engine/`に展開、`run.exe`起動でHTTP API稼働確認（既定スピーカーIDをid=3 ずんだもん・ノーマルに修正）
+- [x] live_talk.py（マイク録音→talk相当処理→スピーカー再生）の実装
+- [x] Windows実機でのマイク入力・スピーカー出力の動作確認 — 実際に話しかけた内容が文字起こしされ、Claude APIの回答がスピーカーから再生されることを確認（「生成AI」が「生成屋」と誤認識される等、小型Whisperモデルの精度課題はあるが、音声対話のループ自体は成立）
+- [ ] Mac miniへの移行（Windowsでの検証完了後）
 
 ## Phase 4以降
 

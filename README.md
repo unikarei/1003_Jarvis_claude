@@ -34,6 +34,31 @@ python ask.py "先週のAIニュースで重要だったのは？"
 
 蓄積したKnowledgeをSQLiteで検索し、出典URL付きで回答する。引数を省略すると対話入力になる。
 
+## 音声対話（Phase 3）
+
+音声合成には[VOICEVOX ENGINE](https://voicevox.hiroshiba.jp/)が必要（本リポジトリには含まない）。Windows CPU版のセットアップ:
+
+```powershell
+# https://github.com/VOICEVOX/voicevox_engine/releases から
+# voicevox_engine-windows-cpu-<version>.vvpp をダウンロード（.vvppはzip形式）
+Expand-Archive voicevox_engine-windows-cpu-<version>.vvpp -DestinationPath voicevox_engine
+voicevox_engine\run.exe
+```
+
+ENGINEが `http://127.0.0.1:50021` で起動していることを確認してから、以下を実行する。
+
+```powershell
+# ファイルベース（自動テスト・デバッグ用）
+python talk.py <入力音声ファイル.wav> <出力音声ファイル.wav>
+
+# 実機マイク/スピーカー（Windows開発機での検証用）
+python live_talk.py 8  # 8秒間録音し、回答をスピーカーで再生
+```
+
+いずれも 音声/テキスト → `speech_to_text.py`（faster-whisper） → `ask.answer()` → `text_to_speech.py`（VOICEVOX） → 音声、を接続する。ENGINE未起動の場合は明確なエラーで停止する。`speech_to_text.py` / `text_to_speech.py` は単体でも実行できる。
+
+現在はWindows開発機で実機マイク/スピーカーの動作検証まで完了している。Mac miniへの移行は本番運用フェーズで行う。
+
 ## 定期実行（タスクスケジューラ）
 
 `config.py` はすべてのパスを `__file__` 基準で解決するため、作業ディレクトリに依存しない。PowerShellで以下を実行してタスクを登録する（`python.exe`のパスは環境に合わせて変更）。

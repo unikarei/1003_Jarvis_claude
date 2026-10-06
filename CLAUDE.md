@@ -99,8 +99,8 @@
 
 ## 開発環境
 
-- 開発: Windows（`D:\usr8_work\work_23_chatgpt\16_PoCs\1003_Jarvis_claude`）、VS CodeのClaude Code拡張
-- 本番運用予定: Mac mini（統合メモリ48GB）。機密ナレッジ処理はローカルLLM、高精度が必要な推論はクラウドAPIのハイブリッド構成
+- 開発・動作検証: Windows（`D:\usr8_work\work_23_chatgpt\16_PoCs\1003_Jarvis_claude`）、VS CodeのClaude Code拡張。音声対話（Phase 3）を含め、当面はWindows上で実機のマイク/スピーカーを使った検証を行う
+- 本番運用予定: Mac mini（統合メモリ48GB）。機密ナレッジ処理はローカルLLM、高精度が必要な推論はクラウドAPIのハイブリッド構成。移行はMVPがWindows上で十分に検証できた後に行う
 - Windowsでは `pip install` に `--break-system-packages` は不要。定期実行はタスクスケジューラ、Macではlaunchd
 - リポジトリ: https://github.com/unikarei/1003_Jarvis_claude （main）
 

@@ -35,6 +35,13 @@
 - `db.py`: `search_knowledge()` を追加（キーワードLIKE検索＋直近N日フォールバック）
 - `ask.py`: 質問文を受け取り、`search_knowledge()` の結果をコンテキストとしてClaude APIに渡し、出典URL付きで回答するCLI
 
+## 3.2 モジュール構成（Phase 3）
+
+- `speech_to_text.py`: faster-whisperで音声ファイル（wav）を文字起こし
+- `text_to_speech.py`: VOICEVOX ENGINE（ローカルHTTP API）でテキストを音声ファイル（wav）に合成
+- `talk.py`: 音声ファイル → `speech_to_text` → `ask.answer()` → `text_to_speech` → 音声ファイル、を接続するCLI（ファイルベース検証用）
+- `live_talk.py`: 実機マイクで固定時間録音 → `talk`相当の処理 → 既定スピーカーで再生するCLI（Windows実機検証用）
+
 ## 4. 実行基盤
 
 - 開発: Windows、本番: Mac mini（48GB）
