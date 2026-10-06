@@ -133,29 +133,42 @@ def extract_keywords(text: str) -> list[str]:
     return list(dict.fromkeys(keywords))
 
 
-def _keyword_match_clause(keywords: list[str], match_all: bool) -> tuple[str, list[str]]:
-    joiner = " AND " if match_all else " OR "
-    clause = joiner.join(["(title LIKE ? OR content LIKE ?)"] * len(keywords))
+def _keyword_match_clause(keywords: list[str]) -> tuple[str, list[str]]:
+    clause = " OR ".join(["(title LIKE ? OR content LIKE ?)"] * len(keywords))
     params = [p for kw in keywords for p in (f"%{kw}%", f"%{kw}%")]
     return clause, params
 
 
+def _search_by_keywords(keywords: list[str], limit: int) -> list[sqlite3.Row]:
+    """いずれかのキーワードを含むKnowledgeを取得し、一致キーワード数が多い順に並べ替える。
+    「結果」「判断」のような一般的な単語1つだけの一致が、複数語が一致する本命より
+    上位に来ないようにするため。
+    """
+    clause, params = _keyword_match_clause(keywords)
+    candidates = _fetchall(
+        f"SELECT * FROM nodes WHERE type = 'Knowledge' AND ({clause}) "
+        "ORDER BY created_at DESC LIMIT 200",
+        params,
+    )
+
+    def match_count(row: sqlite3.Row) -> int:
+        text = f"{row['title']} {row['content']}"
+        return sum(1 for kw in keywords if kw in text)
+
+    ranked = sorted(candidates, key=match_count, reverse=True)
+    return ranked[:limit]
+
+
 def search_knowledge(keyword: str | None = None, since_days: int = 14, limit: int = 20) -> list[sqlite3.Row]:
     """質問文からキーワードを抽出してKnowledgeをLIKE検索する（全履歴対象。ニュースだけでなく
-    長期参照用ナレッジも検索するため）。まず全キーワード一致、次にいずれか一致を試す。
+    長期参照用ナレッジも検索するため）。一致キーワード数が多い順に並べる。
     0件の場合は、直近since_days日の最新Knowledgeにフォールバックする（曖昧な質問向け）。
     """
     if keyword:
         keywords = extract_keywords(keyword) or [keyword]
-        for match_all in (True, False):
-            clause, params = _keyword_match_clause(keywords, match_all)
-            rows = _fetchall(
-                f"SELECT * FROM nodes WHERE type = 'Knowledge' AND ({clause}) "
-                "ORDER BY created_at DESC LIMIT ?",
-                (*params, limit),
-            )
-            if rows:
-                return rows
+        rows = _search_by_keywords(keywords, limit)
+        if rows:
+            return rows
 
     since = (datetime.now() - timedelta(days=since_days)).isoformat()
     return _fetchall(
