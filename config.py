@@ -21,6 +21,10 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 # 必要になれば JARVIS_SUMMARY_MODEL で高精度レイヤーに切り替え可能。
 SUMMARY_MODEL = os.environ.get("JARVIS_SUMMARY_MODEL", "claude-haiku-4-5-20251001")
 
+# 階層型エスカレーション（CLAUDE.md参照）の高精度レイヤー。軽量レイヤーで検証失敗時、または
+# 呼び出し側がforce_escalate=Trueを指定した場合のみ使用する。
+ESCALATION_MODEL = os.environ.get("JARVIS_ESCALATION_MODEL", "claude-sonnet-5-5")
+
 CATEGORY_NEWS = "news"
 
 RSS_FEEDS = [

@@ -145,3 +145,19 @@ def get_source_for_knowledge(knowledge_id: str) -> sqlite3.Row | None:
         "WHERE e.src_id = ? AND e.type = 'derived_from' AND n.type = 'Source'",
         (knowledge_id,),
     )
+
+
+def get_or_create_agent(name: str) -> str:
+    """名前が一致するAgentノードを探し、なければ作成してidを返す（委譲先エージェントの識別に使う）。"""
+    row = _fetchone("SELECT * FROM nodes WHERE type = 'Agent' AND title = ?", (name,))
+    if row:
+        return row["id"]
+    return insert_node(node_type="Agent", title=name)
+
+
+def find_skill_by_title(title: str) -> sqlite3.Row | None:
+    """タイトルが部分一致するSkillノードを探す（同種タスクの再実行時に既存Skillを再利用するため）。"""
+    return _fetchone(
+        "SELECT * FROM nodes WHERE type = 'Skill' AND title LIKE ? ORDER BY created_at DESC LIMIT 1",
+        (f"%{title}%",),
+    )

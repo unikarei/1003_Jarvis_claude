@@ -77,6 +77,17 @@ schtasks /Query /TN "JARVIS_DailyNews" /V /FO LIST
 schtasks /Delete /TN "JARVIS_DailyNews" /F
 ```
 
+## タスク実行・スキル蓄積（Phase 4）
+
+```powershell
+python run_task.py "Pythonで文字列を逆順にする関数を実装して"   # コード関連 → code_agent.py（OpenAI）に委譲
+python run_task.py "先週のAIニュースで重要だったのは？"          # ナレッジ関連 → ask.answer()
+```
+
+タスクの説明文に`コード`/`実装`/`関数`/`バグ`/`デバッグ`/`スクリプト`/`プログラム`/`リファクタ`のいずれかが含まれるとコードタスクと判定し、`code_agent.py`（`OPENAI_API_KEY`が必要）に委譲する。それ以外はナレッジ質問応答として`ask.answer()`を使う。実行結果はTaskノードとして保存され、同種のタスクで使った方法はSkillノードとして再利用される（Task→uses→Skill、Task→executed_by→Agent）。
+
+エージェントの判断履歴（階層型エスカレーション・コード委譲）は `jarvis_agent.log` に記録される（`.gitignore`で除外）。
+
 ## RSSフィードの追加
 
 `config.py` の `RSS_FEEDS` にエントリを追記する。
