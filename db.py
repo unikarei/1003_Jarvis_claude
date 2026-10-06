@@ -5,7 +5,11 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta
 
+from janome.tokenizer import Tokenizer
+
 from config import DB_PATH, SCHEMA_PATH
+
+_tokenizer = Tokenizer()
 
 NODE_TYPES = {"Category", "Task", "Knowledge", "Source", "Skill", "Agent"}
 EDGE_TYPES = {"belongs_to", "produced", "derived_from", "depends_on", "uses", "executed_by"}
@@ -109,20 +113,47 @@ def get_recent_knowledge(category: str | None = None, since: str | None = None) 
     return _fetchall(query, params)
 
 
+def extract_keywords(text: str) -> list[str]:
+    """質問文から名詞（固有名詞含む）を抽出する。質問文全体をそのままLIKE検索すると
+    自然文はほぼ一致しないため、検索語として使える語だけを取り出す。
+    """
+    keywords = []
+    for token in _tokenizer.tokenize(text):
+        pos = token.part_of_speech.split(",")[0]
+        if pos == "名詞" and len(token.surface) >= 2:
+            keywords.append(token.surface)
+    return list(dict.fromkeys(keywords))
+
+
+def _keyword_match_clause(keywords: list[str], match_all: bool) -> tuple[str, list[str]]:
+    joiner = " AND " if match_all else " OR "
+    clause = joiner.join(["(title LIKE ? OR content LIKE ?)"] * len(keywords))
+    params = [p for kw in keywords for p in (f"%{kw}%", f"%{kw}%")]
+    return clause, params
+
+
 def search_knowledge(keyword: str | None = None, since_days: int = 14, limit: int = 20) -> list[sqlite3.Row]:
-    """質問文でKnowledgeをLIKE検索する。0件の場合は直近since_days日の最新Knowledgeにフォールバックする。"""
-    since = (datetime.now() - timedelta(days=since_days)).isoformat()
-    base_query = "SELECT * FROM nodes WHERE type = 'Knowledge' AND created_at >= ?"
-
+    """質問文からキーワードを抽出してKnowledgeをLIKE検索する（全履歴対象。ニュースだけでなく
+    長期参照用ナレッジも検索するため）。まず全キーワード一致、次にいずれか一致を試す。
+    0件の場合は、直近since_days日の最新Knowledgeにフォールバックする（曖昧な質問向け）。
+    """
     if keyword:
-        rows = _fetchall(
-            f"{base_query} AND (title LIKE ? OR content LIKE ?) ORDER BY created_at DESC LIMIT ?",
-            (since, f"%{keyword}%", f"%{keyword}%", limit),
-        )
-        if rows:
-            return rows
+        keywords = extract_keywords(keyword) or [keyword]
+        for match_all in (True, False):
+            clause, params = _keyword_match_clause(keywords, match_all)
+            rows = _fetchall(
+                f"SELECT * FROM nodes WHERE type = 'Knowledge' AND ({clause}) "
+                "ORDER BY created_at DESC LIMIT ?",
+                (*params, limit),
+            )
+            if rows:
+                return rows
 
-    return _fetchall(f"{base_query} ORDER BY created_at DESC LIMIT ?", (since, limit))
+    since = (datetime.now() - timedelta(days=since_days)).isoformat()
+    return _fetchall(
+        "SELECT * FROM nodes WHERE type = 'Knowledge' AND created_at >= ? ORDER BY created_at DESC LIMIT ?",
+        (since, limit),
+    )
 
 
 def get_unsummarized_sources(category: str | None = None) -> list[sqlite3.Row]:

@@ -34,7 +34,15 @@ python run_daily.py
 python ask.py "先週のAIニュースで重要だったのは？"
 ```
 
-蓄積したKnowledgeをSQLiteで検索し、出典URL付きで回答する。引数を省略すると対話入力になる。
+蓄積したKnowledgeをSQLiteで検索し、出典URL付きで回答する。引数を省略すると対話入力になる。検索はjanomeで質問文から名詞を抽出してLIKE検索するため、全履歴（ニュースだけでなく後述の民泊ノート等）が対象になる。
+
+## 民泊ノートの取り込み（Obsidianボルト連携）
+
+```powershell
+python ingest_obsidian.py
+```
+
+GitHub上の個人Obsidianボルト（`unikarei/oarai-obsidian`、private）から「民泊@大洗」ノートを取得し、category=minpakuのSource/Knowledgeとして保存する（要約せず全文保存）。privateリポジトリのため`gh auth login`でのGitHub CLI認証が必要（`gh auth token`で取得したトークンを使う）。再実行してもURL重複は排除される。取り込み後は `python ask.py "大洗の物件の所在地は？"` のように質問できる。
 
 ## 音声対話（Phase 3）
 

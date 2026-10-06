@@ -45,6 +45,14 @@
 - [x] run_daily.py（カテゴリごとにレポート生成するループ）を変更
 - [x] 動作確認 — run_daily.py実行で新規Source 187件・Knowledge 187件、5カテゴリ分のレポート（news/trading/realestate/manufacturing/minpaku）が`reports/`に出力されることを確認
 
+### 4-5. 民泊: 個人Obsidianボルト（oarai-obsidian）の取り込み
+
+- [x] db.py に extract_keywords()（janomeで質問文から名詞抽出）を追加し、search_knowledge() をキーワード抽出ベース・全履歴対象に修正
+  - 発見: 質問文全体をそのままLIKE検索していたため、自然文の質問がほぼ一致しない不具合があった（「OpenAI」等の単語がたまたま含まれる場合しか機能せず）。キーワード抽出方式に修正して解消
+- [x] ingest_obsidian.py（GitHub APIでMarkdownノートを取得しSource/Knowledgeを作成）を実装
+  - 対象リポジトリがprivateだったため `gh auth token` で認証、Contents APIで全文取得する方式に変更
+- [x] 動作確認 — 31件のノートを取り込み（テンプレート等2件は除外）、再実行で重複0件、ask.pyで大洗の物件所在地・価格を出典URL付きで正しく回答できることを確認。既存のニュース質問にも回帰なし
+
 ### 4-1. エージェント・APIルーティング
 
 - [x] agent_log.py（エスカレーション・委譲履歴を jarvis_agent.log に記録）を実装
