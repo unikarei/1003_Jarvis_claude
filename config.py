@@ -26,9 +26,24 @@ SUMMARY_MODEL = os.environ.get("JARVIS_SUMMARY_MODEL", "claude-haiku-4-5-2025100
 ESCALATION_MODEL = os.environ.get("JARVIS_ESCALATION_MODEL", "claude-sonnet-5-5")
 
 CATEGORY_NEWS = "news"
+CATEGORY_TRADING = "trading"
+CATEGORY_REALESTATE = "realestate"
+CATEGORY_MANUFACTURING = "manufacturing"
+CATEGORY_MINPAKU = "minpaku"
 
 RSS_FEEDS = [
     {"name": "TechCrunch AI", "url": "https://techcrunch.com/category/artificial-intelligence/feed/", "category": CATEGORY_NEWS},
     {"name": "MIT Technology Review", "url": "https://www.technologyreview.com/feed/", "category": CATEGORY_NEWS},
     {"name": "ITmedia AI+", "url": "https://rss.itmedia.co.jp/rss/2.0/aiplus.xml", "category": CATEGORY_NEWS},
+    # ③仮想取引（株・FX）
+    {"name": "Investing.com 日本", "url": "https://jp.investing.com/rss/news.rss", "category": CATEGORY_TRADING},
+    {"name": "ITmedia ビジネス", "url": "https://rss.itmedia.co.jp/rss/2.0/business.xml", "category": CATEGORY_TRADING},
+    # ④不動産
+    {"name": "SUUMOジャーナル", "url": "https://suumo.jp/journal/feed/", "category": CATEGORY_REALESTATE},
+    {"name": "住宅産業新聞", "url": "https://www.housenews.jp/feed", "category": CATEGORY_REALESTATE},
+    # ⑤製造業
+    {"name": "ITmedia MONOist", "url": "https://rss.itmedia.co.jp/rss/2.0/monoist.xml", "category": CATEGORY_MANUFACTURING},
+    # ⑥民泊
+    {"name": "Airstair", "url": "https://airstair.jp/rss.xml", "category": CATEGORY_MINPAKU},
+    {"name": "観光経済新聞", "url": "https://www.kankokeizai.com/feed/", "category": CATEGORY_MINPAKU},
 ]

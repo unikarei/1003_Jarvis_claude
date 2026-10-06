@@ -51,6 +51,13 @@
 - `db.py`: `get_or_create_agent()` / `find_skill_by_title()` を追加（Agent/Skillノードの取得・再利用）
 - `run_task.py`: タスク説明文をコード関連／ナレッジ関連に簡易分類し、`code_agent.py` または `ask.answer()` に振り分けて実行。Task→uses→Skill、Task→executed_by→Agentのグラフを記録するCLI
 
+## 3.4 モジュール構成（他カテゴリ横展開: ③④⑤⑥）
+
+- `config.py`: `RSS_FEEDS` に trading / realestate / manufacturing / minpaku のフィードを追加
+- `fetch_news.py` / `summarize.py`: 変更なし（category列ベースで既に汎用的）
+- `generate_report.py`: `write_report()` がカテゴリをファイル名に含めるよう変更（`reports/{category}_{日時}.md`）
+- `run_daily.py`: フィードから対象カテゴリ一覧を取得し、カテゴリごとに `write_report(category=...)` を呼び出すループに変更
+
 ## 4. 実行基盤
 
 - 開発: Windows、本番: Mac mini（48GB）

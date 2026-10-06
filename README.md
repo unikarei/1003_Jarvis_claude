@@ -22,9 +22,11 @@ copy .env.example .env
 python run_daily.py
 ```
 
-`fetch_news.py`（RSS取得） → `summarize.py`（Claude APIで要約） → `generate_report.py`（レポート生成）を順に実行する。初回実行時に `jarvis.db`（SQLite）が `schema.sql` から自動初期化される。レポートは `reports/` に日時付きファイル名で出力される。
+`fetch_news.py`（RSS取得） → `summarize.py`（Claude APIで要約） → `generate_report.py`（レポート生成）を順に実行する。初回実行時に `jarvis.db`（SQLite）が `schema.sql` から自動初期化される。
 
-各ステップは個別にも実行できる（`python fetch_news.py` など）。
+対象カテゴリ: news（AIニュース）/ trading（仮想取引）/ realestate（不動産）/ manufacturing（製造業）/ minpaku（民泊）。レポートはカテゴリごとに別ファイルとして `reports/{category}_{日時}.md` に出力される。
+
+各ステップは個別にも実行できる（`python fetch_news.py` など）。`python generate_report.py <category>` でカテゴリを指定したレポート単体生成も可能（省略時は全カテゴリ）。
 
 ## 質問応答（Phase 2）
 

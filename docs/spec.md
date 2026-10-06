@@ -89,6 +89,17 @@
   - 実行後、Task → uses → Skill、Task → executed_by → Agent のグラフが作られる
   - 2回目以降、同種のタスクでは既存のSkillノードが再利用される（新規Skillノードが重複作成されない）
 
+#### 4-4. 他カテゴリへの横展開（③④⑤⑥、①ピアノ教室は対象外）
+
+①ピアノ教室運営補助はSNS運用・アクセス分析が中心で「RSS収集→要約→レポート」のパイプラインに合わないため対象外とする。③④⑤⑥は②AIニュースと同じ業界ニュース収集・要約のため、同一パイプラインをカテゴリ違いで横展開する。
+
+- `config.py` の `RSS_FEEDS` に③仮想取引（trading）④不動産（realestate）⑤製造業（manufacturing）⑥民泊（minpaku）向けのフィードを追加する
+- `fetch_news.py` / `summarize.py` はカテゴリに依存しない実装のため変更不要（Source/Knowledgeは既にcategory列を持つ）
+- `generate_report.py` / `run_daily.py` を変更し、レポートはカテゴリごとに別ファイル（`reports/{category}_{日時}.md`）として出力する
+- 受け入れ条件:
+  - `run_daily.py` 実行後、news/trading/realestate/manufacturing/minpaku の5カテゴリそれぞれで新規Source・Knowledgeが作られる
+  - `reports/` に5カテゴリ分の別ファイルが出力される
+
 ## 4. データモデル
 
 - ノード型: Category / Task / Knowledge / Source / Skill / Agent

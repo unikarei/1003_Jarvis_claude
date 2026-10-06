@@ -38,7 +38,12 @@
 
 ## Phase 4以降
 
-- [ ] 他カテゴリ（①③④⑤⑥）への横展開 — 後回し
+### 4-4. 他カテゴリへの横展開（③④⑤⑥、①ピアノ教室は対象外）
+
+- [x] config.pyのRSS_FEEDSに③trading④realestate⑤manufacturing⑥minpakuのフィードを追加 — 各フィードをfeedparserで動作確認した上で採用
+- [x] generate_report.py（write_reportがカテゴリ別ファイル名・タイトルで出力）を変更
+- [x] run_daily.py（カテゴリごとにレポート生成するループ）を変更
+- [x] 動作確認 — run_daily.py実行で新規Source 187件・Knowledge 187件、5カテゴリ分のレポート（news/trading/realestate/manufacturing/minpaku）が`reports/`に出力されることを確認
 
 ### 4-1. エージェント・APIルーティング
 
