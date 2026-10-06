@@ -96,6 +96,14 @@ def get_node(node_id: str) -> sqlite3.Row | None:
     return _fetchone("SELECT * FROM nodes WHERE id = ?", (node_id,))
 
 
+def update_node_content(node_id: str, content: str) -> None:
+    _execute("UPDATE nodes SET content = ? WHERE id = ?", (content, node_id))
+
+
+def find_knowledge_by_url(url: str) -> sqlite3.Row | None:
+    return _fetchone("SELECT * FROM nodes WHERE type = 'Knowledge' AND url = ?", (url,))
+
+
 def find_source_by_url(url: str) -> sqlite3.Row | None:
     return _fetchone("SELECT * FROM nodes WHERE type = 'Source' AND url = ?", (url,))
 

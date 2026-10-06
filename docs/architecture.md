@@ -60,8 +60,9 @@
 
 ## 3.5 モジュール構成（民泊: 個人Obsidianボルト取り込み）
 
-- `ingest_obsidian.py`: GitHub API（`gh auth token` で認証、privateリポジトリ対応）経由で `unikarei/oarai-obsidian` の `民泊@大洗/` 配下Markdownノートを取得し、Source/Knowledgeノード（category=minpaku）として保存する。要約は行わず全文をそのまま保存する
-- `db.py`: `extract_keywords()`（janomeで質問文から名詞を抽出）を追加し、`search_knowledge()` は抽出したキーワードで検索するよう変更（全履歴対象。直近N日フォールバックはキーワード不一致時のみ）
+- `ingest_obsidian.py`: GitHub API（`gh auth token` で認証、privateリポジトリ対応）経由で `unikarei/oarai-obsidian` の `民泊@大洗/` 配下Markdownノートを取得し、Source/Knowledgeノード（category=minpaku）として保存する。要約は行わず全文をそのまま保存する。既存ノートの内容が変わっていれば新規作成せずcontentを更新する
+- `update_obsidian.py`: `create_note()` / `append_note()` でボルトへ書き込む（手動トリガーのみ）。GitHub Contents APIのsha突き合わせで同時編集による上書きを防止する
+- `db.py`: `extract_keywords()`（janomeで質問文から名詞を抽出）を追加し、`search_knowledge()` は抽出したキーワードで検索するよう変更（全履歴対象。直近N日フォールバックはキーワード不一致時のみ）。`update_node_content()` / `find_knowledge_by_url()` を追加（既存ノート更新の反映用）
 
 ## 4. 実行基盤
 

@@ -42,7 +42,16 @@ python ask.py "先週のAIニュースで重要だったのは？"
 python ingest_obsidian.py
 ```
 
-GitHub上の個人Obsidianボルト（`unikarei/oarai-obsidian`、private）から「民泊@大洗」ノートを取得し、category=minpakuのSource/Knowledgeとして保存する（要約せず全文保存）。privateリポジトリのため`gh auth login`でのGitHub CLI認証が必要（`gh auth token`で取得したトークンを使う）。再実行してもURL重複は排除される。取り込み後は `python ask.py "大洗の物件の所在地は？"` のように質問できる。
+GitHub上の個人Obsidianボルト（`unikarei/oarai-obsidian`、private）から「民泊@大洗」ノートを取得し、category=minpakuのSource/Knowledgeとして保存する（要約せず全文保存）。privateリポジトリのため`gh auth login`でのGitHub CLI認証が必要（`gh auth token`で取得したトークンを使う）。再実行時は、新規ノートは追加、既存ノートは内容が変わっていればcontentを更新する（重複作成はしない）。取り込み後は `python ask.py "大洗の物件の所在地は？"` のように質問できる。
+
+ボルトへの書き込み（手動実行のみ、自動では書き込まない）:
+
+```powershell
+python update_obsidian.py create "民泊@大洗/02_購入調査/大洗_新規メモ.md" "本文"
+python update_obsidian.py append "民泊@大洗/01_物件/大洗_物件概要.md" "追記内容"
+```
+
+`create`は既存ファイルと衝突するとエラーになる。`append`は末尾に日付とJARVIS追記である旨を付けて追記する。取得後に他端末等で編集されていた場合はGitHubのsha不一致により409エラーで中断する（上書き事故防止）。書き込み後は`ingest_obsidian.py`を再実行してローカルのKnowledgeに反映する。
 
 ## 音声対話（Phase 3）
 

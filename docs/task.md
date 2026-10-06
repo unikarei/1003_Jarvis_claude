@@ -53,6 +53,13 @@
   - 対象リポジトリがprivateだったため `gh auth token` で認証、Contents APIで全文取得する方式に変更
 - [x] 動作確認 — 31件のノートを取り込み（テンプレート等2件は除外）、再実行で重複0件、ask.pyで大洗の物件所在地・価格を出典URL付きで正しく回答できることを確認。既存のニュース質問にも回帰なし
 
+### 4-6. 民泊: Obsidianボルトへの書き込み
+
+- [x] db.py に update_node_content() / find_knowledge_by_url() を実装
+- [x] ingest_obsidian.py を拡張し、既存ノートの内容変更時にSource/Knowledgeを更新（新規作成しない）
+- [x] update_obsidian.py（create_note() / append_note()、sha突き合わせで競合検出）を実装。gh認証取得は`github_auth.py`に共通化（ingest_obsidian.pyからも利用）
+- [x] 動作確認 — サンドボックス用テストノート（90_資料/JARVISテスト.md）で新規作成・既存パスへの再作成エラー・追記・sha不一致時の409競合エラー・再取り込みでの更新反映（1件目は新規、2回目の追記は更新として検知）を確認。テスト後にGitHub側・ローカルDB側とも削除済み
+
 ### 4-1. エージェント・APIルーティング
 
 - [x] agent_log.py（エスカレーション・委譲履歴を jarvis_agent.log に記録）を実装
