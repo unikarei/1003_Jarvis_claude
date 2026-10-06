@@ -2,10 +2,8 @@
 
 import sys
 
-import anthropic
-
-from config import ANTHROPIC_API_KEY, SUMMARY_MODEL
 from db import search_knowledge
+from llm import ask_claude
 
 ANSWER_PROMPT = """以下は蓄積されたニュース要約（Knowledge）の一覧です。これらの情報のみを根拠に、
 質問に日本語で回答してください。回答には根拠とした出典URLを添えてください。
@@ -29,14 +27,7 @@ def build_context(knowledge_list) -> str:
 def answer(question: str) -> str:
     knowledge_list = search_knowledge(keyword=question)
     context = build_context(knowledge_list)
-
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    message = client.messages.create(
-        model=SUMMARY_MODEL,
-        max_tokens=1000,
-        messages=[{"role": "user", "content": ANSWER_PROMPT.format(context=context, question=question)}],
-    )
-    return message.content[0].text.strip()
+    return ask_claude(ANSWER_PROMPT.format(context=context, question=question))
 
 
 def main():

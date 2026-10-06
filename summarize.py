@@ -1,9 +1,7 @@
 """未要約のSourceノードをClaude APIで要約し、Knowledge/Taskノードを作る。"""
 
-import anthropic
-
-from config import ANTHROPIC_API_KEY, SUMMARY_MODEL
 from db import get_unsummarized_sources, insert_edge, insert_node
+from llm import ask_claude
 
 SUMMARY_PROMPT = (
     "以下の記事タイトルと概要から、日本語で2〜3文の要約を作成してください。"
@@ -13,13 +11,7 @@ SUMMARY_PROMPT = (
 
 
 def summarize_text(title: str, content: str) -> str:
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    message = client.messages.create(
-        model=SUMMARY_MODEL,
-        max_tokens=300,
-        messages=[{"role": "user", "content": SUMMARY_PROMPT.format(title=title, content=content)}],
-    )
-    return message.content[0].text.strip()
+    return ask_claude(SUMMARY_PROMPT.format(title=title, content=content), max_tokens=300)
 
 
 def summarize_all() -> list[str]:

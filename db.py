@@ -17,12 +17,40 @@ def get_connection():
     return conn
 
 
+def _fetchall(query: str, params=()) -> list[sqlite3.Row]:
+    conn = get_connection()
+    try:
+        return conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
+
+
+def _fetchone(query: str, params=()) -> sqlite3.Row | None:
+    conn = get_connection()
+    try:
+        return conn.execute(query, params).fetchone()
+    finally:
+        conn.close()
+
+
+def _execute(query: str, params=()) -> sqlite3.Cursor:
+    conn = get_connection()
+    try:
+        cur = conn.execute(query, params)
+        conn.commit()
+        return cur
+    finally:
+        conn.close()
+
+
 def init_db():
     conn = get_connection()
-    with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-        conn.executescript(f.read())
-    conn.commit()
-    conn.close()
+    try:
+        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
+            conn.executescript(f.read())
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def generate_id(node_type: str, category: str | None = None) -> str:
@@ -39,8 +67,7 @@ def insert_node(node_type: str, category: str | None = None, title: str | None =
     if node_type not in NODE_TYPES:
         raise ValueError(f"unknown node type: {node_type}")
     node_id = node_id or generate_id(node_type, category)
-    conn = get_connection()
-    conn.execute(
+    _execute(
         "INSERT INTO nodes (id, type, category, title, content, url, created_at, meta) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
@@ -48,39 +75,25 @@ def insert_node(node_type: str, category: str | None = None, title: str | None =
             datetime.now().isoformat(), json.dumps(meta or {}, ensure_ascii=False),
         ),
     )
-    conn.commit()
-    conn.close()
     return node_id
 
 
 def insert_edge(src_id: str, dst_id: str, edge_type: str) -> int:
     if edge_type not in EDGE_TYPES:
         raise ValueError(f"unknown edge type: {edge_type}")
-    conn = get_connection()
-    cur = conn.execute(
+    cur = _execute(
         "INSERT INTO edges (src_id, dst_id, type, created_at) VALUES (?, ?, ?, ?)",
         (src_id, dst_id, edge_type, datetime.now().isoformat()),
     )
-    conn.commit()
-    edge_id = cur.lastrowid
-    conn.close()
-    return edge_id
+    return cur.lastrowid
 
 
 def get_node(node_id: str) -> sqlite3.Row | None:
-    conn = get_connection()
-    row = conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
-    conn.close()
-    return row
+    return _fetchone("SELECT * FROM nodes WHERE id = ?", (node_id,))
 
 
 def find_source_by_url(url: str) -> sqlite3.Row | None:
-    conn = get_connection()
-    row = conn.execute(
-        "SELECT * FROM nodes WHERE type = 'Source' AND url = ?", (url,)
-    ).fetchone()
-    conn.close()
-    return row
+    return _fetchone("SELECT * FROM nodes WHERE type = 'Source' AND url = ?", (url,))
 
 
 def get_recent_knowledge(category: str | None = None, since: str | None = None) -> list[sqlite3.Row]:
@@ -93,36 +106,23 @@ def get_recent_knowledge(category: str | None = None, since: str | None = None) 
         query += " AND created_at >= ?"
         params.append(since)
     query += " ORDER BY created_at DESC"
-    conn = get_connection()
-    rows = conn.execute(query, params).fetchall()
-    conn.close()
-    return rows
+    return _fetchall(query, params)
 
 
 def search_knowledge(keyword: str | None = None, since_days: int = 14, limit: int = 20) -> list[sqlite3.Row]:
     """質問文でKnowledgeをLIKE検索する。0件の場合は直近since_days日の最新Knowledgeにフォールバックする。"""
     since = (datetime.now() - timedelta(days=since_days)).isoformat()
+    base_query = "SELECT * FROM nodes WHERE type = 'Knowledge' AND created_at >= ?"
 
     if keyword:
-        conn = get_connection()
-        rows = conn.execute(
-            "SELECT * FROM nodes WHERE type = 'Knowledge' AND created_at >= ? "
-            "AND (title LIKE ? OR content LIKE ?) "
-            "ORDER BY created_at DESC LIMIT ?",
+        rows = _fetchall(
+            f"{base_query} AND (title LIKE ? OR content LIKE ?) ORDER BY created_at DESC LIMIT ?",
             (since, f"%{keyword}%", f"%{keyword}%", limit),
-        ).fetchall()
-        conn.close()
+        )
         if rows:
             return rows
 
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT * FROM nodes WHERE type = 'Knowledge' AND created_at >= ? "
-        "ORDER BY created_at DESC LIMIT ?",
-        (since, limit),
-    ).fetchall()
-    conn.close()
-    return rows
+    return _fetchall(f"{base_query} ORDER BY created_at DESC LIMIT ?", (since, limit))
 
 
 def get_unsummarized_sources(category: str | None = None) -> list[sqlite3.Row]:
@@ -135,19 +135,13 @@ def get_unsummarized_sources(category: str | None = None) -> list[sqlite3.Row]:
         query += " AND category = ?"
         params.append(category)
     query += " ORDER BY created_at ASC"
-    conn = get_connection()
-    rows = conn.execute(query, params).fetchall()
-    conn.close()
-    return rows
+    return _fetchall(query, params)
 
 
 def get_source_for_knowledge(knowledge_id: str) -> sqlite3.Row | None:
-    conn = get_connection()
-    row = conn.execute(
+    return _fetchone(
         "SELECT n.* FROM nodes n "
         "JOIN edges e ON e.dst_id = n.id "
         "WHERE e.src_id = ? AND e.type = 'derived_from' AND n.type = 'Source'",
         (knowledge_id,),
-    ).fetchone()
-    conn.close()
-    return row
+    )

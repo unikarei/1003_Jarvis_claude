@@ -7,9 +7,7 @@ from pathlib import Path
 import sounddevice as sd
 import soundfile as sf
 
-from ask import answer
-from speech_to_text import transcribe_file
-from text_to_speech import synthesize
+from talk import talk
 
 SAMPLE_RATE = 16000
 DEFAULT_RECORD_SECONDS = 5
@@ -36,13 +34,8 @@ def live_talk(record_seconds: int = DEFAULT_RECORD_SECONDS) -> str:
 
         record_audio(record_seconds, input_path)
 
-        question = transcribe_file(input_path)
-        print(f"[文字起こし] {question}")
+        response_text = talk(input_path, output_path)
 
-        response_text = answer(question)
-        print(f"[回答] {response_text}")
-
-        synthesize(response_text, output_path)
         print("[再生開始]")
         play_audio(output_path)
         print("[再生終了]")

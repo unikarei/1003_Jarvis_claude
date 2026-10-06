@@ -44,3 +44,7 @@
   - [ ] 軽量レイヤー／高精度レイヤーの切替ロジック
   - [ ] コード実行サブエージェントの導入（`OPENAI_API_KEY`を環境変数に追加）
   - [ ] エスカレーション・委譲のログ記録（コスト追跡）
+
+## 保守
+
+- [x] リファクタリング（機能変更なし）: db.pyのコネクション処理を`_fetchall`/`_fetchone`/`_execute`に共通化、Claude API呼び出しを`llm.py`の`ask_claude()`に統合（summarize.py/ask.pyの重複排除）、live_talk.pyがtalk.pyの`talk()`を再利用するよう変更。既存の動作（search_knowledge/get_recent_knowledge/ask.answer()）に回帰がないことを確認済み

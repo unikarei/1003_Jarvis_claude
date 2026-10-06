@@ -25,6 +25,7 @@
 
 - `config.py`: フィード一覧・設定
 - `db.py`: DB初期化、ノード/エッジ操作、ID採番
+- `llm.py`: Claude API呼び出しの共通ヘルパー（`ask_claude()`）。summarize.py / ask.py から利用
 - `fetch_news.py`: RSS取得 → Sourceノード
 - `summarize.py`: 要約 → Knowledgeノード、Taskノード
 - `generate_report.py`: Markdownレポート生成
@@ -33,14 +34,14 @@
 ## 3.1 モジュール構成（Phase 2）
 
 - `db.py`: `search_knowledge()` を追加（キーワードLIKE検索＋直近N日フォールバック）
-- `ask.py`: 質問文を受け取り、`search_knowledge()` の結果をコンテキストとしてClaude APIに渡し、出典URL付きで回答するCLI
+- `ask.py`: 質問文を受け取り、`search_knowledge()` の結果をコンテキストとして`llm.ask_claude()`に渡し、出典URL付きで回答するCLI
 
 ## 3.2 モジュール構成（Phase 3）
 
 - `speech_to_text.py`: faster-whisperで音声ファイル（wav）を文字起こし
 - `text_to_speech.py`: VOICEVOX ENGINE（ローカルHTTP API）でテキストを音声ファイル（wav）に合成
 - `talk.py`: 音声ファイル → `speech_to_text` → `ask.answer()` → `text_to_speech` → 音声ファイル、を接続するCLI（ファイルベース検証用）
-- `live_talk.py`: 実機マイクで固定時間録音 → `talk`相当の処理 → 既定スピーカーで再生するCLI（Windows実機検証用）
+- `live_talk.py`: 実機マイクで固定時間録音 → `talk.talk()` を呼び出し → 既定スピーカーで再生するCLI（Windows実機検証用）
 
 ## 4. 実行基盤
 
