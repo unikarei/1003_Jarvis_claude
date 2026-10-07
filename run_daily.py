@@ -14,15 +14,22 @@ def main():
     init_db()
 
     new_sources = fetch_all()
-    print(f"[1/3] 新規Source: {len(new_sources)}件")
+    print(f"[1/4] 新規Source: {len(new_sources)}件")
 
     new_knowledge = summarize_all()
-    print(f"[2/3] 新規Knowledge: {len(new_knowledge)}件")
+    print(f"[2/4] 新規Knowledge: {len(new_knowledge)}件")
 
-    categories = sorted({feed["category"] for feed in RSS_FEEDS})
+    try:
+        from piano_analytics import run_piano_analysis
+        run_piano_analysis()
+        print("[3/4] ①ピアノ教室アクセス分析: 完了")
+    except Exception as e:
+        print(f"[3/4] ①ピアノ教室アクセス分析: スキップ（{type(e).__name__}）")
+
+    categories = sorted({feed["category"] for feed in RSS_FEEDS} | {"piano"})
     for i, category in enumerate(categories, 1):
         report_path = write_report(category=category)
-        print(f"[3/3] ({i}/{len(categories)}) {category} レポート出力: {report_path}")
+        print(f"[4/4] ({i}/{len(categories)}) {category} レポート出力: {report_path}")
 
 
 if __name__ == "__main__":

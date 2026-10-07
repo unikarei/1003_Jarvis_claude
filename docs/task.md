@@ -83,13 +83,26 @@
 
 対象: https://ono-piano.com/（教室ページ: https://ono-piano.com/piano.class/）。Search Console・GA4は設定済み、サービスアカウントへの権限付与はユーザー側で対応可能。
 
-- [ ] Google Cloudでサービスアカウントを作成しJSONキーを発行、Search Console・GA4プロパティに閲覧権限で追加（ユーザー側作業）
-- [ ] config.pyにGOOGLE_APPLICATION_CREDENTIALS/GSC_SITE_URL/GA4_PROPERTY_IDを追加
-- [ ] fetch_search_console.py（検索パフォーマンス取得→Sourceノード）を実装
-- [ ] fetch_ga4.py（アクセスデータ取得→Sourceノード）を実装
-- [ ] pianoカテゴリのKnowledge化（要約せず構造化データのまま）を実装
-- [ ] run_daily.py/generate_report.pyにpianoカテゴリを追加
-- [ ] 動作確認（実データ取得、reports/piano_*.md出力、ask.pyでの質問応答）
+- [x] Google Cloudでサービスアカウントを作成しJSONキーを発行、Search Console・GA4プロパティに閲覧権限で追加（ユーザー側作業）— jarvis-piano-reader@onopianocom-chatbot-log.iam.gserviceaccount.com
+- [x] config.py/.env/.env.exampleにGOOGLE_APPLICATION_CREDENTIALS/SEARCH_CONSOLE_SITE_URL/GA4_PROPERTY_IDを追加
+- [x] fetch_search_console.py（get_search_console_summary()関数、検索パフォーマンス取得）を実装
+- [x] fetch_ga4.py（get_ga4_summary()関数、アクセスデータ取得）を実装
+- [x] scripts/test_google_integrations.py（接続確認・エラー分類）を実装し、両API（Search Console・GA4）の接続成功を実データで確認
+  - 発見: 対象プロパティは`https://ono-piano.com/`ではなく`https://ono-piano.com/piano.class/`だった（.envのSEARCH_CONSOLE_SITE_URL修正で解消）
+- [x] fetch_search_console.py拡張（get_query_performance/get_page_performance/get_device_performance/get_search_console_report、期間比較付き）— 実データで動作確認（28日間clicks 132件、前期間比+18%等）
+- [x] fetch_ga4.py拡張（get_ga4_report、get_ga4_top_pages、get_ga4_traffic_sources、discover_ga4_events）
+  - 発見: GA4 RunReportRequestで複数date_rangesを使う場合、`dimensions`に`dateRange`を明示すると400エラーになる（APIが自動付与するため不要）。dimensionsから除去して解消
+- [x] config.pyにPIANO_LOCAL_KEYWORDS/PIANO_BRAND_KEYWORDS/PIANO_INQUIRY_EVENT_KEYWORDS/PIANO_SOCIAL_EVENT_KEYWORDSを追加
+- [x] piano_analytics.py実装: クエリ分類（表示回数多×CTR低/掲載順位4〜15位/順位・クリック数増減/地域・ブランドクエリ）
+- [x] piano_analytics.py実装: 問い合わせ系イベント調査（discover_ga4_eventsの結果からキーワード一致で抽出）
+  - 実データでは計測整備済みと判明: contact_form_click(35件)、cta_click(50件)、phone_click/line_click/email_click等が既に実装されていた
+- [x] piano_analytics.py実装: レポート文生成（前期間比、ゼロ除算・データ不足を安全に処理）— 0件データ・両API失敗のエッジケースをクラッシュなく確認
+- [x] piano_analytics.py実装: generate_recommendations()（Claudeで優先度順Top3提案）
+  - 発見: max_tokens=1500だと提案が途中で切れる不具合 → 2500に増やして解消。GSC・GA4を横断した具体的な提案（CTR改善、フォーム離脱率改善等）が生成されることを確認
+- [x] piano_analytics.py実装: run_piano_analysis()（Search Console/GA4どちらかの失敗時も継続、Source/Knowledge保存）— unittest.mockでSearch Console障害をシミュレートし、GA4データのみで継続することを確認
+- [x] run_daily.pyにpiano_analytics.run_piano_analysis()呼び出しとpianoカテゴリのレポート対象追加
+- [x] テスト: Search Console単体/GA4単体/両API統合/前期間比較/0件データ/APIエラー/問い合わせイベントなし/レポート生成の各パターンを確認
+- [x] 実データで1回実行し、実測値と改善提案Top3を確認 — run_daily.py実行で6カテゴリ（piano含む）のレポートが生成され、ask.pyでも実データに基づく回答（検索キーワード・改善施策）を出典付きで確認
 
 ## 保守
 

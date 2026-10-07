@@ -132,19 +132,34 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
   - 競合時（取得後に他で更新された場合）はエラーで中断し、上書きしない
   - 書き込み後に`ingest_obsidian.py`を再実行すると、ローカルのKnowledgeが最新内容に更新される
 
-#### 4-7. ①ピアノ教室運営補助: アクセス分析の定期レポート化
+#### 4-7. ①ピアノ教室運営補助: アクセス分析〜改善提案の定期レポート化
 
-対象サイト: https://ono-piano.com/（ピアノ教室ページ: https://ono-piano.com/piano.class/）。「集客・SNS運用・アクセス分析」のうち、まずアクセス分析（検索・アクセスデータの定期レポート化）に着手する。他カテゴリと同じ「取得→Knowledge化→レポート」のパイプラインを使うが、データ源はRSSではなくGoogle Search Console API / Google Analytics Data API（GA4）にする。
+対象サイト: https://ono-piano.com/（Search Consoleプロパティ: https://ono-piano.com/piano.class/、`SEARCH_CONSOLE_SITE_URL`で指定）。目的は単なるアクセス集計ではなく「問い合わせを増やすために次に何をすべきか」をJARVISが提案すること。他カテゴリと同じ「取得→Knowledge化→レポート」のパイプラインを使うが、データ源はRSSではなくGoogle Search Console API / GA4 Data APIにし、最後にClaudeで改善提案を生成する一段を追加する。
 
-- 認証: サービスアカウント（JSONキー）を使う。ユーザーがGoogle Cloudでサービスアカウントを作成し、Search ConsoleプロパティとGA4プロパティにそのサービスアカウントを閲覧権限で追加する。JSONキーファイルは`.env`と同様にGitに含めない
-- `fetch_search_console.py`: 直近7日分の検索パフォーマンス（クエリ別のクリック数・表示回数・CTR・掲載順位）を取得し、Sourceノード（category=piano）として保存する
-- `fetch_ga4.py`: 直近7日分のアクセスデータ（ページ別のユーザー数・セッション数・ページビュー、流入チャネル）を取得し、Sourceノード（category=piano）として保存する
-- 取得したデータはニュースのような文章要約ではなく構造化データ（指標値）のため、Claudeによる要約はせず、Knowledgeノードには集計結果をそのまま記録する
-- `generate_report.py` / `run_daily.py` の既存のカテゴリ別レポート機構にpianoカテゴリを追加する（取得元が異なるだけで、レポート生成の仕組みは共通化する）
+接続基盤（`fetch_search_console.py`の`get_search_console_summary()`、`fetch_ga4.py`の`get_ga4_summary()`、サービスアカウント認証）は実装・実データ確認済み。以下を追加する。
+
+- **Search Console取得の拡張**（`fetch_search_console.py`）:
+  - `get_query_performance(start, end, row_limit=50)`: dimension=queryでクエリ別clicks/impressions/ctr/position
+  - `get_page_performance(start, end, row_limit=50)` / `get_device_performance(start, end)`: dimension=page/device
+  - `get_search_console_report(days=28)`: 直近days日と直前days日を取得し、クエリ単位でclicks/impressions/ctr/positionの差分を計算して返す
+- **GA4取得の拡張**（`fetch_ga4.py`）:
+  - `get_ga4_report(days=7)`: 直近days日と直前days日のactiveUsers/sessions/screenPageViews/newUsers（可能ならengagementRate/averageSessionDuration）を比較付きで取得
+  - `get_ga4_top_pages(days)` / `get_ga4_traffic_sources(days)`: dimension=pagePath / sessionSource,sessionMedium
+  - `discover_ga4_events(days=28)`: dimension=eventName, metric=eventCountで実在するイベント一覧を取得する（問い合わせ系イベント名を推測で決め打ちしない。実装済みイベントが無ければ「計測未整備」として扱う）
+- **`piano_analytics.py`（新規）**: 分析ロジックを集約する
+  - クエリ分類: 表示回数多×CTR低 / 掲載順位4〜15位（改善余地） / 順位上昇・下降 / クリック数増減 / 地域クエリ（`config.PIANO_LOCAL_KEYWORDS`: 水戸・茨城等との部分一致） / ブランドクエリ（`config.PIANO_BRAND_KEYWORDS`: 小野ピアノ等との部分一致）を判定する
+  - Search ConsoleとGA4はユーザー単位で結合できないため、同一ユーザーとして関連付けない。期間単位・ページ単位の並記にとどめ、推測（LLMによる提案）と実測値（API取得値）を明確に区別して表示する
+  - `generate_recommendations(report_text)`: 上記の構造化レポートをもとに、`llm.ask_claude_tiered()`で優先度順Top3の改善提案を生成する。各提案は根拠データ・問題・推奨施策・期待効果・優先度を含む形式を必須とし、「SEOを改善しましょう」のような抽象的な提案のみを許さないようプロンプトで明示する
+  - `run_piano_analysis()`: 取得→分類→レポート文生成→改善提案生成→Source/Knowledge保存までを行う。Search Console・GA4いずれかの取得が失敗しても処理を止めず、取得できた方のデータのみで続行し、`[WARN]`としてログ・レポートに明記する（認証キー等の秘密情報はログに出さない）
+- **データ保存**: 新しいDB機構は追加しない。1回の実行で日次スナップショット（生データのJSON的テキスト）をSourceノード1件、レポート本文と改善提案をKnowledgeノード1件として保存する（category=piano）。既存のnodes/edgesの仕組みをそのまま使うことで、`created_at`の蓄積が日次トレンドの基礎データになる
+- **run_daily.py**: 既存のRSSパイプラインに加えて`piano_analytics.run_piano_analysis()`を呼び出す（失敗してもrun_daily.py全体は止めない）。カテゴリ別レポートのループに`piano`を追加する。`generate_report.py`自体の変更は不要（Knowledgeをそのまま表示する既存の仕組みで足りる）
+- **対象外（今回やらないこと）**: Webサイト本文・title/description・Google Business Profile・GA4/Search Consoleの設定変更、広告出稿は一切行わない。データ取得→分析→改善提案の提示までに限定し、実際の施策実行は人間の承認後に別タスクで行う
 - 受け入れ条件:
-  - 実行すると、Search Console・GA4それぞれの直近データがSource/Knowledgeとして保存される
-  - `reports/piano_{日時}.md` にアクセス状況のレポートが出力される
-  - `ask.py` で「ピアノ教室のサイトで最近よく検索されているキーワードは？」のような質問に、実データに基づいて回答できる
+  - Search Console・GA4のどちらか一方が失敗しても、残りのデータで処理が継続し、最終的にレポートが生成される
+  - レポートに「前期間比」の数値（増減・ポイント差）が、ゼロ除算やデータ不足時も安全に表示される
+  - 問い合わせ系イベントが実装されていない場合、イベント名を創作せず「計測未整備」と明記される
+  - 改善提案が優先度順に最大3件、根拠データ・問題・推奨施策・期待効果付きで生成される
+  - 実データで1回実行し、Search Console/GA4の実測値と改善提案Top3が得られる
 
 ## 4. データモデル
 

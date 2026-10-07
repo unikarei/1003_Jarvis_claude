@@ -30,6 +30,15 @@ GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"
 SEARCH_CONSOLE_SITE_URL = os.environ.get("SEARCH_CONSOLE_SITE_URL")
 GA4_PROPERTY_ID = os.environ.get("GA4_PROPERTY_ID")
 
+# クエリ分類用キーワード（部分一致）。地域クエリ・ブランド（教室名）クエリの判定に使う。
+PIANO_LOCAL_KEYWORDS = ["水戸", "茨城", "偕楽園"]
+PIANO_BRAND_KEYWORDS = ["小野ピアノ", "小野"]
+
+# GA4イベント名の分類用キーワード（部分一致）。問い合わせ・SNS遷移系イベントの発見に使う
+# （イベント名は discover_ga4_events() で実データから取得し、ここでは推測で決め打ちしない）。
+PIANO_INQUIRY_EVENT_KEYWORDS = ["contact", "form", "phone", "line", "email", "cta", "chatbot", "map", "reserve", "trial", "experience"]
+PIANO_SOCIAL_EVENT_KEYWORDS = ["instagram", "youtube", "ameblo", "facebook", "twitter", "x_click"]
+
 CATEGORY_NEWS = "news"
 CATEGORY_TRADING = "trading"
 CATEGORY_REALESTATE = "realestate"

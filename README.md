@@ -24,9 +24,25 @@ python run_daily.py
 
 `fetch_news.py`（RSS取得） → `summarize.py`（Claude APIで要約） → `generate_report.py`（レポート生成）を順に実行する。初回実行時に `jarvis.db`（SQLite）が `schema.sql` から自動初期化される。
 
-対象カテゴリ: news（AIニュース）/ trading（仮想取引）/ realestate（不動産）/ manufacturing（製造業）/ minpaku（民泊）。レポートはカテゴリごとに別ファイルとして `reports/{category}_{日時}.md` に出力される。
+対象カテゴリ: news（AIニュース）/ trading（仮想取引）/ realestate（不動産）/ manufacturing（製造業）/ minpaku（民泊）/ piano（ピアノ教室アクセス分析）。レポートはカテゴリごとに別ファイルとして `reports/{category}_{日時}.md` に出力される。
 
 各ステップは個別にも実行できる（`python fetch_news.py` など）。`python generate_report.py <category>` でカテゴリを指定したレポート単体生成も可能（省略時は全カテゴリ）。
+
+## ①ピアノ教室アクセス分析（Search Console / GA4）
+
+Google Search Console・GA4のサービスアカウント連携が必要（`.env`に`GOOGLE_APPLICATION_CREDENTIALS`/`SEARCH_CONSOLE_SITE_URL`/`GA4_PROPERTY_ID`を設定）。接続確認:
+
+```powershell
+python scripts/test_google_integrations.py
+```
+
+分析の単体実行:
+
+```powershell
+python piano_analytics.py
+```
+
+直近28日（Search Console）・直近7日（GA4）のデータを前期間と比較し、検索クエリの分類（表示回数多×CTR低、順位4〜15位、順位/クリック数の増減、地域・ブランドクエリ）、問い合わせ系イベント件数、Claudeによる優先度順Top3の改善提案を含むレポートをKnowledgeとして保存する。Search Console・GA4のどちらかが取得失敗しても、取得できた方のデータのみで処理を継続する。`run_daily.py`からも自動実行される（失敗しても全体は止めない）。
 
 ## 質問応答（Phase 2）
 
