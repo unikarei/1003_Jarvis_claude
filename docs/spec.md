@@ -161,6 +161,20 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
   - 改善提案が優先度順に最大3件、根拠データ・問題・推奨施策・期待効果付きで生成される
   - 実データで1回実行し、Search Console/GA4の実測値と改善提案Top3が得られる
 
+#### 4-8. 外部プロジェクト（1004_Insight_Reporter）との連携: 上位ソース化
+
+定期情報収集は、対応するレポート種別については隣接プロジェクト `1004_Insight_Reporter` が担う。JARVISはそれを**上位ソース**として優先的に参照し、情報が不足する場合のみJARVIS独自に調べる（フォールバック）。
+
+- `ingest_insight_reporter.py`: `1004_Insight_Reporter/reports/<report_id>/latest.json` を読み取り、JARVISのSource/Knowledge（category=対応カテゴリ）として取り込む。JARVISはInsight Reporter配下のファイルを変更・importしない（読み取り専用）
+- 「上位ソースとして十分」の判定（`is_sufficient()`）: レポートが存在し、必須フィールド（`report_id`/`generated_at`/`metrics`）が揃い、生成から既定10日以内であること
+- 不十分な場合（レポートが存在しない、古い、必須フィールド欠落）は、JARVIS独自の取得にフォールバックする。①ピアノ教室の場合は `piano_analytics.run_piano_analysis()`
+- `piano_analytics.py` に `run_piano_update()` を追加し、まず `ingest_insight_reporter.ingest_report("piano_growth")` を試み、不十分なら `run_piano_analysis()` にフォールバックする。`run_daily.py` はこの関数を呼ぶ
+- 現時点でInsight Reporterが実装しているレポート種別は `piano_growth` のみ。他カテゴリ（news/trading/realestate/manufacturing/minpaku）はInsight Reporter側に型が追加されるまで、引き続きJARVIS独自のRSS収集パイプラインを使う
+- 受け入れ条件:
+  - `latest.json` が存在しない場合、JARVIS独自のpiano_analyticsにフォールバックし、処理が止まらない
+  - `latest.json` が存在し十分な場合、Insight Reporter側のデータがSource/Knowledgeとして取り込まれ、JARVIS独自の重複収集は行われない
+  - 取り込んだKnowledgeの出典がInsight Reporterであることが分かる形で記録される
+
 ## 4. データモデル
 
 - ノード型: Category / Task / Knowledge / Source / Skill / Agent

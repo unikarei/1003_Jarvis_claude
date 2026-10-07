@@ -70,8 +70,14 @@
 - `fetch_search_console.py`: `get_search_console_summary()`（実装済み）に加え、`get_query_performance()` / `get_page_performance()` / `get_device_performance()` / `get_search_console_report()`（期間比較付き）を追加
 - `fetch_ga4.py`: `get_ga4_summary()`（実装済み）に加え、`get_ga4_report()`（期間比較付き）/ `get_ga4_top_pages()` / `get_ga4_traffic_sources()` / `discover_ga4_events()`（実装済みイベントの発見用）を追加
 - `piano_analytics.py`（新規）: クエリ分類（表示回数多×CTR低、掲載順位4〜15位、順位・クリック数の増減、地域/ブランドクエリ）、レポート文の組み立て、`llm.ask_claude_tiered()`による優先度順Top3改善提案の生成、Source/Knowledge保存、エラー時のフォールバック（片方のAPIのみで継続）を行う`run_piano_analysis()`を提供
-- `run_daily.py`: 既存のRSSパイプラインに加え`piano_analytics.run_piano_analysis()`を呼び出す（失敗しても全体は止めない）。レポート対象カテゴリに`piano`を追加
+- `run_daily.py`: 既存のRSSパイプラインに加え`piano_analytics.run_piano_update()`を呼び出す（失敗しても全体は止めない）。レポート対象カテゴリに`piano`を追加
 - `generate_report.py`: 変更なし（Knowledgeをそのまま表示する既存の仕組みを流用）
+
+## 3.7 モジュール構成（外部プロジェクト連携: 1004_Insight_Reporter）
+
+- `ingest_insight_reporter.py`（新規）: `1004_Insight_Reporter/reports/<report_id>/latest.json` を読み取り、`is_sufficient()` で鮮度・必須フィールドを判定した上でJARVISのSource/Knowledge（category=対応カテゴリ）として取り込む`ingest_report(report_id)`を提供。JARVISからInsight Reporter配下への書き込み・importは行わない
+- `piano_analytics.py`: `run_piano_update()` を追加。`ingest_insight_reporter.ingest_report("piano_growth")` を優先し、不十分な場合のみ既存の`run_piano_analysis()`（JARVIS独自取得）にフォールバックする
+- `config.py`: `REPORT_CATEGORY_MAP`（report_id→categoryの対応）、`MAX_REPORT_AGE_DAYS`（既定10日）等、Insight Reporter連携用の設定を追加
 
 ## 4. 実行基盤
 

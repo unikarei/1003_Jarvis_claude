@@ -20,9 +20,8 @@ def main():
     print(f"[2/4] 新規Knowledge: {len(new_knowledge)}件")
 
     try:
-        from piano_analytics import run_piano_analysis
-        run_piano_analysis()
-        print("[3/4] ①ピアノ教室アクセス分析: 完了")
+        from piano_analytics import run_piano_update
+        print(f"[3/4] ①ピアノ教室: {run_piano_update()}")
     except Exception as e:
         print(f"[3/4] ①ピアノ教室アクセス分析: スキップ（{type(e).__name__}）")
 

@@ -104,6 +104,18 @@
 - [x] テスト: Search Console単体/GA4単体/両API統合/前期間比較/0件データ/APIエラー/問い合わせイベントなし/レポート生成の各パターンを確認
 - [x] 実データで1回実行し、実測値と改善提案Top3を確認 — run_daily.py実行で6カテゴリ（piano含む）のレポートが生成され、ask.pyでも実データに基づく回答（検索キーワード・改善施策）を出典付きで確認
 
+## 外部プロジェクト連携（1004_Insight_Reporter）
+
+- [x] config.pyにINSIGHT_REPORTER_DIR/REPORT_CATEGORY_MAP/MAX_REPORT_AGE_DAYSを追加
+- [x] ingest_insight_reporter.py実装: load_latest_report() / is_sufficient() / ingest_report()
+- [x] piano_analytics.pyにrun_piano_update()（Insight Reporter優先、不十分ならrun_piano_analysis()にフォールバック）を実装
+- [x] run_daily.pyをrun_piano_update()呼び出しに変更
+- [x] 動作確認:
+  - latest.json不在時（現状の実態）: フォールバックしてJARVIS独自のSearch Console/GA4取得が実行されることを実データで確認
+  - 鮮度切れ（20日前）・必須フィールド欠落のレポート: is_sufficient()がFalseを返しフォールバックすることを一時ディレクトリでのモックで確認（1004_Insight_Reporter配下には書き込まず検証）
+  - 十分なレポートが存在する場合: Source/Knowledgeとして取り込まれ、出典がInsight Reporterであることがtitle/urlに明記されることをモックで確認
+  - 1004_Insight_Reporter側はPiano Growthレポートが未実行（reports/配下が空）のため、実レポートでの取り込みは今後の検証課題として残る
+
 ## 保守
 
 - [x] リファクタリング（機能変更なし）: db.pyのコネクション処理を`_fetchall`/`_fetchone`/`_execute`に共通化、Claude API呼び出しを`llm.py`の`ask_claude()`に統合（summarize.py/ask.pyの重複排除）、live_talk.pyがtalk.pyの`talk()`を再利用するよう変更。既存の動作（search_knowledge/get_recent_knowledge/ask.answer()）に回帰がないことを確認済み

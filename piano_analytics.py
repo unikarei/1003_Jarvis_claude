@@ -282,5 +282,18 @@ def run_piano_analysis() -> str:
     return full_text
 
 
+def run_piano_update() -> str:
+    """①ピアノ教室の定期更新。1004_Insight_Reporterの最新レポートを上位ソースとして優先し、
+    不足する場合（レポート不在・古い・必須フィールド欠落）のみJARVIS独自に取得する。
+    """
+    from ingest_insight_reporter import ingest_report
+
+    report = ingest_report("piano_growth")
+    if report is not None:
+        return f"Insight Reporterのレポートを取り込みました（generated_at={report['generated_at']}）"
+
+    return run_piano_analysis()
+
+
 if __name__ == "__main__":
-    print(run_piano_analysis())
+    print(run_piano_update())

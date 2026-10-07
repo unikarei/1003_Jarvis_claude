@@ -39,6 +39,13 @@ PIANO_BRAND_KEYWORDS = ["小野ピアノ", "小野"]
 PIANO_INQUIRY_EVENT_KEYWORDS = ["contact", "form", "phone", "line", "email", "cta", "chatbot", "map", "reserve", "trial", "experience"]
 PIANO_SOCIAL_EVENT_KEYWORDS = ["instagram", "youtube", "ameblo", "facebook", "twitter", "x_click"]
 
+# 外部プロジェクト（1004_Insight_Reporter、参照専用）との連携設定。
+# 定期情報収集は対応するレポート種別についてはInsight Reporterを上位ソースとし、
+# 不足時（レポート不在・古い・フィールド欠落）のみJARVIS独自に取得する。
+INSIGHT_REPORTER_DIR = BASE_DIR.parent / "1004_Insight_Reporter"
+REPORT_CATEGORY_MAP = {"piano_growth": "piano"}
+MAX_REPORT_AGE_DAYS = 10  # 週次レポート想定。これを超えると「不足」扱いでフォールバックする
+
 CATEGORY_NEWS = "news"
 CATEGORY_TRADING = "trading"
 CATEGORY_REALESTATE = "realestate"

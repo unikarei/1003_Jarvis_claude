@@ -57,6 +57,22 @@
 - コード実行サブエージェント用API: `OPENAI_API_KEY`（コード特化モデル用、導入時に追加）
 - いずれも環境変数で渡し、コード・ログ・Gitに平文で入れない（セキュリティ方針に準拠）
 
+## 外部プロジェクトとの連携（1004_Insight_Reporter）
+
+隣接プロジェクト `D:\usr8_work\work_23_chatgpt\16_PoCs\1004_Insight_Reporter` は、JARVISとは独立した
+「定期情報収集 → 分析 → 改善提案 → 履歴保存 → 静的Web表示」基盤。対応するレポート種別については、
+Insight Reporterの定期収集を**上位ソース**として優先し、JARVIS独自の収集はそれが不足する場合の
+フォールバックとする。
+
+- JARVISはInsight Reporter配下のファイルを変更・import しない（読み取り専用）。逆方向も同様（Insight
+  Reporter側のclaude.mdにもJARVIS非変更の方針が明記されている）
+- 連携は `reports/<report_id>/latest.json` の読み取りのみで行う（`ingest_insight_reporter.py`）
+- 「上位ソースとして十分」の判定（`is_sufficient()`）: レポートが存在し、必須フィールドが揃い、
+  生成から一定日数以内（既定10日、週次更新を想定）であること。不足する場合はJARVIS独自の取得
+  （例: ①ピアノ教室は`piano_analytics.run_piano_analysis()`）にフォールバックする
+- 現時点でInsight Reporterが実装しているレポート種別は `piano_growth`（①ピアノ教室）のみ。他カテゴリ
+  （②〜⑥）はInsight Reporter側に型が用意されるまで、引き続きJARVIS独自のRSS収集を使う
+
 ## データモデル（確定）
 
 ナレッジ・エージェントはノードとエッジのグラフで管理する。
