@@ -64,6 +64,14 @@
 - `update_obsidian.py`: `create_note()` / `append_note()` でボルトへ書き込む（手動トリガーのみ）。GitHub Contents APIのsha突き合わせで同時編集による上書きを防止する
 - `db.py`: `extract_keywords()`（janomeで質問文から名詞を抽出）を追加し、`search_knowledge()` は抽出したキーワードで検索するよう変更（全履歴対象。直近N日フォールバックはキーワード不一致時のみ）。`update_node_content()` / `find_knowledge_by_url()` を追加（既存ノート更新の反映用）
 
+## 3.6 モジュール構成（①ピアノ教室: アクセス分析）
+
+- `config.py`: `GOOGLE_APPLICATION_CREDENTIALS`（サービスアカウントJSONキーのパス）、`GSC_SITE_URL`、`GA4_PROPERTY_ID` を追加
+- `fetch_search_console.py`: Google Search Console API（Search Analytics: query）で直近7日のクエリ別パフォーマンスを取得し、Sourceノード（category=piano）として保存
+- `fetch_ga4.py`: Google Analytics Data API（runReport）で直近7日のページ別アクセスを取得し、Sourceノード（category=piano）として保存
+- 両モジュールとも、取得データをClaudeで要約せずそのままKnowledgeノードのcontentに記録する関数を持つ（数値データのため要約は不要）
+- `run_daily.py` / `generate_report.py`: pianoカテゴリを対象カテゴリに追加（レポート生成の仕組みは既存のまま）
+
 ## 4. 実行基盤
 
 - 開発: Windows、本番: Mac mini（48GB）

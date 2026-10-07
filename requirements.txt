@@ -9,3 +9,6 @@ requests>=2.31
 sounddevice>=0.5
 soundfile>=0.14
 numpy>=1.26
+google-auth>=2.30
+google-api-python-client>=2.140
+google-analytics-data>=0.18

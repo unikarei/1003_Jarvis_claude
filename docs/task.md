@@ -79,6 +79,18 @@
 - [x] 動作確認 — コードタスク2件・ナレッジタスク2件を実行し、正しく振り分けられグラフが記録されることを確認
 - [x] 同種タスクの再実行でSkillノードが再利用され、重複作成されないことを確認（4タスク実行してもSkill/Agentは各2件のみ）
 
+## ①ピアノ教室運営補助: アクセス分析
+
+対象: https://ono-piano.com/（教室ページ: https://ono-piano.com/piano.class/）。Search Console・GA4は設定済み、サービスアカウントへの権限付与はユーザー側で対応可能。
+
+- [ ] Google Cloudでサービスアカウントを作成しJSONキーを発行、Search Console・GA4プロパティに閲覧権限で追加（ユーザー側作業）
+- [ ] config.pyにGOOGLE_APPLICATION_CREDENTIALS/GSC_SITE_URL/GA4_PROPERTY_IDを追加
+- [ ] fetch_search_console.py（検索パフォーマンス取得→Sourceノード）を実装
+- [ ] fetch_ga4.py（アクセスデータ取得→Sourceノード）を実装
+- [ ] pianoカテゴリのKnowledge化（要約せず構造化データのまま）を実装
+- [ ] run_daily.py/generate_report.pyにpianoカテゴリを追加
+- [ ] 動作確認（実データ取得、reports/piano_*.md出力、ask.pyでの質問応答）
+
 ## 保守
 
 - [x] リファクタリング（機能変更なし）: db.pyのコネクション処理を`_fetchall`/`_fetchone`/`_execute`に共通化、Claude API呼び出しを`llm.py`の`ask_claude()`に統合（summarize.py/ask.pyの重複排除）、live_talk.pyがtalk.pyの`talk()`を再利用するよう変更。既存の動作（search_knowledge/get_recent_knowledge/ask.answer()）に回帰がないことを確認済み

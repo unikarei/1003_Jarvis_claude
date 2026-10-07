@@ -25,6 +25,11 @@ SUMMARY_MODEL = os.environ.get("JARVIS_SUMMARY_MODEL", "claude-haiku-4-5-2025100
 # 呼び出し側がforce_escalate=Trueを指定した場合のみ使用する。
 ESCALATION_MODEL = os.environ.get("JARVIS_ESCALATION_MODEL", "claude-sonnet-5-5")
 
+# ①ピアノ教室: アクセス分析用（Search Console / GA4、サービスアカウント認証）
+GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+SEARCH_CONSOLE_SITE_URL = os.environ.get("SEARCH_CONSOLE_SITE_URL")
+GA4_PROPERTY_ID = os.environ.get("GA4_PROPERTY_ID")
+
 CATEGORY_NEWS = "news"
 CATEGORY_TRADING = "trading"
 CATEGORY_REALESTATE = "realestate"

@@ -6,3 +6,5 @@ __pycache__/
 voicevox_download/
 voicevox_engine/
 .claude/
+
+jarvis-piano-reader-key.json

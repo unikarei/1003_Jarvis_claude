@@ -132,6 +132,20 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
   - 競合時（取得後に他で更新された場合）はエラーで中断し、上書きしない
   - 書き込み後に`ingest_obsidian.py`を再実行すると、ローカルのKnowledgeが最新内容に更新される
 
+#### 4-7. ①ピアノ教室運営補助: アクセス分析の定期レポート化
+
+対象サイト: https://ono-piano.com/（ピアノ教室ページ: https://ono-piano.com/piano.class/）。「集客・SNS運用・アクセス分析」のうち、まずアクセス分析（検索・アクセスデータの定期レポート化）に着手する。他カテゴリと同じ「取得→Knowledge化→レポート」のパイプラインを使うが、データ源はRSSではなくGoogle Search Console API / Google Analytics Data API（GA4）にする。
+
+- 認証: サービスアカウント（JSONキー）を使う。ユーザーがGoogle Cloudでサービスアカウントを作成し、Search ConsoleプロパティとGA4プロパティにそのサービスアカウントを閲覧権限で追加する。JSONキーファイルは`.env`と同様にGitに含めない
+- `fetch_search_console.py`: 直近7日分の検索パフォーマンス（クエリ別のクリック数・表示回数・CTR・掲載順位）を取得し、Sourceノード（category=piano）として保存する
+- `fetch_ga4.py`: 直近7日分のアクセスデータ（ページ別のユーザー数・セッション数・ページビュー、流入チャネル）を取得し、Sourceノード（category=piano）として保存する
+- 取得したデータはニュースのような文章要約ではなく構造化データ（指標値）のため、Claudeによる要約はせず、Knowledgeノードには集計結果をそのまま記録する
+- `generate_report.py` / `run_daily.py` の既存のカテゴリ別レポート機構にpianoカテゴリを追加する（取得元が異なるだけで、レポート生成の仕組みは共通化する）
+- 受け入れ条件:
+  - 実行すると、Search Console・GA4それぞれの直近データがSource/Knowledgeとして保存される
+  - `reports/piano_{日時}.md` にアクセス状況のレポートが出力される
+  - `ask.py` で「ピアノ教室のサイトで最近よく検索されているキーワードは？」のような質問に、実データに基づいて回答できる
+
 ## 4. データモデル
 
 - ノード型: Category / Task / Knowledge / Source / Skill / Agent
