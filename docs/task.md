@@ -116,6 +116,26 @@
   - 十分なレポートが存在する場合: Source/Knowledgeとして取り込まれ、出典がInsight Reporterであることがtitle/urlに明記されることをモックで確認
   - 1004_Insight_Reporter側はPiano Growthレポートが未実行（reports/配下が空）のため、実レポートでの取り込みは今後の検証課題として残る
 
+## 民泊: oarai-project-os連携
+
+- [x] config.pyにOARAI_PROJECT_OS_REPO/OARAI_PROJECT_OS_API_BASEを追加
+- [x] db.pyにupdate_node_title() / find_nodes_by_title_prefix()を追加（保留提案の管理用）
+- [x] ingest_oarai_project_os.py実装: data/*.json・docs/**/*.mdの取得、Source/Knowledge化、更新検知
+  - 実データで動作確認: 25件取り込み（data/*.json 11件、docs配下14件）、再実行で重複0件
+  - ask.pyで「大洗Project OSの現在のフェーズと未解決のブロッカー」を質問し、tasks.json/risks.json/project_status.mdを横断した正確な回答（出典付き）を確認
+- [x] oarai_project_os.py実装: build_ingestion_envelope() / propose_change() / check_api_health() / submit_envelope() / submit_or_hold() / resubmit_pending_proposals()
+- [x] 動作確認:
+  - check_api_health(): 本番API（現状500エラーで停止中）に対し実際にFalseを返すことを確認
+  - submit_or_hold(): API未応答時、提案がJARVISのDBにTaskノード（category=minpaku、「未送信」）として保留されることを実際に確認
+  - resubmit_pending_proposals(): requests.get/postをモックしてAPI復旧を再現し、保留中の提案が送信され、タイトルが「送信済み」に更新されること、再走査で二重送信されないことを確認（本番サーバーには一切アクセスしていない）
+  - テスト後、モックで生成した「送信済み」の虚偽状態を含むテストノードは削除済み
+
+## 対話型CLI（chat.py）
+
+- [x] chat.py実装: run_task.py（ナレッジ/コード分類）をバックエンドにした対話ループ（exit/quit/Ctrl+Cで終了）
+  - 発見: Windowsで標準入出力がリダイレクトされるとコンソールのコードページ（cp932等）とUTF-8が不一致になりUnicodeEncodeErrorになる不具合 → `sys.stdin/stdout.reconfigure(encoding="utf-8")`で解消
+  - 動作確認: 「大洗の物件の所在地は？」（Obsidian・oarai-project-os両方のSourceを横断した正確な回答）、「Pythonでリストの中央値を求める関数を実装して」（code_agent経由でコード生成）をUTF-8ファイル経由の入力で確認
+
 ## 保守
 
 - [x] リファクタリング（機能変更なし）: db.pyのコネクション処理を`_fetchall`/`_fetchone`/`_execute`に共通化、Claude API呼び出しを`llm.py`の`ask_claude()`に統合（summarize.py/ask.pyの重複排除）、live_talk.pyがtalk.pyの`talk()`を再利用するよう変更。既存の動作（search_knowledge/get_recent_knowledge/ask.answer()）に回帰がないことを確認済み

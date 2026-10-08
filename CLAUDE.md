@@ -73,6 +73,33 @@ Insight Reporterの定期収集を**上位ソース**として優先し、JARVIS
 - 現時点でInsight Reporterが実装しているレポート種別は `piano_growth`（①ピアノ教室）のみ。他カテゴリ
   （②〜⑥）はInsight Reporter側に型が用意されるまで、引き続きJARVIS独自のRSS収集を使う
 
+## 外部プロジェクトとの連携（1004_Insight_Reporter以外: oarai-project-os / oarai-obsidian）
+
+⑥民泊（大洗）の情報源は以下3つ。GitHub上のMarkdown/JSONを正本として扱う（各リポジトリのAGENTS.md/READMEにも
+同様の方針が明記されている）。
+
+- `unikarei/oarai-obsidian`（private）: 個人の調査ノート（`ingest_obsidian.py`で連携済み）
+- `unikarei/oarai-project-os-since2026`（private）: 大洗物件の購入判断〜開業準備を管理する「Project OS」
+  （React SPA + FastAPI + 構造化JSON、独自のSDD統治`AGENTS.md`を持つ）。`data/*.json`・`docs/**/*.md` を
+  読み取り専用でJARVISに取り込む（`ingest_oarai_project_os.py`）
+- 本番サイト `https://oarai.rebirth-lab.site/` とそのAPI: フロントエンドは稼働中だが、バックエンドAPI
+  （`/api/*`）は2026-10-09時点で停止中（500エラー）。復旧次第、下記の提案送信に利用する
+
+### JARVISからの「改造」（対話から構造化変更を提案）
+
+oarai-project-os側は `docs/09_it_dx/orchestrator-ingestion-contract.md` で、外部オーケストレーターが
+対話から構造化変更案（Decision/Task/Evidence/Activity/Risk/Topic Summary）を抽出し `POST /api/ingest`
+でステージングし、**正本（`data/*.json`）は人間レビュー後にのみ更新される**、という契約を明示している。
+JARVISはこの契約に従う。
+
+- JARVISはoarai-project-os側の `data/*.json` を直接書き換えない。GitHubへの直接コミットによる
+  ステージングも行わない（同リポジトリの `runtime/` は `.gitignore` 対象であり、サーバーローカルの
+  一時領域として設計されているため、GitHubコミットでは本番に反映されない）
+- 対話から生成した提案（ingestion envelope、`oarai-project-os`のAPIスキーマと同形式）はJARVIS側の
+  DBにTaskノードとして保持し、本番APIが復旧し次第 `POST /api/ingest` で送信する（`oarai_project_os.py`）
+- `decision_candidate` は常に `requires_user_approval=True` として扱う（oarai-project-os側のAPI仕様と
+  AGENTS.mdのApproval ruleに準拠）
+
 ## データモデル（確定）
 
 ナレッジ・エージェントはノードとエッジのグラフで管理する。

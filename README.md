@@ -4,6 +4,14 @@
 
 仕様・設計・タスクの詳細は `docs/spec.md` / `docs/architecture.md` / `docs/task.md`、プロジェクト全体の方針は `CLAUDE.md` を参照。
 
+## JARVISと対話する
+
+```powershell
+python chat.py
+```
+
+継続的な対話型CLI。入力内容に応じてナレッジ検索（`ask.py`と同じ検索対象: ニュース・民泊ノート・大洗Project OS等すべてのcategory）またはコード実行サブエージェントに自動で振り分けられる（`run_task.py`と同じ分類ロジック）。終了は `exit` / `quit` / Ctrl+C。
+
 ## セットアップ（Windows）
 
 ```powershell
@@ -70,6 +78,31 @@ python update_obsidian.py append "民泊@大洗/01_物件/大洗_物件概要.md
 ```
 
 `create`は既存ファイルと衝突するとエラーになる。`append`は末尾に日付とJARVIS追記である旨を付けて追記する。取得後に他端末等で編集されていた場合はGitHubのsha不一致により409エラーで中断する（上書き事故防止）。書き込み後は`ingest_obsidian.py`を再実行してローカルのKnowledgeに反映する。
+
+## 民泊: 大洗Project OS連携（oarai-project-os）
+
+大洗物件の購入判断〜開業準備を管理する別リポジトリ（`unikarei/oarai-project-os-since2026`、private、独自のSDD統治`AGENTS.md`を持つ）との連携。
+
+```powershell
+python ingest_oarai_project_os.py
+```
+
+`data/*.json`（タスク・決定事項・リスク等の構造化データ）・`docs/**/*.md`を取得し、category=minpakuのSource/Knowledgeとして保存する（要約せず保存）。`ask.py`で大洗Project OSのタスク・リスク・決定事項について質問できる。
+
+対話からの改造提案（Python関数として利用。CLIは未提供）:
+
+```python
+from oarai_project_os import propose_change, submit_or_hold
+
+envelope = propose_change(
+    summary="南側庭にサウナ設置候補地あり、分電盤の容量確認が必要",
+    entity_type="task",  # activity/evidence/task/decision_candidate/risk/topic_update/note
+    payload={"priority": "B"},
+)
+submit_or_hold(envelope)
+```
+
+本番API（`https://oarai.rebirth-lab.site/health`、2026-10-09時点で停止中）が疎通可能なら`POST /api/ingest`でステージングのみ行う（正本の`data/*.json`は直接書き換えない）。疎通不可なら提案をJARVISのDBにTaskノード（「未送信」）として保持し、`resubmit_pending_proposals()`で後から送信し直せる。`decision_candidate`は常にユーザー承認必須として送信される。
 
 ## 音声対話（Phase 3）
 

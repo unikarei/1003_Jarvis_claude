@@ -79,6 +79,12 @@
 - `piano_analytics.py`: `run_piano_update()` を追加。`ingest_insight_reporter.ingest_report("piano_growth")` を優先し、不十分な場合のみ既存の`run_piano_analysis()`（JARVIS独自取得）にフォールバックする
 - `config.py`: `REPORT_CATEGORY_MAP`（report_id→categoryの対応）、`MAX_REPORT_AGE_DAYS`（既定10日）等、Insight Reporter連携用の設定を追加
 
+## 3.8 モジュール構成（民泊: oarai-project-os連携）
+
+- `ingest_oarai_project_os.py`（新規）: GitHub API（`gh auth token`認証）で`unikarei/oarai-project-os-since2026`の`data/*.json`・`docs/**/*.md`を取得し、Source/Knowledge（category=minpaku）として保存する。`ingest_obsidian.py`と同じ更新検知ロジック（内容が変わっていればcontentを更新）を使う
+- `oarai_project_os.py`（新規）: `build_ingestion_envelope()` / `propose_change()`でingestion envelope（oarai-project-os側API仕様と同スキーマ）を構築し、`check_api_health()`でAPI疎通を確認した上で、疎通可能なら`POST /api/ingest`、不可能ならJARVISのDBにTaskノード（category=minpaku、「未送信」）として保持する`submit_or_hold()`を提供。`resubmit_pending_proposals()`で保留分の再送信を行う
+- `config.py`: `OARAI_PROJECT_OS_API_BASE`（`https://oarai.rebirth-lab.site`）等を追加
+
 ## 4. 実行基盤
 
 - 開発: Windows、本番: Mac mini（48GB）

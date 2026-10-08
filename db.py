@@ -100,6 +100,17 @@ def update_node_content(node_id: str, content: str) -> None:
     _execute("UPDATE nodes SET content = ? WHERE id = ?", (content, node_id))
 
 
+def update_node_title(node_id: str, title: str) -> None:
+    _execute("UPDATE nodes SET title = ? WHERE id = ?", (title, node_id))
+
+
+def find_nodes_by_title_prefix(node_type: str, title_prefix: str) -> list[sqlite3.Row]:
+    return _fetchall(
+        "SELECT * FROM nodes WHERE type = ? AND title LIKE ? ORDER BY created_at ASC",
+        (node_type, f"{title_prefix}%"),
+    )
+
+
 def find_knowledge_by_url(url: str) -> sqlite3.Row | None:
     return _fetchone("SELECT * FROM nodes WHERE type = 'Knowledge' AND url = ?", (url,))
 

@@ -46,6 +46,12 @@ INSIGHT_REPORTER_DIR = BASE_DIR.parent / "1004_Insight_Reporter"
 REPORT_CATEGORY_MAP = {"piano_growth": "piano"}
 MAX_REPORT_AGE_DAYS = 10  # 週次レポート想定。これを超えると「不足」扱いでフォールバックする
 
+# ⑥民泊: 大洗Project OS（unikarei/oarai-project-os-since2026、private）との連携設定。
+# JARVISはdata/*.json・docs/**/*.mdを読み取るのみで、直接書き換えやGitHubへの
+# ステージングコミットは行わない（runtime/は同リポジトリの.gitignore対象のため）。
+OARAI_PROJECT_OS_REPO = "unikarei/oarai-project-os-since2026"
+OARAI_PROJECT_OS_API_BASE = "https://oarai.rebirth-lab.site"
+
 CATEGORY_NEWS = "news"
 CATEGORY_TRADING = "trading"
 CATEGORY_REALESTATE = "realestate"

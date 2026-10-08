@@ -175,6 +175,40 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
   - `latest.json` が存在し十分な場合、Insight Reporter側のデータがSource/Knowledgeとして取り込まれ、JARVIS独自の重複収集は行われない
   - 取り込んだKnowledgeの出典がInsight Reporterであることが分かる形で記録される
 
+#### 4-9. 民泊: oarai-project-os（大洗Project OS）との連携
+
+⑥民泊の情報源として、`unikarei/oarai-project-os-since2026`（private、大洗物件の購入判断〜開業準備を
+管理する独自の「Project OS」）を追加する。GitHub上の `data/*.json` / `docs/**/*.md` を正本として読み込み、
+将来的には本番API（`https://oarai.rebirth-lab.site/`、2026-10-09時点で`/api/*`は500エラーで停止中）が
+復旧次第、対話から抽出した構造化変更案を提案できるようにする。
+
+**読み込み（`ingest_oarai_project_os.py`）**:
+- GitHub API（`gh auth token`認証）で `data/*.json`（activities/budget/changes/decisions/evidence/
+  procurement/risks/schedule/tasks/topics/vendors）と `docs/**/*.md`（`docs/templates/`配下の雛形は除外）、
+  `README.md`/`AGENTS.md` を取得し、Source/Knowledge（category=minpaku）として保存する
+- JSON（構造化データ）は要約せず、整形したJSON文字列をそのままKnowledgeのcontentとする。Markdownは全文
+  保存する（民泊Obsidian取り込みと同じ方針）
+- 既存ノートの内容が変わっていれば新規作成せずcontentを更新する（`ingest_obsidian.py`と同じ更新ロジック）
+
+**提案（`oarai_project_os.py`、対話からの「改造」機能）**:
+- `docs/09_it_dx/orchestrator-ingestion-contract.md` が定義する ingestion envelope
+  （`source`/`source_ref`/`occurred_at`/`raw_summary`/`proposed_changes`/`tags`）と同じスキーマで
+  提案を構築する `build_ingestion_envelope()` / `propose_change()` を実装する
+- `decision_candidate` は常に `requires_user_approval=True` とする
+- 本番API（`GET /health`）が応答する場合のみ `POST /api/ingest` で送信する。応答しない場合は、提案を
+  JARVISのDBにTaskノード（category=minpaku、タイトルに「未送信」である旨を明記）として保持し、処理を
+  止めない
+- `resubmit_pending_proposals()`: 保留中のTaskノードを走査し、API疎通が回復していれば送信し直す
+- JARVISはoarai-project-os側の `data/*.json` を直接書き換えない。GitHubへの直接コミットによる
+  ステージングも行わない（`runtime/`は同リポジトリの`.gitignore`対象であり、GitHubコミットでは本番の
+  ランタイムに反映されないため）
+- 受け入れ条件:
+  - `data/*.json`・`docs/**/*.md` がSource/Knowledgeとして取り込まれ、`ask.py`で大洗Project OSの
+    タスク・リスク・決定事項等について質問に回答できる
+  - 再実行してもURL重複により新規ノードが増えない。内容変更時はcontentが更新される
+  - API未稼働時に提案してもエラーで停止せず、未送信としてJARVIS側に保持される
+  - API稼働時は実際に`POST /api/ingest`で送信され、`ingestion_id`が得られる
+
 ## 4. データモデル
 
 - ノード型: Category / Task / Knowledge / Source / Skill / Agent
