@@ -2,16 +2,22 @@
 
 どう作るか。構成を変えるときは、このファイルを先に更新する。
 
-## 1. 4層構成
+## 1. 第0層＋5層構成
 
-| 層 | 役割 | Phase 1 | Phase 2以降 |
+全体計画 JARVIS-MAP-002 §4 の層構成に合わせる。「現在のモジュール」は実装済みのもの、「今後」は全体計画・本リポジトリの予定。
+
+| 層 | 役割 | 現在のモジュール | 今後 |
 |---|---|---|---|
-| インターフェース層 | 入出力 | Markdownレポート | テキスト質問応答 → 音声（Phase 3） |
-| オーケストレーション層 | タスク分解・制御 | `run_daily.py` | エージェント制御 |
-| ツール/統合層 | 外部取得・投稿 | RSS取得 | 証券API、SNS API、スクレイピング、MCP |
-| メモリ層 | 蓄積・検索 | SQLite（nodes/edges） | RAG（ベクトルDB）、スキルライブラリ |
+| L0 Architecture Registry | 全体構造の正本（別リポジトリ） | なし（JARVISは参照する側。`jarvis-architecture-registry` は未作成） | Registry の読み込み。Discovery / Guardian は本リポジトリの内部モジュールとして実装（MAP Phase 2〜3、ADR-0009） |
+| L1 Orchestration | タスク分解・ルーティング・エージェント制御 | `run_daily.py` / `run_task.py` / `llm.py`（`ask_claude_tiered()`）/ `code_agent.py` / `agent_log.py`、定期実行（launchd / タスクスケジューラ） | Agent Manager、Task Manager、Codex / Claude 連携（MAP Phase 9） |
+| L2 Data Foundation | 外部取得・Raw Data・DB・ログ | `fetch_news.py` / `fetch_search_console.py` / `fetch_ga4.py` / `ingest_insight_reporter.py` / `ingest_oarai_project_os.py` / `ingest_obsidian.py` / `github_auth.py`、SQLite（`db.py` / `schema.sql`）、`jarvis_agent.log` | 証券API、SNS API、スクレイピング、MCP |
+| L3 Knowledge | 長期知識（Obsidian / Markdown / Git）・意思決定履歴 | `update_obsidian.py`（oarai-obsidian への書き込み）、`oarai_project_os.py`（Project OS への変更提案） | Obsidian 連携の拡大（MAP Phase 7） |
+| L4 Intelligence | 要約・検索・分析・ナレッジグラフ | `summarize.py`、`db.py`（`search_knowledge()` / `extract_keywords()`、nodes/edges グラフ）、`ask.py`（`answer()`）、`piano_analytics.py` | Knowledge Engine（RAG・意味検索・鮮度管理）、スキルライブラリ。本リポジトリの内部モジュールとして開発（MAP Phase 7、ADR-0010） |
+| L5 Presentation | 入出力 | `chat.py` / `ask.py`（CLI）、`talk.py` / `live_talk.py` / `speech_to_text.py` / `text_to_speech.py`（音声）、`generate_report.py`（Markdownレポート） | Web Summary / ACC（本リポジトリの内部モジュール、ADR-0010）、HTTP API（MAP Phase 5〜6） |
 
-方針: 下位3層を固定し、インターフェース層だけを段階的に差し替える。
+方針: L1〜L4 を固定し、L5（入出力）だけを段階的に差し替える。
+
+旧「4層構成」との対応: インターフェース層 → L5、オーケストレーション層 → L1、ツール/統合層 → L2、メモリ層 → L3＋L4。
 
 ## 2. データモデル
 
@@ -87,7 +93,9 @@
 
 ## 4. 実行基盤
 
-- 開発: Windows、本番: Mac mini（48GB）
+- 開発・実行の中心: Mac mini M4 Pro（48GB）。Windows PC は Tailscale / SSH 経由の操作端末（JARVIS-MAP-002 §3）
+- これまでの実装・動作確認は Windows 上で実施。Mac mini での動作確認は未実施
+- 今後: Docker 化（独立した `Dockerfile` / `compose.yaml`、永続データは Volume）と HTTP API 化（`/health`、`/api/v1/`）を全体計画に沿って行う（MAP Phase 4〜5）
 - LLM: 機密性の高い処理はローカルLLM、高精度が必要な処理はクラウドAPI（Claude）のハイブリッド
 - 音声（Phase 3）: 認識はfaster-whisper等、合成はVOICEVOX等をローカル実行
 

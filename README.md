@@ -2,7 +2,7 @@
 
 個人用AIアシスタント。Phase 1 MVPは「AIニュース日次収集・要約」（RSS取得 → Claude APIで要約 → Markdownレポート生成）。
 
-仕様・設計・タスクの詳細は `docs/spec.md` / `docs/architecture.md` / `docs/task.md`、プロジェクト全体の方針は `CLAUDE.md` を参照。
+仕様・設計・タスクの詳細は `docs/spec.md` / `docs/architecture.md` / `docs/task.md`、プロジェクト全体の方針は `AGENTS.md` を参照。
 
 ## JARVISと対話する
 
