@@ -127,9 +127,39 @@ python live_talk.py 8  # 8秒間録音し、回答をスピーカーで再生
 
 いずれも 音声/テキスト → `speech_to_text.py`（faster-whisper） → `ask.answer()` → `text_to_speech.py`（VOICEVOX） → 音声、を接続する。ENGINE未起動の場合は明確なエラーで停止する。`speech_to_text.py` / `text_to_speech.py` は単体でも実行できる。
 
-現在はWindows開発機で実機マイク/スピーカーの動作検証まで完了している。Mac miniへの移行は本番運用フェーズで行う。
+現在はWindows開発機で実機マイク/スピーカーの動作検証まで完了している。Mac mini での音声対話の確認は未実施。
 
-## 定期実行（タスクスケジューラ）
+## セットアップ（Mac mini）
+
+2026-10-11 から Mac mini を正本の実行環境としている。
+
+```sh
+cd 1003_Jarvis_claude
+uv venv .venv --python 3.13
+uv pip install --python .venv/bin/python -r requirements.txt
+cp .env.example .env   # 値を設定する。Google の鍵ファイルは jarvis-piano-reader-key.json として配置
+```
+
+python.org 版の Python は、インストールしただけでは HTTPS の証明書検証に使う CA ファイルを持たない。インストール後に付属のスクリプトを1回実行する（Mac mini では 2026-10-11 に実行済み）。実行しないと、feedparser が証明書エラーを例外にせず、RSS 取得がエラーなしで 0 件になる。
+
+```sh
+"/Applications/Python 3.13/Install Certificates.command"
+```
+
+`.venv/` は `.gitignore` に含まれていないため、`.git/info/exclude` に追加してローカルで除外している。
+
+## 定期実行（launchd、Mac mini）
+
+`~/Library/LaunchAgents/com.ohide.jarvis.daily-news.plist` で毎日 6:00 に `.venv/bin/python run_daily.py` を実行する。ログは `~/Library/Logs/jarvis/daily-news.log`（標準エラーは `daily-news.err.log`）。
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ohide.jarvis.daily-news.plist   # 登録
+launchctl kickstart gui/$(id -u)/com.ohide.jarvis.daily-news                                # 今すぐ1回実行
+launchctl print gui/$(id -u)/com.ohide.jarvis.daily-news | grep -E "state|last exit"        # 状態確認
+launchctl bootout gui/$(id -u)/com.ohide.jarvis.daily-news                                  # 登録解除
+```
+
+## 定期実行（タスクスケジューラ、Windows。2026-10-11 に停止済み）
 
 `config.py` はすべてのパスを `__file__` 基準で解決するため、作業ディレクトリに依存しない。PowerShellで以下を実行してタスクを登録する（`python.exe`のパスは環境に合わせて変更）。
 
