@@ -15,7 +15,7 @@
 - [x] Windows環境で `python run_daily.py` を実行し、通しで動作確認 — reports/に50件のKnowledgeを含むレポートを出力
 - [x] README・手順をWindows向けに修正 — セットアップ/実行/タスクスケジューラ登録手順を記載
 - [x] 定期実行の設定（タスクスケジューラ）— タスク名`JARVIS_DailyNews`、毎朝6:00に登録済み。作業ディレクトリ非依存であることも確認済み
-- [ ] Mac miniへ移行（clone、定期実行をlaunchdに）
+- [x] Mac miniへ移行（clone、定期実行をlaunchdに）— 2026-10-11。jarvis.db・.env をWindowsから移し、Mac miniを正本に。launchd `com.ohide.jarvis.daily-news`（毎日6:00）で新規33件の取得・要約・レポート出力を確認
 
 ## Phase 2: テキスト質問応答
 
@@ -145,8 +145,10 @@
 全体計画に合わせるための作業。着手前に spec.md / architecture.md を更新する。
 
 - [x] ドキュメントを第0層＋5層構成・Mac mini中心の構成に更新（AGENTS.md / architecture.md / spec.md）。CLAUDE.md を AGENTS.md に移し、CLAUDE.md は `@AGENTS.md` のみにした
-- [ ] Mac mini 上で依存をインストールし、`run_daily.py` / `ask.py` / `chat.py` の動作を確認（Phase 1・3 の「Mac miniへの移行」と同じ作業）
-- [ ] 定期実行を launchd に登録
+- [x] Mac mini 上で依存をインストールし、`run_daily.py` / `ask.py` の動作を確認 — 2026-10-11。`.venv`（Python 3.13.9、uv）に requirements.txt を導入。ask.py で出典付き回答、run_daily.py で収集〜レポート出力、scripts/test_google_integrations.py で Search Console・GA4 接続を確認
+  - 発見: python.org 版 Python では HTTPS の証明書検証が失敗し、feedparser が例外を出さずに全フィード0件を返していた → `.env` に `SSL_CERT_FILE`（venv 内の certifi）を指定して解消
+- [ ] Mac mini 上で `chat.py` と Phase 3（音声）・Phase 4 の動作を確認
+- [x] 定期実行を launchd に登録 — 2026-10-11。`~/Library/LaunchAgents/com.ohide.jarvis.daily-news.plist`（毎日6:00）。Windowsのタスクスケジューラは停止済み
 - [ ] `config.py` の `INSIGHT_REPORTER_DIR`（`1004_Insight_Reporter`）を実ディレクトリ名 `1004_insight_reporter` に合わせる（macOS 既定の大文字小文字を区別しないファイルシステムでは動くが、Docker 等の Linux 上では見つからない）
 - [ ] Docker 化（MAP Phase 4）: `Dockerfile` / `compose.yaml`、DB・レポート・ログの永続 Volume、Healthcheck
 - [ ] HTTP API 化（MAP Phase 5）: `/health`、`/api/v1/`、OpenAPI 仕様
