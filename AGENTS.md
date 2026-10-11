@@ -164,9 +164,10 @@ JARVISはこの契約に従う。
 
 - 開発・実行の中心: Mac mini M4 Pro（統合メモリ48GB）。統合ワークスペース直下の `1003_Jarvis_claude/` に配置する
 - Windows PC: 操作端末。Tailscale / SSH 経由で Mac mini に接続し、VS Code Remote-SSH 等で編集・テスト・Git操作を行う
-- これまでの実績: Phase 1〜4 は Windows 上で実装・動作確認した（音声の実機マイク/スピーカー検証を含む）。Mac mini での動作確認は未実施（`docs/task.md` の移行タスク）
+- これまでの実績: Phase 1〜4 は Windows 上で実装・動作確認した（音声の実機マイク/スピーカー検証を含む）。Phase 1・2 は Mac mini で動作確認済み（2026-10-11、`run_daily.py`・`ask.py`・Google API 接続）。2026-10-11 から Mac mini の `jarvis.db` を正本とし、定期実行も Mac mini（launchd）に移した。Windows の定期実行は停止済み。Phase 3（音声）・Phase 4・`chat.py` の Mac mini での確認は未実施
 - LLM: 機密ナレッジ処理はローカルLLM、高精度が必要な推論はクラウドAPIのハイブリッド構成
-- 定期実行: Mac では launchd（Windows ではタスクスケジューラ）。Windows では `pip install` に `--break-system-packages` は不要
+- 定期実行: Mac では launchd（`~/Library/LaunchAgents/com.ohide.jarvis.daily-news.plist`、毎日 6:00。手順は README）。Windows ではタスクスケジューラ。
+- macOS（python.org 版 Python）では、インストール後に付属の「Install Certificates.command」を1回実行して HTTPS の証明書検証用の CA ファイルを用意する（Mac mini では 2026-10-11 に実行済み）。未実行だと RSS 取得がエラーを出さずに 0 件になるWindows では `pip install` に `--break-system-packages` は不要
 - 今後の予定（全体計画）: Docker 化（MAP Phase 4）、`/health`・`/api/v1/` を持つ HTTP API 化（MAP Phase 5）。着手時は先に `docs/` を更新する
 - リポジトリ: https://github.com/unikarei/1003_Jarvis_claude （main）
 

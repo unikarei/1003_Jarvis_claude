@@ -94,7 +94,8 @@
 ## 4. 実行基盤
 
 - 開発・実行の中心: Mac mini M4 Pro（48GB）。Windows PC は Tailscale / SSH 経由の操作端末（JARVIS-MAP-002 §3）
-- これまでの実装・動作確認は Windows 上で実施。Mac mini での動作確認は未実施
+- これまでの実装・動作確認は Windows 上で実施。Phase 1・2 は Mac mini で動作確認済み（2026-10-11、`run_daily.py`・`ask.py`・Google API 接続）。2026-10-11 から Mac mini の `jarvis.db` を正本とし、定期実行も Mac mini（launchd）に移した。Windows の定期実行は停止済み
+- macOS（python.org 版 Python）では「Install Certificates.command」で CA ファイルを用意しておく（Mac mini は実行済み）。feedparser は証明書エラーを例外にせず空の結果を返すため、未実行だと RSS 取得が 0 件になる
 - 今後: Docker 化（独立した `Dockerfile` / `compose.yaml`、永続データは Volume）と HTTP API 化（`/health`、`/api/v1/`）を全体計画に沿って行う（MAP Phase 4〜5）
 - LLM: 機密性の高い処理はローカルLLM、高精度が必要な処理はクラウドAPI（Claude）のハイブリッド
 - 音声（Phase 3）: 認識はfaster-whisper等、合成はVOICEVOX等をローカル実行

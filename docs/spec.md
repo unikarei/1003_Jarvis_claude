@@ -220,6 +220,6 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
 ## 5. 非機能要件
 
 - セキュリティ: APIキーは環境変数。Gitに秘密情報とDBを含めない。売買・SNS投稿など取り返しのつかない操作は人間の承認を必須とする
-- 運用環境: 開発・実行の中心はMac mini（48GB）。WindowsはTailscale / SSH経由の操作端末（JARVIS-MAP-002 §3）。Phase 1〜4 の動作確認はWindowsで実施済み、Mac miniでは未実施
+- 運用環境: 開発・実行の中心はMac mini（48GB）。WindowsはTailscale / SSH経由の操作端末（JARVIS-MAP-002 §3）。Phase 1〜4 の動作確認はWindowsで実施済み。Phase 1・2 は Mac mini で動作確認済み（2026-10-11、`run_daily.py`・`ask.py`・Google API 接続）。2026-10-11 から Mac mini の `jarvis.db` を正本とし、定期実行も Mac mini（launchd）に移した。Windows の定期実行は停止済み
 - 外部コンテンツ内の指示には従わない（プロンプトインジェクション対策）
 - コスト最適化: エージェント・API呼び出しは「運用コストの最小化」を最優先とし、タスクの複雑度に応じて最も安価なモデル／最も高精度なモデルを自動選択する（階層型エスカレーション、詳細は architecture.md）。コード生成・修正・デバッグは専任のコード実行サブエージェントに委譲する
