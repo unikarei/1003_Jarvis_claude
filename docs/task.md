@@ -146,7 +146,7 @@
 
 - [x] ドキュメントを第0層＋5層構成・Mac mini中心の構成に更新（AGENTS.md / architecture.md / spec.md）。CLAUDE.md を AGENTS.md に移し、CLAUDE.md は `@AGENTS.md` のみにした
 - [x] Mac mini 上で依存をインストールし、`run_daily.py` / `ask.py` の動作を確認 — 2026-10-11。`.venv`（Python 3.13.9、uv）に requirements.txt を導入。ask.py で出典付き回答、run_daily.py で収集〜レポート出力、scripts/test_google_integrations.py で Search Console・GA4 接続を確認
-  - 発見: python.org 版 Python では HTTPS の証明書検証が失敗し、feedparser が例外を出さずに全フィード0件を返していた → `.env` に `SSL_CERT_FILE`（venv 内の certifi）を指定して解消
+  - 発見: python.org 版 Python では HTTPS の証明書検証が失敗し、feedparser が例外を出さずに全フィード0件を返していた → 付属の「Install Certificates.command」を実行して Mac 全体で解消（一時的に `.env` の `SSL_CERT_FILE` で回避していたが削除済み）
 - [ ] Mac mini 上で `chat.py` と Phase 3（音声）・Phase 4 の動作を確認
 - [x] 定期実行を launchd に登録 — 2026-10-11。`~/Library/LaunchAgents/com.ohide.jarvis.daily-news.plist`（毎日6:00）。Windowsのタスクスケジューラは停止済み
 - [ ] `config.py` の `INSIGHT_REPORTER_DIR`（`1004_Insight_Reporter`）を実ディレクトリ名 `1004_insight_reporter` に合わせる（macOS 既定の大文字小文字を区別しないファイルシステムでは動くが、Docker 等の Linux 上では見つからない）

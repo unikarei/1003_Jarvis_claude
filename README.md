@@ -140,10 +140,10 @@ uv pip install --python .venv/bin/python -r requirements.txt
 cp .env.example .env   # 値を設定する。Google の鍵ファイルは jarvis-piano-reader-key.json として配置
 ```
 
-python.org 版の Python は HTTPS の証明書検証に使う CA ファイルを持たないため、`.env` に venv 内の certifi を指定する（指定しないと、feedparser が証明書エラーを例外にせず、RSS 取得がエラーなしで 0 件になる）。
+python.org 版の Python は、インストールしただけでは HTTPS の証明書検証に使う CA ファイルを持たない。インストール後に付属のスクリプトを1回実行する（Mac mini では 2026-10-11 に実行済み）。実行しないと、feedparser が証明書エラーを例外にせず、RSS 取得がエラーなしで 0 件になる。
 
 ```sh
-echo "SSL_CERT_FILE=$(.venv/bin/python -c 'import certifi;print(certifi.where())')" >> .env
+"/Applications/Python 3.13/Install Certificates.command"
 ```
 
 `.venv/` は `.gitignore` に含まれていないため、`.git/info/exclude` に追加してローカルで除外している。
