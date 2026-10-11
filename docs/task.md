@@ -149,7 +149,7 @@
   - 発見: python.org 版 Python では HTTPS の証明書検証が失敗し、feedparser が例外を出さずに全フィード0件を返していた → 付属の「Install Certificates.command」を実行して Mac 全体で解消（一時的に `.env` の `SSL_CERT_FILE` で回避していたが削除済み）
 - [ ] Mac mini 上で `chat.py` と Phase 3（音声）・Phase 4 の動作を確認
 - [x] 定期実行を launchd に登録 — 2026-10-11。`~/Library/LaunchAgents/com.ohide.jarvis.daily-news.plist`（毎日6:00）。Windowsのタスクスケジューラは停止済み
-- [ ] `config.py` の `INSIGHT_REPORTER_DIR`（`1004_Insight_Reporter`）を実ディレクトリ名 `1004_insight_reporter` に合わせる（macOS 既定の大文字小文字を区別しないファイルシステムでは動くが、Docker 等の Linux 上では見つからない）
+- [x] `config.py` の `INSIGHT_REPORTER_DIR`（`1004_Insight_Reporter`）を実ディレクトリ名 `1004_insight_reporter` に合わせる — 2026-10-12。実ディレクトリ名と完全一致すること、`ingest_insight_reporter.load_latest_report("piano_growth")` が読めることを確認（macOS 既定の大文字小文字を区別しないファイルシステムでは動くが、Docker 等の Linux 上では見つからない）
 - [ ] Docker 化（MAP Phase 4）: `Dockerfile` / `compose.yaml`、DB・レポート・ログの永続 Volume、Healthcheck
 - [ ] HTTP API 化（MAP Phase 5）: `/health`、`/api/v1/`、OpenAPI 仕様
 - [ ] Architecture Registry の参照（MAP Phase 2 で Registry 作成後）

@@ -42,7 +42,7 @@ PIANO_SOCIAL_EVENT_KEYWORDS = ["instagram", "youtube", "ameblo", "facebook", "tw
 # 外部プロジェクト（1004_Insight_Reporter、参照専用）との連携設定。
 # 定期情報収集は対応するレポート種別についてはInsight Reporterを上位ソースとし、
 # 不足時（レポート不在・古い・フィールド欠落）のみJARVIS独自に取得する。
-INSIGHT_REPORTER_DIR = BASE_DIR.parent / "1004_Insight_Reporter"
+INSIGHT_REPORTER_DIR = BASE_DIR.parent / "1004_insight_reporter"
 REPORT_CATEGORY_MAP = {"piano_growth": "piano"}
 MAX_REPORT_AGE_DAYS = 10  # 週次レポート想定。これを超えると「不足」扱いでフォールバックする
 
