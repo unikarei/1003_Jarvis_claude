@@ -52,7 +52,7 @@ python piano_analytics.py
 
 直近28日（Search Console）・直近7日（GA4）のデータを前期間と比較し、検索クエリの分類（表示回数多×CTR低、順位4〜15位、順位/クリック数の増減、地域・ブランドクエリ）、問い合わせ系イベント件数、Claudeによる優先度順Top3の改善提案を含むレポートをKnowledgeとして保存する。Search Console・GA4のどちらかが取得失敗しても、取得できた方のデータのみで処理を継続する。`run_daily.py`からも自動実行される（失敗しても全体は止めない）。
 
-定期情報収集は、対応するレポート種別については隣接プロジェクト`../1004_Insight_Reporter`が上位ソースとなる（`run_daily.py`は`piano_analytics.run_piano_update()`を呼ぶ）。Insight Reporterの`reports/piano_growth/latest.json`が存在し十分（生成から10日以内・必須フィールドあり）なら、それをSource/Knowledge化して使う。無ければJARVIS独自のSearch Console/GA4取得にフォールバックする。JARVISはInsight Reporter配下のファイルを変更・importしない（読み取り専用）。
+定期情報収集は、対応するレポート種別については隣接プロジェクト`../1004_insight_reporter`が上位ソースとなる（`run_daily.py`は`piano_analytics.run_piano_update()`を呼ぶ）。Insight Reporterの`reports/piano_growth/latest.json`が存在し十分（生成から10日以内・必須フィールドあり）なら、それをSource/Knowledge化して使う。無ければJARVIS独自のSearch Console/GA4取得にフォールバックする。JARVISはInsight Reporter配下のファイルを変更・importしない（読み取り専用）。
 
 ## 質問応答（Phase 2）
 
