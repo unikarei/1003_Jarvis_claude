@@ -139,3 +139,15 @@
 ## 保守
 
 - [x] リファクタリング（機能変更なし）: db.pyのコネクション処理を`_fetchall`/`_fetchone`/`_execute`に共通化、Claude API呼び出しを`llm.py`の`ask_claude()`に統合（summarize.py/ask.pyの重複排除）、live_talk.pyがtalk.pyの`talk()`を再利用するよう変更。既存の動作（search_knowledge/get_recent_knowledge/ask.answer()）に回帰がないことを確認済み
+
+## 全体計画（JARVIS-MAP-002）との整合
+
+全体計画に合わせるための作業。着手前に spec.md / architecture.md を更新する。
+
+- [x] ドキュメントを第0層＋5層構成・Mac mini中心の構成に更新（AGENTS.md / architecture.md / spec.md）。CLAUDE.md を AGENTS.md に移し、CLAUDE.md は `@AGENTS.md` のみにした
+- [ ] Mac mini 上で依存をインストールし、`run_daily.py` / `ask.py` / `chat.py` の動作を確認（Phase 1・3 の「Mac miniへの移行」と同じ作業）
+- [ ] 定期実行を launchd に登録
+- [ ] `config.py` の `INSIGHT_REPORTER_DIR`（`1004_Insight_Reporter`）を実ディレクトリ名 `1004_insight_reporter` に合わせる（macOS 既定の大文字小文字を区別しないファイルシステムでは動くが、Docker 等の Linux 上では見つからない）
+- [ ] Docker 化（MAP Phase 4）: `Dockerfile` / `compose.yaml`、DB・レポート・ログの永続 Volume、Healthcheck
+- [ ] HTTP API 化（MAP Phase 5）: `/health`、`/api/v1/`、OpenAPI 仕様
+- [ ] Architecture Registry の参照（MAP Phase 2 で Registry 作成後）
