@@ -11,12 +11,42 @@ import sys
 sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
 
+from ckc.models import Speaker, Turn  # noqa: E402
 from run_task import run_task  # noqa: E402
+
+# 「ナレッジ化して」などで、それまでの対話を CKC で知識にする（../docs/spec.md §3.3、CKC Phase 1）
+CKC_TRIGGERS = ("/ckc", "ナレッジ化して", "ナレッジ化する")
+
+
+def is_ckc_request(text: str) -> bool:
+    return text.strip().lower() == "/ckc" or any(t in text for t in CKC_TRIGGERS[1:])
+
+
+def run_ckc(history: list[Turn]) -> bool:
+    """対話を CKC に渡す。取り込めたら True（呼び出し側は記録をリセットする）。"""
+    if not history:
+        print("ナレッジ化する対話がまだありません。\n")
+        return False
+    from ckc.capture import CaptureError
+    from ckc.extract import ExtractError
+    from ckc_cli import import_turns
+    from db import init_db
+
+    init_db()
+    try:
+        import_turns(history, title=f"JARVIS との対話: {history[0].text.splitlines()[0][:30]}")
+    except (CaptureError, ExtractError) as e:
+        print(f"[CKC] {e}\n")
+        return False
+    print()
+    return True
 
 
 def main():
     print("JARVISと対話します（終了: exit / quit / Ctrl+C）")
-    print("例:「大洗の物件の所在地は？」「OpenAIに関する最近のニュースは？」「Pythonで○○する関数を書いて」\n")
+    print("例:「大洗の物件の所在地は？」「OpenAIに関する最近のニュースは？」「Pythonで○○する関数を書いて」")
+    print("「ナレッジ化して」で、それまでの対話から知識を抽出して Obsidian に保存します。\n")
+    history: list[Turn] = []
 
     while True:
         try:
@@ -30,6 +60,10 @@ def main():
         if user_input.lower() in ("exit", "quit"):
             print("終了します。")
             return
+        if is_ckc_request(user_input):
+            if run_ckc(history):
+                history = []
+            continue
 
         try:
             response = run_task(user_input)
@@ -37,6 +71,7 @@ def main():
             print(f"[エラー] {type(e).__name__}: {e}\n")
             continue
 
+        history += [Turn(Speaker.OWNER, user_input), Turn(Speaker.AI, response)]
         print(f"\nJARVIS > {response}\n")
 
 
