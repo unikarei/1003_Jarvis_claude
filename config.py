@@ -19,20 +19,27 @@ VAULT_ROOT = Path(os.environ.get("JARVIS_VAULT_ROOT", Path.home() / "work" / "ob
 # CKC の会話原文・一時ファイル・バックアップ（Git の外、ADR-0018）
 CKC_DATA_DIR = Path(os.environ.get("JARVIS_CKC_DATA_DIR", BASE_DIR / "data" / "ckc"))
 
-# Vault とプロジェクト。ID は Architecture Registry と同じもの（../docs/registry-draft.yaml）を使い、
-# Registry の作成後は vault.resolve_vault() の参照先を Registry に差し替える（ADR-0019）。
-VAULTS = {
+# Vault とプロジェクトの正本は Architecture Registry（../jarvis-architecture-registry）。registry.py が
+# generated/registry.json を読む（ADR-0019、../docs/architecture.md §6.9）。下の値は、registry.json が
+# 読めないときの予備（2026-10-12 時点の Registry の内容）。
+REGISTRY_JSON = Path(os.environ.get(
+    "JARVIS_REGISTRY_JSON", BASE_DIR.parent / "jarvis-architecture-registry" / "generated" / "registry.json"))
+HOST_ID = os.environ.get("JARVIS_HOST_ID", "host-mac-mini")  # Registry の locator を選ぶ端末
+FALLBACK_VAULTS = {
     "vault-oarai-obsidian": "oarai-obsidian",
     "vault-jarvis-knowledge": "jarvis-knowledge",
 }
 DEFAULT_VAULT = "vault-jarvis-knowledge"
 # project_id → (知識の保存先 Vault, 1003 のカテゴリ)
-PROJECTS = {
-    "oarai-minpaku": ("vault-oarai-obsidian", "minpaku"),
+FALLBACK_PROJECTS = {
     "jarvis": ("vault-jarvis-knowledge", None),
-    "turbine-research": ("vault-jarvis-knowledge", "manufacturing"),
-    "physical-ai": ("vault-jarvis-knowledge", "news"),
+    "oarai-minpaku": ("vault-oarai-obsidian", "minpaku"),
     "piano": ("vault-jarvis-knowledge", "piano"),
+    "turbine-research": ("vault-jarvis-knowledge", "manufacturing"),
+    "physical-ai": ("vault-jarvis-knowledge", None),
+    "ai-news": ("vault-jarvis-knowledge", "news"),
+    "trading": ("vault-jarvis-knowledge", "trading"),
+    "realestate": ("vault-jarvis-knowledge", "realestate"),
     "personal": ("vault-jarvis-knowledge", None),
 }
 

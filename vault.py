@@ -1,6 +1,6 @@
 """ローカルの Obsidian Vault への安全な書き込み（../docs/architecture.md §10.4、ADR-0016）。
 
-- Vault は resource_id で指定し、パスは resolve_vault() だけが解決する（Registry 作成後はここを差し替える）。
+- Vault は resource_id で指定し、パスは resolve_vault() だけが解決する（Architecture Registry の registry.json から）。
 - 書き込み前に Git の状態（merge・rebase の途中、ロック）を確認し、一時ファイルから原子的に置き換える。
 - 新規作成は既存ファイルを上書きしない。既存ファイルの変更は、未コミットの変更がなく、読み込み時から
   内容が変わっていない場合だけ、バックアップを取ってから行う。
@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 import config
+import registry
 
 GIT_BUSY_MARKERS = ["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD", "index.lock"]
 PROTECTED_TOP_DIRS = {".git", ".obsidian", ".trash"}
@@ -26,9 +27,10 @@ class VaultError(Exception):
 
 
 def resolve_vault(resource_id: str) -> Path:
-    if resource_id not in config.VAULTS:
-        raise VaultError(f"未知の Vault です: {resource_id}（{', '.join(config.VAULTS)}）")
-    return config.VAULT_ROOT / config.VAULTS[resource_id]
+    paths = registry.vault_paths()
+    if resource_id not in paths:
+        raise VaultError(f"未知の Vault です: {resource_id}（{', '.join(paths)}）")
+    return paths[resource_id]
 
 
 def digest(content: str) -> str:

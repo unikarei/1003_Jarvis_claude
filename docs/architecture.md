@@ -100,7 +100,8 @@
 - `llm.py`（追加）: `complete(prompt)` とプロバイダー（`claude_cli` / `anthropic_api`）の選択。既存の関数は変えない
 - `ckc/`（新規パッケージ）: `models` / `secrets` / `capture` / `extract` / `schema` / `route` / `reconcile` / `render` / `store` / `publish`
 - `ckc_cli.py`（新規）: CKC の CLI。`chat.py` に「ナレッジ化」のコマンドを追加
-- `config.py`: `JARVIS_DB_PATH`・`JARVIS_VAULT_ROOT`・`JARVIS_CKC_DATA_DIR`・`JARVIS_LLM_PROVIDER` の環境変数での差し替え、`VAULTS`・`PROJECTS`
+- `config.py`: `JARVIS_DB_PATH`・`JARVIS_VAULT_ROOT`・`JARVIS_CKC_DATA_DIR`・`JARVIS_LLM_PROVIDER`・`JARVIS_REGISTRY_JSON`・`JARVIS_HOST_ID` の環境変数での差し替え、Registry を読めないときの予備（`FALLBACK_VAULTS`・`FALLBACK_PROJECTS`）
+- `registry.py`（新規、T-310）: Architecture Registry の `generated/registry.json` から Vault のパスとプロジェクトを読む（`../docs/architecture.md` §6.9）
 - `schema.sql`: CKC 用のテーブル（`ckc_conversations`・`ckc_candidates`）を `CREATE TABLE IF NOT EXISTS` で追加。既存の `nodes`・`edges` は変えない
 - テスト: `tests/`（pytest、開発用依存 `requirements-dev.txt`）
 

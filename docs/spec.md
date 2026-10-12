@@ -118,6 +118,8 @@
   - 再実行してもURL重複により新規ノードが増えない
   - `ask.py` で大洗の物件・設備等について質問すると、該当ノートの内容と出典URL（GitHub上のノートへのリンク）付きで回答される
 
+- 2026-10（T-202）: 取り込みは GitHub API ではなく Mac mini のローカルの Vault を読む（`../docs/decisions.md` ADR-0016）。対象に汎用 Vault `jarvis-knowledge`（`_jarvis/` を除く）を加えた。ノードの URL は従来の GitHub の blob URL と同じ形を保つ
+
 #### 4-6. 民泊: Obsidianボルトへの書き込み（新規ノート作成・既存ノートへの追記）
 
 JARVIS側からもボルトを更新できるようにする。自動実行はせず、手動トリガー（CLI実行）でのみ書き込む。

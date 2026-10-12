@@ -14,6 +14,7 @@ import db
 import vault
 from ckc import store
 from ckc.models import CandidateStatus, KnowledgeNote, NoteStatus, SourceRef, new_id, now_iso
+from ckc.route import route_vault
 from ckc.render import note_filename, note_relpath, parse_note, render_note
 from ckc.secrets import find_secrets
 
@@ -77,7 +78,7 @@ def publish(candidate_id: str) -> PublishResult:
         source=SourceRef(conv.origin, conv.conversation_id, conv.title, conv.captured_at, conv.occurred_at),
         evidence=c.evidence, created=now, approved=now, supersedes=supersedes,
     )
-    resource_id = c.resource_id or vault.config.DEFAULT_VAULT
+    resource_id = c.resource_id or route_vault(c.projects)
     try:
         path = vault.create_file(resource_id, note_relpath(note, note_filename(now, c.title)), render_note(note),
                                  number_if_exists=True)

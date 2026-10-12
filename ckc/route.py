@@ -5,18 +5,20 @@
 """
 
 import config
+import registry
 
 OARAI_PROJECT = "oarai-minpaku"
 
 
 def route_vault(projects: list[str]) -> str:
     if projects == [OARAI_PROJECT]:
-        return config.PROJECTS[OARAI_PROJECT][0]
+        return registry.projects()[OARAI_PROJECT][0]
     return config.DEFAULT_VAULT
 
 
 def default_category(projects: list[str]) -> str | None:
     """プロジェクトが1つなら、その 1003 のカテゴリを返す。"""
-    if len(projects) == 1 and projects[0] in config.PROJECTS:
-        return config.PROJECTS[projects[0]][1]
+    known = registry.projects()
+    if len(projects) == 1 and projects[0] in known:
+        return known[projects[0]][1]
     return None

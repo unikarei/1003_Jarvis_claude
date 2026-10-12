@@ -175,3 +175,14 @@
 - [x] T-115 `chat.py` との連携
 - [x] T-116 受け入れテスト（2026-10-12。本物の claude -p・jarvis-knowledge・Mac/スマートフォン間の同期で手順 1〜9・11 を確認。手順 10 の日次処理は main マージ後の 6:00 の実行で確認）
 - [ ] T-117 ChatGPT・Claude のエクスポートの取り込み（Codex、任意）
+
+## Architecture Registry との接続（T-310、MAP Phase 2）
+
+- [x] `registry.py`: Registry の `generated/registry.json` から Vault のパス（この端末の locator）とプロジェクトを読む。読めないときは `config.FALLBACK_*` で動き、警告を1回出す。`JARVIS_VAULT_ROOT` がある開発・テストでは VAULT_ROOT の下を使う
+- [x] `vault.resolve_vault()`・CKC（route・extract・review・publish）を `registry.py` に切り替え
+- [ ] main へのマージ（Registry の T-308 で registry.json が生成されてから。生成前にマージすると、本番が毎回「予備の設定値で動く」警告を出すため）
+
+## Obsidian の取り込みをローカルの Vault に切り替え（T-202、ADR-0016）
+
+- [x] `ingest_obsidian.py`: GitHub API ではなくローカルの Vault（Registry から場所を取得）を読む。oarai-obsidian は `民泊@大洗/`、jarvis-knowledge は `_jarvis/` を除く全体。URL は従来の GitHub の blob URL と同じ形（既存ノードと重複しない、ファイル名は NFC）。Git は操作しない
+
