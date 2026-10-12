@@ -213,3 +213,8 @@
 - [x] `knowledge_engine.py`・`knowledge_cli.py`: プロジェクト横断の検索（BM25、プロジェクトで絞り込み）、出典の追跡（Vault・Registry・会話まで）、重複と鮮度の監査、検索結果だけを根拠に答える（RAG、llm.complete）
 - [ ] 意味検索（埋め込み）: ローカル LLM（Ollama）の埋め込みモデルの導入が必要なため Owner の承認待ち
 
+## Knowledge Architect（MAP Phase 8）
+
+- [x] `architect.py`: 既存資産（知識・Registry の Project と Resource）の再利用の提案、必要なら新しい Project・保存先・ノートの構成の提案（LLM の出力は検証）。適用は確認の後だけで、ノートの雛形は Vault の `_jarvis/themes/<project_id>/`、Registry への Project の追加は一時 worktree から PR（マージは Owner）
+- [x] `chat.py`: 「テーマ登録: <テーマ>」で提案 → 確認 → 適用
+
