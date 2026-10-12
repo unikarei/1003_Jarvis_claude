@@ -93,9 +93,13 @@ def parse_note(markdown: str) -> KnowledgeNote:
             created=_string(values["created"]), approved=_string(values["approved"]),
         )
         header = f"\n# {note.title}\n\n"
-        if not content.startswith(header):
+        if content.startswith(header):
+            content = content[len(header):]
+        elif content.startswith("\n# ") and "\n\n" in content[1:]:
+            # Owner が Obsidian で見出しを書き換えた場合も、本文は読めるようにする（題名は frontmatter を正とする）
+            content = content[1:].split("\n\n", 1)[1]
+        else:
             raise ValueError("本文の題名が不正です")
-        content = content[len(header):]
         footer = _footer(note)
         # 生成した末尾を先に照合し、本文内の同じ見出しを保持する。
         if content.endswith(footer):

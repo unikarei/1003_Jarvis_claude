@@ -131,3 +131,11 @@ def test_missing_required_field_and_duplicate_key():
 def test_tags_are_ignored():
     markdown = _change_field(render_note(_note()), "tags", {"arbitrary": True})
     assert parse_note(markdown) == _note()
+
+
+def test_renamed_heading_in_obsidian_still_reads_body():
+    """Owner が Obsidian で見出しを書き換えても本文を読める（題名は frontmatter を正とする）。"""
+    note = _note(title="元の題名", body="本文の内容")
+    edited = render_note(note).replace("\n# 元の題名\n", "\n# 書き換えた見出し\n")
+    parsed = parse_note(edited)
+    assert (parsed.title, parsed.body) == ("元の題名", "本文の内容")
