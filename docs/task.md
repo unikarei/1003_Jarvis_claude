@@ -202,3 +202,9 @@
 - [ ] Tailscale 経由での配信（ネットワークへの公開のため Owner の承認待ち）
 - [ ] React / React Flow の対話型画面（npm の依存の追加のため Owner の承認待ち）
 
+## API 連携（MAP Phase 5）
+
+- [x] `insight_reporter_api.py`: Insight Reporter の `/api/v1` のクライアント（接続先は Registry、`ApiUnavailable`・`ApiError` の区別、任意のトークン）
+- [x] `ingest_insight_reporter.load_latest_report()`: API → ファイルの順に取得（API が止まっていても従来どおり動く）
+- [ ] Jarvis 自身の API（`/health`・`/api/v1/`）: Web フレームワーク（FastAPI）の追加が必要なため、Owner の承認待ち
+

@@ -180,6 +180,8 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
   - `latest.json` が存在し十分な場合、Insight Reporter側のデータがSource/Knowledgeとして取り込まれ、JARVIS独自の重複収集は行われない
   - 取り込んだKnowledgeの出典がInsight Reporterであることが分かる形で記録される
 
+- 2026-10（MAP Phase 5）: レポートの取得は、まず Insight Reporter の API（`GET /api/v1/reports/{id}/latest`、接続先は Architecture Registry）で行い、API が止まっている・失敗したときは従来どおり `latest.json` を読む（`insight_reporter_api.py`）
+
 #### 4-9. 民泊: oarai-project-os（大洗Project OS）との連携
 
 ⑥民泊の情報源として、`unikarei/oarai-project-os-since2026`（private、大洗物件の購入判断〜開業準備を
