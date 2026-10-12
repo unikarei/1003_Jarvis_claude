@@ -23,7 +23,8 @@ import json  # noqa: E402
 (_TMP_ROOT / "registry.json").write_text(json.dumps({
     "projects": {pid: {"project_id": pid, "default_vault": v, "jarvis_category": c}
                  for pid, (v, c) in config.FALLBACK_PROJECTS.items()},
-    "resources": {rid: {"resource_type": "vault", "locator": {"host-mac-mini": f"~/work/obsidian/{name}"}}
+    "resources": {rid: {"resource_type": "vault", "locator": {"host-mac-mini": f"~/work/obsidian/{name}"},
+                        "git_remote": f"https://github.com/unikarei/{name}.git"}
                   for rid, name in config.FALLBACK_VAULTS.items()},
 }, ensure_ascii=False), encoding="utf-8")
 
