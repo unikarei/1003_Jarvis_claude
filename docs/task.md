@@ -165,7 +165,7 @@
 - [ ] T-105 ノートの生成と読み取り（Codex）
 - [ ] T-106 抽出結果の検証（Codex）
 - [x] T-107 LLM の共通関数
-- [ ] T-108 ローカル Vault への書き込みと `update_obsidian.py` の改修
+- [x] T-108 ローカル Vault への書き込みと `update_obsidian.py` の改修
 - [ ] T-109 記録（CKC 用テーブル）
 - [ ] T-110 取り込み
 - [ ] T-111 抽出

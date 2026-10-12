@@ -19,6 +19,23 @@ VAULT_ROOT = Path(os.environ.get("JARVIS_VAULT_ROOT", Path.home() / "work" / "ob
 # CKC の会話原文・一時ファイル・バックアップ（Git の外、ADR-0018）
 CKC_DATA_DIR = Path(os.environ.get("JARVIS_CKC_DATA_DIR", BASE_DIR / "data" / "ckc"))
 
+# Vault とプロジェクト。ID は Architecture Registry と同じもの（../docs/registry-draft.yaml）を使い、
+# Registry の作成後は vault.resolve_vault() の参照先を Registry に差し替える（ADR-0019）。
+VAULTS = {
+    "vault-oarai-obsidian": "oarai-obsidian",
+    "vault-jarvis-knowledge": "jarvis-knowledge",
+}
+DEFAULT_VAULT = "vault-jarvis-knowledge"
+# project_id → (知識の保存先 Vault, 1003 のカテゴリ)
+PROJECTS = {
+    "oarai-minpaku": ("vault-oarai-obsidian", "minpaku"),
+    "jarvis": ("vault-jarvis-knowledge", None),
+    "turbine-research": ("vault-jarvis-knowledge", "manufacturing"),
+    "physical-ai": ("vault-jarvis-knowledge", "news"),
+    "piano": ("vault-jarvis-knowledge", "piano"),
+    "personal": ("vault-jarvis-knowledge", None),
+}
+
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 # コード実行サブエージェント用（Phase 4以降で使用。CLAUDE.md「エージェント・APIルーティング方針」参照）
