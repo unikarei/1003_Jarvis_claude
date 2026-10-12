@@ -42,10 +42,42 @@ def run_ckc(history: list[Turn]) -> bool:
     return True
 
 
+THEME_PREFIXES = ("テーマ登録:", "テーマ登録：", "/theme ")
+
+
+def theme_request(text: str) -> str | None:
+    """「テーマ登録: …」なら、テーマの本文を返す（Knowledge Architect、MAP Phase 8）。"""
+    for prefix in THEME_PREFIXES:
+        if text.startswith(prefix):
+            return text[len(prefix):].strip() or None
+    return None
+
+
+def run_architect(theme: str) -> None:
+    import architect
+    from vault import VaultError
+
+    try:
+        proposal = architect.propose(theme)
+        print("\n" + architect.format_proposal(proposal))
+        if input("\nこの内容でノートの雛形と（必要なら）Registry の PR を作りますか？ [y/N] > ").strip().lower() != "y":
+            print(f"適用しませんでした（あとで python architect.py apply {proposal.proposal_id} で適用できます）。\n")
+            return
+        applied = architect.apply(proposal)
+        for path in applied.applied.get("notes", []):
+            print(f"ノートを作成: {path}")
+        if applied.applied.get("registry_pr"):
+            print(f"Registry の PR: {applied.applied['registry_pr']}（Owner がレビューしてマージ）")
+        print()
+    except (architect.ArchitectError, VaultError) as e:
+        print(f"[Architect] {e}\n")
+
+
 def main():
     print("JARVISと対話します（終了: exit / quit / Ctrl+C）")
     print("例:「大洗の物件の所在地は？」「OpenAIに関する最近のニュースは？」「Pythonで○○する関数を書いて」")
-    print("「ナレッジ化して」で、それまでの対話から知識を抽出して Obsidian に保存します。\n")
+    print("「ナレッジ化して」で、それまでの対話から知識を抽出して Obsidian に保存します。")
+    print("「テーマ登録: <テーマ>」で、既存資産の再利用と新しいテーマの構成を提案します。\n")
     history: list[Turn] = []
 
     while True:
@@ -60,6 +92,10 @@ def main():
         if user_input.lower() in ("exit", "quit"):
             print("終了します。")
             return
+        theme = theme_request(user_input)
+        if theme:
+            run_architect(theme)
+            continue
         if is_ckc_request(user_input):
             if run_ckc(history):
                 history = []

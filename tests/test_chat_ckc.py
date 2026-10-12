@@ -46,3 +46,23 @@ def test_chat_records_turns_and_runs_ckc(chat, db_path, ckc_data_dir, make_vault
     assert store.load_conversation(c.conversation_id).origin == Origin.JARVIS
     assert len(list((jk / "_jarvis" / "knowledge" / "Decision").glob("*.md"))) == 1
     assert len(store.list_candidates()) == 1  # 2回目の「ナレッジ化して」は対話がリセット済みで何もしない
+
+
+def test_theme_request_prefix(chat):
+    assert chat.theme_request("テーマ登録: タービンの冷却") == "タービンの冷却"
+    assert chat.theme_request("/theme 家具の購入計画") == "家具の購入計画"
+    assert chat.theme_request("テーマ登録:") is None
+    assert chat.theme_request("大洗の進捗は") is None
+
+
+def test_chat_theme_flow_declined_creates_nothing(chat, db_path, ckc_data_dir, monkeypatch, capsys):
+    import architect
+    proposal = architect.Proposal("arch_x", "t", "2026-10-13", [], False, None, [{"title": "n", "purpose": "p"}])
+    monkeypatch.setattr(architect, "propose", lambda theme: proposal)
+    applied = []
+    monkeypatch.setattr(architect, "apply", lambda p: applied.append(p))
+    answers = iter(["テーマ登録: 家具の購入計画", "n", "exit"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    chat.main()
+    assert applied == [] and "arch_x" in capsys.readouterr().out
+
