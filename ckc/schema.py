@@ -71,7 +71,7 @@ def _validate_item(item, turns, known_projects):
             if project not in known_projects:
                 reasons.append(f"未知のプロジェクト ID: {project}")
     category = item.get("category")
-    if "category" not in item or (category is not None and not isinstance(category, str)):
+    if category is not None and not isinstance(category, str):  # 省略は null と同じに扱う
         reasons.append("category が文字列または null ではない")
     evidence = []
     raw_evidence = item.get("evidence")

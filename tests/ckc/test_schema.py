@@ -59,11 +59,19 @@ def test_each_violation_is_rejected(field, value):
     assert all(isinstance(reason, str) and reason for reason in result.rejected[0][1])
 
 
-@pytest.mark.parametrize("field", ["kind", "title", "body", "projects", "category", "confidence", "evidence"])
+@pytest.mark.parametrize("field", ["kind", "title", "body", "projects", "confidence", "evidence"])
 def test_missing_required_fields(field):
     item = _item()
     del item[field]
     assert _validate(item).rejected
+
+
+def test_missing_category_is_treated_as_null():
+    """category は null でよい（LLM が項目ごと省略した場合も同じ扱い）。"""
+    item = _item()
+    del item["category"]
+    result = _validate(item)
+    assert not result.rejected and result.items[0].category is None
 
 
 @pytest.mark.parametrize("kind", ["Decision", "Preference"])
