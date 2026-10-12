@@ -186,3 +186,7 @@
 
 - [x] `ingest_obsidian.py`: GitHub API ではなくローカルの Vault（Registry から場所を取得）を読む。oarai-obsidian は `民泊@大洗/`、jarvis-knowledge は `_jarvis/` を除く全体。URL は従来の GitHub の blob URL と同じ形（既存ノードと重複しない、ファイル名は NFC）。Git は操作しない
 
+## Multi-Agent Governance（MAP Phase 9）
+
+- [x] `governance.py`: board（tasks.md と Registry に登録されたリポジトリの PR から、着手できるタスク・承認待ち・PR の注意点（積み重ね・同じファイル・古い PR））、prompt（Codex 向けの指示の下書き）、review（PR の差分の LLM レビュー案。投稿しない）
+
