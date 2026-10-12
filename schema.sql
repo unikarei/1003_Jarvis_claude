@@ -29,3 +29,40 @@ CREATE INDEX IF NOT EXISTS idx_nodes_url ON nodes(url);
 CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_id);
 CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_id);
 CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type);
+
+-- CKC（Conversation Knowledge Collector、../docs/spec.md §3.3）: 取り込んだ会話と、承認前の候補。
+-- 会話の原文は data/ckc/raw/<conversation_id>.json に置き、ここには参照だけを持つ（ADR-0018）。
+CREATE TABLE IF NOT EXISTS ckc_conversations (
+    conversation_id TEXT PRIMARY KEY,
+    origin TEXT NOT NULL,
+    title TEXT,
+    external_id TEXT,
+    content_hash TEXT NOT NULL UNIQUE,
+    occurred_at TEXT,
+    captured_at TEXT NOT NULL,
+    raw_path TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ckc_candidates (
+    candidate_id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    projects TEXT NOT NULL,        -- JSON 配列
+    category TEXT,
+    confidence TEXT NOT NULL,
+    evidence TEXT NOT NULL,        -- JSON 配列 [{quote, speaker}]
+    status TEXT NOT NULL,
+    resource_id TEXT,
+    similar TEXT NOT NULL,         -- JSON 配列（ckc_id）
+    supersedes TEXT,               -- 置き換える既存知識の ckc_id（Owner が選んだ場合）
+    ckc_id TEXT,                   -- 保存後の知識の ID
+    note_relpath TEXT,             -- 保存後の Vault 内の相対パス
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (conversation_id) REFERENCES ckc_conversations(conversation_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ckc_candidates_status ON ckc_candidates(status);
+CREATE INDEX IF NOT EXISTS idx_ckc_candidates_conversation ON ckc_candidates(conversation_id);

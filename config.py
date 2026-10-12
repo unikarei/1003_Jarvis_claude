@@ -8,9 +8,33 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-DB_PATH = BASE_DIR / "jarvis.db"
+# DB・Vault・CKC のデータ領域は環境変数で差し替えられる（開発・テストで本番を使わないため。
+# ../docs/spec.md §3.3.12）。未設定なら本番の既定値。
+DB_PATH = Path(os.environ.get("JARVIS_DB_PATH", BASE_DIR / "jarvis.db"))
 SCHEMA_PATH = BASE_DIR / "schema.sql"
 REPORTS_DIR = BASE_DIR / "reports"
+
+# Obsidian Vault 群の親フォルダ（ADR-0015）。各 Vault は VAULT_ROOT / <Vault 名>
+VAULT_ROOT = Path(os.environ.get("JARVIS_VAULT_ROOT", Path.home() / "work" / "obsidian"))
+# CKC の会話原文・一時ファイル・バックアップ（Git の外、ADR-0018）
+CKC_DATA_DIR = Path(os.environ.get("JARVIS_CKC_DATA_DIR", BASE_DIR / "data" / "ckc"))
+
+# Vault とプロジェクト。ID は Architecture Registry と同じもの（../docs/registry-draft.yaml）を使い、
+# Registry の作成後は vault.resolve_vault() の参照先を Registry に差し替える（ADR-0019）。
+VAULTS = {
+    "vault-oarai-obsidian": "oarai-obsidian",
+    "vault-jarvis-knowledge": "jarvis-knowledge",
+}
+DEFAULT_VAULT = "vault-jarvis-knowledge"
+# project_id → (知識の保存先 Vault, 1003 のカテゴリ)
+PROJECTS = {
+    "oarai-minpaku": ("vault-oarai-obsidian", "minpaku"),
+    "jarvis": ("vault-jarvis-knowledge", None),
+    "turbine-research": ("vault-jarvis-knowledge", "manufacturing"),
+    "physical-ai": ("vault-jarvis-knowledge", "news"),
+    "piano": ("vault-jarvis-knowledge", "piano"),
+    "personal": ("vault-jarvis-knowledge", None),
+}
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
@@ -24,6 +48,12 @@ SUMMARY_MODEL = os.environ.get("JARVIS_SUMMARY_MODEL", "claude-haiku-4-5-2025100
 # 階層型エスカレーション（CLAUDE.md参照）の高精度レイヤー。軽量レイヤーで検証失敗時、または
 # 呼び出し側がforce_escalate=Trueを指定した場合のみ使用する。
 ESCALATION_MODEL = os.environ.get("JARVIS_ESCALATION_MODEL", "claude-sonnet-5-5")
+
+# llm.complete() のプロバイダー（../docs/decisions.md ADR-0020）。既定は Claude Code CLI（サブスクリプション内）。
+# "anthropic_api" は従量課金のため、既定にする変更は Owner の個別承認が必要。失敗時の自動切り替えはしない。
+LLM_PROVIDER = os.environ.get("JARVIS_LLM_PROVIDER", "claude_cli")
+CLAUDE_BIN = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local" / "bin" / "claude"))
+CLAUDE_CLI_TIMEOUT_SECONDS = int(os.environ.get("JARVIS_CLAUDE_CLI_TIMEOUT", "300"))
 
 # ①ピアノ教室: アクセス分析用（Search Console / GA4、サービスアカウント認証）
 GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
