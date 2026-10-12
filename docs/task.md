@@ -186,3 +186,13 @@
 
 - [x] `ingest_obsidian.py`: GitHub API ではなくローカルの Vault（Registry から場所を取得）を読む。oarai-obsidian は `民泊@大洗/`、jarvis-knowledge は `_jarvis/` を除く全体。URL は従来の GitHub の blob URL と同じ形（既存ノードと重複しない、ファイル名は NFC）。Git は操作しない
 
+## Discovery / Guardian / Mermaid（MAP Phase 3、T-401〜T-405）
+
+設計は `../docs/architecture.md` §11。
+
+- [x] T-401 `discovery/collect.py`（読み取りだけ、fetch なし、1件の失敗で全体を止めない）
+- [x] T-402 `discovery/guardian.py`（Verified / Failed / Unknown、未登録・存在しない・停止・障害・同期・バックアップ・依存の不整合）
+- [x] T-403 `discovery/output.py`・`discover.py`（latest.json・guardian-report.md・architecture.mmd・STATUS.md、`--dry-run`）
+- [x] T-404 `scripts/commit_registry_outputs.sh`（対象の4ファイルだけ、main のみ、強制 push なし）、`scripts/launchd/com.ohide.jarvis.discovery.plist`（毎日 7:00。**登録は Owner の承認後**）
+- [ ] T-405 受け入れ（2026-10-13 未明に実データで実行し Registry に記録 f37ab70。Owner の確認待ち）
+

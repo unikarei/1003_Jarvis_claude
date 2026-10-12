@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Discovery / Guardian の日次実行（../docs/architecture.md §11.4）。登録は Owner の承認後:
+     cp scripts/launchd/com.ohide.jarvis.discovery.plist ~/Library/LaunchAgents/
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ohide.jarvis.discovery.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.ohide.jarvis.discovery</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/ohide/work/0002_Jarvis2/1003_Jarvis_claude/.venv/bin/python</string>
+    <string>/Users/ohide/work/0002_Jarvis2/1003_Jarvis_claude/discover.py</string>
+    <string>--commit</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/ohide/work/0002_Jarvis2/1003_Jarvis_claude</string>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/Users/ohide/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>StandardOutPath</key><string>/Users/ohide/Library/Logs/jarvis/discovery.log</string>
+  <key>StandardErrorPath</key><string>/Users/ohide/Library/Logs/jarvis/discovery.log</string>
+</dict>
+</plist>
