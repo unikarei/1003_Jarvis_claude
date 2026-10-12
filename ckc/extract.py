@@ -7,8 +7,8 @@ Owner の発言が根拠であること）。手順は 1004 の research_input_b
 import json
 from dataclasses import dataclass, field
 
-import config
 import llm
+import registry
 from ckc import store
 from ckc.models import Candidate, Conversation, new_id
 from ckc.reconcile import find_similar
@@ -57,7 +57,7 @@ class ExtractResult:
 
 
 def build_prompt(conv: Conversation) -> str:
-    return PROMPT.format(max_items=MAX_ITEMS, projects=", ".join(config.PROJECTS), title=conv.title,
+    return PROMPT.format(max_items=MAX_ITEMS, projects=", ".join(registry.projects()), title=conv.title,
                          conversation=conv.text())
 
 
@@ -79,7 +79,7 @@ def extract(conversation_id: str) -> ExtractResult:
     except llm.LLMError as e:
         raise ExtractError(f"LLM の呼び出しに失敗しました（あとで再実行できます）: {e}") from None
     try:
-        result = validate_extraction(extract_json(response), conv, set(config.PROJECTS))
+        result = validate_extraction(extract_json(response), conv, set(registry.projects()))
     except ValueError as e:
         raise ExtractError(f"LLM の応答の形式が不正です: {e}") from None
     if not result.items:

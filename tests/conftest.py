@@ -13,8 +13,19 @@ _TMP_ROOT = Path(tempfile.mkdtemp(prefix="jarvis-test-"))
 os.environ["JARVIS_DB_PATH"] = str(_TMP_ROOT / "jarvis.db")
 os.environ["JARVIS_VAULT_ROOT"] = str(_TMP_ROOT / "vaults")
 os.environ["JARVIS_CKC_DATA_DIR"] = str(_TMP_ROOT / "ckc")
+os.environ["JARVIS_REGISTRY_JSON"] = str(_TMP_ROOT / "registry.json")
 
 import config  # noqa: E402
+
+# テスト用の Registry（予備の値と同じ内容）。Registry を読めない場合の動きは tests/test_registry.py で確かめる。
+import json  # noqa: E402
+
+(_TMP_ROOT / "registry.json").write_text(json.dumps({
+    "projects": {pid: {"project_id": pid, "default_vault": v, "jarvis_category": c}
+                 for pid, (v, c) in config.FALLBACK_PROJECTS.items()},
+    "resources": {rid: {"resource_type": "vault", "locator": {"host-mac-mini": f"~/work/obsidian/{name}"}}
+                  for rid, name in config.FALLBACK_VAULTS.items()},
+}, ensure_ascii=False), encoding="utf-8")
 
 PRODUCTION_ROOTS = [
     Path.home() / "work" / "obsidian",
@@ -82,3 +93,14 @@ def ckc_data_dir(tmp_path, monkeypatch):
     path = tmp_path / "ckc"
     monkeypatch.setattr(config, "CKC_DATA_DIR", path)
     return path
+
+
+@pytest.fixture(autouse=True)
+def _reset_registry_cache():
+    """テストごとに Registry の読み込みをやり直す（他のテストの状態を持ち越さない）。"""
+    import registry
+
+    registry.reset_cache()
+    yield
+    registry.reset_cache()
+

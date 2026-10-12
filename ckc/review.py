@@ -2,7 +2,8 @@
 
 from collections.abc import Callable
 
-import config
+import registry
+import vault
 from ckc import store
 from ckc.models import Candidate, CandidateStatus, Kind
 from ckc.publish import PublishError, publish
@@ -18,6 +19,11 @@ class ReviewError(Exception):
     pass
 
 
+def vault_display_name(resource_id: str | None) -> str:
+    path = registry.vault_paths().get(resource_id or "")
+    return path.name if path else "?"
+
+
 def short_id(candidate_id: str) -> str:
     return candidate_id.rsplit("_", 1)[-1]
 
@@ -31,7 +37,7 @@ def resolve(ref: str) -> Candidate:
 
 
 def format_candidate(c: Candidate, detail: bool = False) -> str:
-    vault_name = config.VAULTS.get(c.resource_id or "", "?")
+    vault_name = vault_display_name(c.resource_id)
     lines = [f"[{short_id(c.candidate_id)}] {c.kind.value}（{KIND_LABELS[c.kind]}）{c.title}",
              f"    状態: {c.status.value} / 確度: {c.confidence.value} / プロジェクト: {', '.join(c.projects) or '-'}"
              f" / 保存先: {vault_name}"]
@@ -52,7 +58,7 @@ def edit(c: Candidate, *, title: str | None = None, body: str | None = None, kin
             "projects": projects if projects is not None else c.projects, "category": None,
             "confidence": c.confidence.value,
             "evidence": [{"quote": e.quote, "speaker": e.speaker.value} for e in c.evidence]}
-    result = validate_extraction({"items": [item]}, store.load_conversation(c.conversation_id), set(config.PROJECTS))
+    result = validate_extraction({"items": [item]}, store.load_conversation(c.conversation_id), set(registry.projects()))
     if not result.items:
         raise ReviewError("修正した内容が検証に通りません: " + "; ".join(result.rejected[0][1]))
     v = result.items[0]
@@ -84,7 +90,7 @@ def publish_approved(candidates: list[Candidate], out: Callable[[str], None] = p
             out(f"[{short_id(c.candidate_id)}] 保存できませんでした: {e}")
             continue
         done += 1
-        out(f"[{short_id(c.candidate_id)}] 保存しました: {config.VAULTS[result.resource_id]}/{result.note_relpath}")
+        out(f"[{short_id(c.candidate_id)}] 保存しました: {vault_display_name(result.resource_id)}/{result.note_relpath}")
         if result.warning:
             out(f"    注意: {result.warning}")
     return done
