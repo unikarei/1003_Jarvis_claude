@@ -44,6 +44,18 @@ def test_propose_validates_and_saves(env, monkeypatch):
     ({"project": {**GOOD["project"], "project_id": "jarvis"}}, "既存と重複"),
     ({"project": {**GOOD["project"], "default_vault": "vault-nope"}}, "Vault ではない"),
     ({"notes": []}, "notes"),
+    # 構造が不正な LLM の出力（phase-approval-review 指摘 3）
+    ({"reuse": [None]}, "reuse の 1 件目がオブジェクトではない"),
+    ({"reuse": "turbine-research"}, "reuse が配列ではない"),
+    ({"new_project_needed": False, "project": None, "notes": [{}]}, "notes の 1 件目に title がない"),
+    ({"notes": [None]}, "notes の 1 件目がオブジェクトではない"),
+    ({"notes": [{"title": 123}]}, "title がない、または文字列ではない"),
+    ({"new_project_needed": "true"}, "真偽値"),
+    ({"new_project_needed": True, "project": None}, "project がオブジェクトではない"),
+    ({"new_project_needed": False}, "project が null ではない"),
+    ({"project": {**GOOD["project"], "project_id": None}}, "形式が不正"),
+    ({"project": {**GOOD["project"], "name": ["x"]}}, "name がない"),
+    ({"rationale": {"x": 1}}, "rationale が文字列ではない"),
 ])
 def test_invalid_proposals_are_rejected(env, monkeypatch, change, message):
     _llm(monkeypatch, {**GOOD, **change})
@@ -110,3 +122,8 @@ def test_apply_creates_notes_and_registry_pr(env, monkeypatch, registry_repo):
     assert _git(repo, "worktree", "list").stdout.count("\n") == 1                      # 一時 worktree は消えている
     with pytest.raises(architect.ArchitectError, match="適用済み"):
         architect.apply(applied, registry_dir=repo)
+
+
+def test_non_object_proposal_is_rejected():
+    assert architect.validate([1, 2], {"projects": {}, "resources": {}, "knowledge": [], "vaults": []}) == \
+        ["提案が JSON オブジェクトではない"]
