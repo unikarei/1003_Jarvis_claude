@@ -111,24 +111,68 @@ def _extract_json(text: str) -> dict:
         raise ArchitectError(f"LLM の応答の JSON を読めません: {e}") from None
 
 
-def validate(data: dict, ctx: dict) -> list[str]:
+def _text(value, max_len: int) -> bool:
+    return isinstance(value, str) and 0 < len(value.strip()) <= max_len
+
+
+def validate(data, ctx: dict) -> list[str]:
+    """LLM の出力の構造と値を検査する。不正なら日本語のエラーの一覧を返す（空なら合格）。"""
+    if not isinstance(data, dict):
+        return ["提案が JSON オブジェクトではない"]
     errors = []
     known = set(ctx["projects"]) | set(ctx["resources"]) | {h.knowledge_id for h in ctx["knowledge"]}
-    for item in data.get("reuse") or []:
-        if item.get("id") not in known:
+    reuse = data.get("reuse", [])
+    if not isinstance(reuse, list):
+        errors.append("reuse が配列ではない")
+        reuse = []
+    for n, item in enumerate(reuse, 1):
+        if not isinstance(item, dict):
+            errors.append(f"reuse の {n} 件目がオブジェクトではない")
+        elif not isinstance(item.get("id"), str):
+            errors.append(f"reuse の {n} 件目の id が文字列ではない")
+        elif item["id"] not in known:
             errors.append(f"reuse に一覧にない ID: {item.get('id')}")
-    if data.get("new_project_needed"):
-        p = data.get("project") or {}
-        if not ID_RE.match(str(p.get("project_id", ""))):
-            errors.append(f"project_id の形式が不正: {p.get('project_id')}")
-        elif p["project_id"] in ctx["projects"]:
-            errors.append(f"project_id が既存と重複: {p['project_id']}")
-        if p.get("default_vault") not in ctx["vaults"]:
-            errors.append(f"default_vault が Vault ではない: {p.get('default_vault')}")
-        if not p.get("name"):
-            errors.append("project の name がない")
-    if not 1 <= len(data.get("notes") or []) <= 10:
-        errors.append("notes は 1〜10 件")
+        elif "reason" in item and not isinstance(item["reason"], str):
+            errors.append(f"reuse の {n} 件目の reason が文字列ではない")
+
+    needed = data.get("new_project_needed")
+    project = data.get("project")
+    if not isinstance(needed, bool):
+        errors.append("new_project_needed が真偽値（true / false）ではない")
+    elif needed:
+        if not isinstance(project, dict):
+            errors.append("new_project_needed が true なのに project がオブジェクトではない")
+        else:
+            pid = project.get("project_id")
+            if not isinstance(pid, str) or not ID_RE.match(pid):
+                errors.append(f"project_id の形式が不正: {pid}")
+            elif pid in ctx["projects"]:
+                errors.append(f"project_id が既存と重複: {pid}")
+            if project.get("default_vault") not in ctx["vaults"]:
+                errors.append(f"default_vault が Vault ではない: {project.get('default_vault')}")
+            if not _text(project.get("name"), 100):
+                errors.append("project の name がない、または文字列ではない")
+            if not isinstance(project.get("description", ""), str):
+                errors.append("project の description が文字列ではない")
+            if project.get("jarvis_category") is not None and not isinstance(project.get("jarvis_category"), str):
+                errors.append("project の jarvis_category が文字列でも null でもない")
+    elif project is not None:
+        errors.append("new_project_needed が false なのに project が null ではない")
+
+    notes = data.get("notes")
+    if not isinstance(notes, list) or not 1 <= len(notes) <= 10:
+        errors.append("notes は 1〜10 件の配列")
+    else:
+        for n, note in enumerate(notes, 1):
+            if not isinstance(note, dict):
+                errors.append(f"notes の {n} 件目がオブジェクトではない")
+                continue
+            if not _text(note.get("title"), 200):
+                errors.append(f"notes の {n} 件目に title がない、または文字列ではない")
+            if not isinstance(note.get("purpose", ""), str):
+                errors.append(f"notes の {n} 件目の purpose が文字列ではない")
+    if not isinstance(data.get("rationale", ""), str):
+        errors.append("rationale が文字列ではない")
     if any(find_secrets(json.dumps(data, ensure_ascii=False))):
         errors.append("秘密情報の可能性がある値を含む")
     return errors
@@ -151,9 +195,9 @@ def propose(theme: str) -> Proposal:
     errors = validate(data, ctx)
     if errors:
         raise ArchitectError("提案が検証に通りませんでした: " + "; ".join(errors))
-    proposal = Proposal(new_id("arch"), theme, now_iso(), data.get("reuse") or [],
-                        bool(data.get("new_project_needed")), data.get("project") if data.get("new_project_needed") else None,
-                        data.get("notes") or [], data.get("rationale", ""))
+    proposal = Proposal(new_id("arch"), theme, now_iso(), data.get("reuse", []), data["new_project_needed"],
+                        data["project"] if data["new_project_needed"] else None,
+                        data["notes"], data.get("rationale", ""))
     save(proposal)
     return proposal
 
