@@ -128,7 +128,9 @@ def validate(data, ctx: dict) -> list[str]:
     for n, item in enumerate(reuse, 1):
         if not isinstance(item, dict):
             errors.append(f"reuse の {n} 件目がオブジェクトではない")
-        elif item.get("id") not in known:
+        elif not isinstance(item.get("id"), str):
+            errors.append(f"reuse の {n} 件目の id が文字列ではない")
+        elif item["id"] not in known:
             errors.append(f"reuse に一覧にない ID: {item.get('id')}")
         elif "reason" in item and not isinstance(item["reason"], str):
             errors.append(f"reuse の {n} 件目の reason が文字列ではない")

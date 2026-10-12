@@ -47,6 +47,12 @@ def test_propose_validates_and_saves(env, monkeypatch):
     # 構造が不正な LLM の出力（phase-approval-review 指摘 3）
     ({"reuse": [None]}, "reuse の 1 件目がオブジェクトではない"),
     ({"reuse": "turbine-research"}, "reuse が配列ではない"),
+    # id が集合で検索できない型（再レビューの指摘）
+    ({"reuse": [{"id": [], "reason": "x"}]}, "reuse の 1 件目の id が文字列ではない"),
+    ({"reuse": [{"id": {}, "reason": "x"}]}, "reuse の 1 件目の id が文字列ではない"),
+    ({"reuse": [{"id": None, "reason": "x"}]}, "reuse の 1 件目の id が文字列ではない"),
+    ({"reuse": [{"reason": "x"}]}, "reuse の 1 件目の id が文字列ではない"),
+    ({"reuse": [{"id": 1, "reason": "x"}]}, "reuse の 1 件目の id が文字列ではない"),
     ({"new_project_needed": False, "project": None, "notes": [{}]}, "notes の 1 件目に title がない"),
     ({"notes": [None]}, "notes の 1 件目がオブジェクトではない"),
     ({"notes": [{"title": 123}]}, "title がない、または文字列ではない"),
