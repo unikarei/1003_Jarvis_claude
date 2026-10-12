@@ -218,3 +218,7 @@
 - [x] `architect.py`: 既存資産（知識・Registry の Project と Resource）の再利用の提案、必要なら新しい Project・保存先・ノートの構成の提案（LLM の出力は検証）。適用は確認の後だけで、ノートの雛形は Vault の `_jarvis/themes/<project_id>/`、Registry への Project の追加は一時 worktree から PR（マージは Owner）
 - [x] `chat.py`: 「テーマ登録: <テーマ>」で提案 → 確認 → 適用
 
+## Multi-Agent Governance（MAP Phase 9）
+
+- [x] `governance.py`: board（tasks.md と Registry に登録されたリポジトリの PR から、着手できるタスク・承認待ち・PR の注意点（積み重ね・同じファイル・古い PR））、prompt（Codex 向けの指示の下書き）、review（PR の差分の LLM レビュー案。投稿しない）
+
