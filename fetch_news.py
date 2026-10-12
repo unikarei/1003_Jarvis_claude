@@ -1,9 +1,13 @@
-"""RSSフィードから新着記事を取得し、Sourceノードとして保存する（URL重複は排除）。"""
+"""RSSフィードから新着記事を取得し、Sourceノードとして保存する。
+
+重複は URL と、直近30日の同じカテゴリ・同じ題名で排除する（URL を変えて同じ記事を再配信するフィードがあるため。
+2026-10、T-803）。
+"""
 
 import feedparser
 
 from config import RSS_FEEDS
-from db import find_source_by_url, insert_node
+from db import find_recent_source_by_title, find_source_by_url, insert_node
 
 
 def fetch_feed(feed: dict) -> list[str]:
@@ -16,7 +20,9 @@ def fetch_feed(feed: dict) -> list[str]:
             continue
         if find_source_by_url(url) is not None:
             continue
-        title = entry.get("title", "")
+        title = " ".join(entry.get("title", "").split())
+        if title and find_recent_source_by_title(feed["category"], title) is not None:
+            continue
         summary = entry.get("summary", "") or entry.get("description", "")
         source_id = insert_node(
             node_type="Source",
