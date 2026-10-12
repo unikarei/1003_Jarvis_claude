@@ -21,6 +21,7 @@ from discovery.guardian import Report, evaluate
 from discovery.output import TYPE_LABEL, mermaid
 
 DEFAULT_OUT = config.REPORTS_DIR / "acc" / "index.html"
+IMPROVEMENT_JSON = config.REPORTS_DIR / "improvement" / "latest.json"   # improve.py（MAP Phase 10）の結果
 MERMAID_JS = "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"
 LAYERS = {"L0": "Architecture Registry", "L1": "Orchestration", "L2": "Data Foundation",
           "L3": "Knowledge", "L4": "Intelligence", "L5": "Presentation"}
@@ -125,7 +126,20 @@ def problems(report: Report) -> str:
     return "<table><tr><th>重要度</th><th>種類</th><th>Resource</th><th>内容</th></tr>" + rows + "</table>"
 
 
-def build_html(registry: dict, snapshot: dict) -> str:
+def improvement_section(improvement: dict | None) -> str:
+    """改善候補と開発の再開（MAP Phase 10）。improve.py の結果がなければ案内だけ。"""
+    if not improvement:
+        return '<p class="muted"><code>python improve.py</code> を実行すると、改善候補と開発の再開の要約がここに出ます。</p>'
+    rows = "".join(f'<tr><td>{_e(p["priority"])}</td><td>{_e(p["area"])}</td><td>{_e(p["title"])}'
+                   f'<div class="muted">根拠: {_e(p["evidence"])}</div></td><td>{_e(p["action"])}</td></tr>'
+                   for p in improvement.get("proposals", []))
+    resume = _e(improvement.get("resume", "")).replace("\n", "<br>")
+    return (f'<p class="muted">生成 {_e(improvement.get("generated_at"))}</p>'
+            f'<div class="card"><h3>開発の再開</h3><div style="font-size:13px">{resume}</div></div>'
+            f'<table style="margin-top:12px"><tr><th>優先度</th><th>領域</th><th>候補と根拠</th><th>対応</th></tr>{rows}</table>')
+
+
+def build_html(registry: dict, snapshot: dict, improvement: dict | None = None) -> str:
     report = evaluate(registry, snapshot)
     states = [j.state for j in report.judgements.values()]
     sev = {s: sum(1 for f in report.findings if f.severity == s) for s in SEVERITY_LABEL}
@@ -139,10 +153,11 @@ def build_html(registry: dict, snapshot: dict) -> str:
 <body>
 <header><h1>Jarvis Architecture Control Center</h1>
 <div class="muted">最終確認 {_e(report.checked_at)}（Discovery の実行時点）。このページは 1003 の <code>acc/build.py</code> が生成する。</div>
-<nav><a href="#problems">問題</a><a href="#projects">Project View</a><a href="#infra">Infrastructure View</a><a href="#layers">Layer View</a><a href="#diagram">構成図</a></nav>
+<nav><a href="#improve">改善候補</a><a href="#problems">問題</a><a href="#projects">Project View</a><a href="#infra">Infrastructure View</a><a href="#layers">Layer View</a><a href="#diagram">構成図</a></nav>
 </header>
 <main>
 <div class="kpis">{"".join(f'<div class="kpi"><span class="muted">{_e(k)}</span><b>{v}</b></div>' for k, v in kpis)}</div>
+<section id="improve"><h2>改善候補と開発の再開</h2>{improvement_section(improvement)}</section>
 <section id="problems"><h2>問題（Guardian）</h2>{problems(report)}</section>
 <section id="projects"><h2>Project View</h2>{project_view(registry, report)}</section>
 <section id="infra"><h2>Infrastructure View</h2>{infrastructure_view(registry, report)}</section>
@@ -166,8 +181,12 @@ def main(argv=None) -> int:
     except (OSError, ValueError) as e:
         print(f"Registry または Discovery の結果を読めません: {e}", file=sys.stderr)
         return 2
+    try:
+        improvement = json.loads(IMPROVEMENT_JSON.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        improvement = None
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(build_html(registry, snapshot), encoding="utf-8")
+    args.out.write_text(build_html(registry, snapshot, improvement), encoding="utf-8")
     print(f"書きました: {args.out}")
     return 0
 

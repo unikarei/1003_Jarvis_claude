@@ -222,3 +222,9 @@
 
 - [x] `governance.py`: board（tasks.md と Registry に登録されたリポジトリの PR から、着手できるタスク・承認待ち・PR の注意点（積み重ね・同じファイル・古い PR））、prompt（Codex 向けの指示の下書き）、review（PR の差分の LLM レビュー案。投稿しない）
 
+## 自律改善・継続運用（MAP Phase 10）
+
+- [x] `improve.py`: 構成（Guardian）・知識（重複・鮮度）・開発（ボード・PR）・技術的負債（TODO・長いファイル・マージ済みのブランチ）・バックアップを監査し、改善候補を根拠付きで優先度順に出す。開発の再開の要約（progress.md）も付ける
+- [x] ACC に「改善候補と開発の再開」を追加（一画面で開発を管理）
+- [x] `scripts/launchd/com.ohide.jarvis.improve.plist`（毎週月曜 7:30。**登録は Owner の承認後**）
+
