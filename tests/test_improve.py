@@ -69,6 +69,22 @@ def test_resume_summary(tmp_path, monkeypatch):
     assert improve.resume_summary() == "- 作業中: X"
 
 
+def test_resume_summary_dated_heading(tmp_path, monkeypatch):
+    """実際の progress.md の見出しは日付の注記付き（phase-approval-review 指摘 5）。"""
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "progress.md").write_text(
+        "# p\n\n## 現在の状態（2026-10-13 朝に更新）\n\n- 作業中: Y\n\n### 課題\n\n- Z\n\n## 2026-10-12\n\n- 古い\n")
+    monkeypatch.setattr(governance, "WORKSPACE_DIR", tmp_path)
+    assert improve.resume_summary() == "- 作業中: Y\n\n### 課題\n\n- Z"
+
+
+def test_resume_summary_last_section(tmp_path, monkeypatch):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "progress.md").write_text("# p\n\n## 現在の状態（更新）\n\n- 最後の節\n")
+    monkeypatch.setattr(governance, "WORKSPACE_DIR", tmp_path)
+    assert improve.resume_summary() == "- 最後の節"
+
+
 def test_markdown_and_acc_section():
     data = {"generated_at": "2026-10-13T03:00", "resume": "- 作業中: X",
             "proposals": [{"priority": "高", "area": "構成", "title": "api-x <down>", "evidence": "Guardian",

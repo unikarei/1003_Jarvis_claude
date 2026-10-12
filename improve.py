@@ -86,7 +86,8 @@ def resume_summary() -> str:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return ""
-    m = re.search(r"## 現在の状態\n(.*?)(?=\n## )", text, re.S)
+    # 見出しには「（2026-10-13 朝に更新）」のような注記が付く。最後の節でも読めるようにする
+    m = re.search(r"^## 現在の状態[^\n]*\n(.*?)(?=^## |\Z)", text, re.S | re.M)
     return m.group(1).strip() if m else ""
 
 
