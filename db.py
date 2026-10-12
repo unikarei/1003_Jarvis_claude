@@ -104,6 +104,10 @@ def update_node_title(node_id: str, title: str) -> None:
     _execute("UPDATE nodes SET title = ? WHERE id = ?", (title, node_id))
 
 
+def update_node_meta(node_id: str, meta: dict) -> None:
+    _execute("UPDATE nodes SET meta = ? WHERE id = ?", (json.dumps(meta, ensure_ascii=False), node_id))
+
+
 def find_nodes_by_title_prefix(node_type: str, title_prefix: str) -> list[sqlite3.Row]:
     return _fetchall(
         "SELECT * FROM nodes WHERE type = ? AND title LIKE ? ORDER BY created_at ASC",
