@@ -80,6 +80,8 @@ PIANO_SOCIAL_EVENT_KEYWORDS = ["instagram", "youtube", "ameblo", "facebook", "tw
 # 定期情報収集は対応するレポート種別についてはInsight Reporterを上位ソースとし、
 # 不足時（レポート不在・古い・フィールド欠落）のみJARVIS独自に取得する。
 INSIGHT_REPORTER_DIR = BASE_DIR.parent / "1004_insight_reporter"
+# Insight Reporter の API（MAP Phase 5）。正本は Registry の api-insight-reporter.base_url。これは Registry を読めないときの予備
+INSIGHT_REPORTER_API = os.environ.get("INSIGHT_REPORTER_API", "http://127.0.0.1:18080/api/v1")
 REPORT_CATEGORY_MAP = {"piano_growth": "piano"}
 MAX_REPORT_AGE_DAYS = 10  # 週次レポート想定。これを超えると「不足」扱いでフォールバックする
 
