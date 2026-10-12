@@ -208,3 +208,8 @@
 - [x] `ingest_insight_reporter.load_latest_report()`: API → ファイルの順に取得（API が止まっていても従来どおり動く）
 - [ ] Jarvis 自身の API（`/health`・`/api/v1/`）: Web フレームワーク（FastAPI）の追加が必要なため、Owner の承認待ち
 
+## Knowledge Engine（MAP Phase 7）
+
+- [x] `knowledge_engine.py`・`knowledge_cli.py`: プロジェクト横断の検索（BM25、プロジェクトで絞り込み）、出典の追跡（Vault・Registry・会話まで）、重複と鮮度の監査、検索結果だけを根拠に答える（RAG、llm.complete）
+- [ ] 意味検索（埋め込み）: ローカル LLM（Ollama）の埋め込みモデルの導入が必要なため Owner の承認待ち
+
