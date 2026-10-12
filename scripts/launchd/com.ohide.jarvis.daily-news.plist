@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ohide.jarvis.daily-news</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/ohide/work/0002_Jarvis2/1003_Jarvis_claude/.venv/bin/python</string>
+    <string>/Users/ohide/work/0002_Jarvis2/1003_Jarvis_claude/run_daily.py</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/ohide/work/0002_Jarvis2/1003_Jarvis_claude</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>6</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/ohide/Library/Logs/jarvis/daily-news.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/ohide/Library/Logs/jarvis/daily-news.err.log</string>
+</dict>
+</plist>
