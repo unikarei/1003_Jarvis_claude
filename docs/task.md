@@ -232,3 +232,7 @@
 
 - [x] `discovery/notify.py`・`discover.py --notify`: Guardian がエラーを見つけたら Mac の通知センターに出す（同じ内容は1日1回。外部のサービスには送らない）。Discovery の plist に `--notify` を追加
 
+
+## Phase 承認レビューの指摘の解消（2026-10-13、`../docs/phase-approval-review.md`）
+
+- [x] T-1004 `governance.py`: 依存の欄の 4 桁のタスク ID（T-1002 など）と範囲（T-401〜T-403）を読む。未完了の 4 桁 ID に依存するタスクを着手可能にしない（回帰テスト）

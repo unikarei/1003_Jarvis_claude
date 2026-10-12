@@ -66,6 +66,18 @@ def _cells(line: str) -> list[str]:
     return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
+def parse_deps(text: str) -> list[str]:
+    """依存の欄からタスク ID を取り出す。桁数は問わず、「T-401〜T-403」の範囲は展開する。"""
+    deps = []
+    for m in re.finditer(r"\b([A-Z])-(\d+)(?:\s*[〜~]\s*\1-(\d+))?\b", text):
+        prefix, start, end = m.group(1), m.group(2), m.group(3)
+        if end and int(end) >= int(start):
+            deps += [f"{prefix}-{n:0{len(start)}d}" for n in range(int(start), int(end) + 1)]
+        else:
+            deps.append(f"{prefix}-{start}")
+    return deps
+
+
 def parse_tasks(markdown: str) -> list[Task]:
     tasks, section, header = [], "", None
     for line in markdown.splitlines():
@@ -79,7 +91,7 @@ def parse_tasks(markdown: str) -> list[Task]:
             row = dict(zip(header, _cells(line)))
             status_text = row.get("状態", "")
             word = next((w for w in (DONE, WIP, REVIEW, HOLD, TODO) if status_text.startswith(w)), status_text)
-            deps = re.findall(r"[A-Z]-\d{2,3}", row.get("依存", ""))
+            deps = parse_deps(row.get("依存", ""))
             tasks.append(Task(row["ID"], row.get("タスク", ""), row.get("リポジトリ", ""),
                               row.get("担当", ""), deps, word, status_text, section))
         else:

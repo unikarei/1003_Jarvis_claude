@@ -101,3 +101,29 @@ def test_review_uses_llm_and_does_not_post(monkeypatch):
     monkeypatch.setattr(llm, "complete", lambda prompt, provider=None: "指摘なし" if "+ added line" in prompt else "x")
     assert gv.review("u/a", 7) == "指摘なし"
     assert all(c[:3] in (["gh", "pr", "view"], ["gh", "pr", "diff"]) for c in calls)   # 投稿・マージはしない
+
+
+def test_parse_deps_four_digits_and_ranges():
+    assert gv.parse_deps("T-1002") == ["T-1002"]
+    assert gv.parse_deps("T-401・T-801・T-1002") == ["T-401", "T-801", "T-1002"]
+    assert gv.parse_deps("T-401〜T-403") == ["T-401", "T-402", "T-403"]
+    assert gv.parse_deps("R-01") == ["R-01"]
+    assert gv.parse_deps("Owner の承認") == []
+
+
+def test_four_digit_dependency_blocks_task():
+    """未完了の 4 桁 ID に依存するタスクは着手可能にしない（phase-approval-review 指摘 4）。"""
+    md = """## 10. Governance
+
+| ID | タスク | リポジトリ | 担当 | 依存 | 状態 |
+|---|---|---|---|---|---|
+| T-1002 | 開発ボード | 1003 | Claude | — | 未着手 |
+| T-1101 | 改善の監査 | 1003 | Claude | T-1002 | 未着手 |
+| T-1102 | 範囲の依存 | 1003 | Claude | T-1001〜T-1002 | 未着手 |
+| T-1001 | 共通仕様 | ルート | Claude | — | 完了 |
+"""
+    groups = gv.classify(gv.parse_tasks(md))
+    blocked = {t.task_id for t in groups["blocked"]}
+    ready = {t.task_id for t in groups["ready"]}
+    assert blocked == {"T-1101", "T-1102"}
+    assert ready == {"T-1002"}
