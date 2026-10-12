@@ -182,3 +182,7 @@
 - [x] `vault.resolve_vault()`・CKC（route・extract・review・publish）を `registry.py` に切り替え
 - [ ] main へのマージ（Registry の T-308 で registry.json が生成されてから。生成前にマージすると、本番が毎回「予備の設定値で動く」警告を出すため）
 
+## Obsidian の取り込みをローカルの Vault に切り替え（T-202、ADR-0016）
+
+- [x] `ingest_obsidian.py`: GitHub API ではなくローカルの Vault（Registry から場所を取得）を読む。oarai-obsidian は `民泊@大洗/`、jarvis-knowledge は `_jarvis/` を除く全体。URL は従来の GitHub の blob URL と同じ形（既存ノードと重複しない、ファイル名は NFC）。Git は操作しない
+
