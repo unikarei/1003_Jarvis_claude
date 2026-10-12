@@ -159,7 +159,7 @@
 タスク・受け入れ基準の正本は `../docs/tasks.md`（T-101〜T-117）と `../docs/testing.md`。ここには状態だけを書く。開発は worktree（`../.worktrees/1003-ckc`、ブランチ `feat/ckc-phase1`）で行う。
 
 - [x] T-101 docs（spec 4-10、architecture 3.9、本節）
-- [ ] T-102 テストの基盤（開発用 `.venv`、pytest、本番パスの検出、パスの環境変数）
+- [x] T-102 テストの基盤（開発用 `.venv`、pytest、本番パスの検出、パスの環境変数）
 - [ ] T-103 データ型と契約テスト
 - [ ] T-104 秘密情報の検出（Codex）
 - [ ] T-105 ノートの生成と読み取り（Codex）

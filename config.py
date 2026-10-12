@@ -8,9 +8,16 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-DB_PATH = BASE_DIR / "jarvis.db"
+# DB・Vault・CKC のデータ領域は環境変数で差し替えられる（開発・テストで本番を使わないため。
+# ../docs/spec.md §3.3.12）。未設定なら本番の既定値。
+DB_PATH = Path(os.environ.get("JARVIS_DB_PATH", BASE_DIR / "jarvis.db"))
 SCHEMA_PATH = BASE_DIR / "schema.sql"
 REPORTS_DIR = BASE_DIR / "reports"
+
+# Obsidian Vault 群の親フォルダ（ADR-0015）。各 Vault は VAULT_ROOT / <Vault 名>
+VAULT_ROOT = Path(os.environ.get("JARVIS_VAULT_ROOT", Path.home() / "work" / "obsidian"))
+# CKC の会話原文・一時ファイル・バックアップ（Git の外、ADR-0018）
+CKC_DATA_DIR = Path(os.environ.get("JARVIS_CKC_DATA_DIR", BASE_DIR / "data" / "ckc"))
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 

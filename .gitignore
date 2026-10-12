@@ -8,3 +8,7 @@ voicevox_engine/
 .claude/
 
 jarvis-piano-reader-key.json
+.venv/
+data/
+.dev/
+.pytest_cache/
