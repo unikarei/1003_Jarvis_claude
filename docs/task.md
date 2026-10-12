@@ -228,3 +228,7 @@
 - [x] ACC に「改善候補と開発の再開」を追加（一画面で開発を管理）
 - [x] `scripts/launchd/com.ohide.jarvis.improve.plist`（毎週月曜 7:30。**登録は Owner の承認後**）
 
+## 定期処理の失敗の通知（T-203）
+
+- [x] `discovery/notify.py`・`discover.py --notify`: Guardian がエラーを見つけたら Mac の通知センターに出す（同じ内容は1日1回。外部のサービスには送らない）。Discovery の plist に `--notify` を追加
+

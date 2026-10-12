@@ -4,6 +4,7 @@
     python discover.py --dry-run     # 調べて結果を表示するだけ（何も書かない）
     python discover.py               # Registry リポジトリの discovered/・generated/ に書く
     python discover.py --commit      # 書いたうえで scripts/commit_registry_outputs.sh でコミット・push
+    python discover.py --notify      # エラーがあれば Mac の通知センターに出す（T-203。--commit と併用可）
 
 調べるだけで、何も変更しない（git は読み取りだけ、fetch もしない）。Registry の YAML は書き換えない。
 """
@@ -18,6 +19,7 @@ from pathlib import Path
 from discovery import settings
 from discovery.collect import collect
 from discovery.guardian import evaluate
+from discovery.notify import notify_errors
 from discovery.output import render_outputs, write_outputs
 
 COMMIT_SCRIPT = Path(__file__).resolve().parent / "scripts" / "commit_registry_outputs.sh"
@@ -28,6 +30,7 @@ def main(argv=None) -> int:
     parser.add_argument("--registry-dir", type=Path, default=settings.REGISTRY_DIR)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--commit", action="store_true")
+    parser.add_argument("--notify", action="store_true", help="エラーがあれば Mac の通知センターに出す")
     args = parser.parse_args(argv)
 
     registry_json = args.registry_dir / "generated" / "registry.json"
@@ -45,6 +48,8 @@ def main(argv=None) -> int:
         return 0
     for path in write_outputs(args.registry_dir, texts):
         print(f"書きました: {path}")
+    if args.notify and notify_errors(report):
+        print("エラーを通知しました")
     if args.commit:
         env = {**os.environ, "REGISTRY_REPO": str(args.registry_dir)}
         return subprocess.run(["/bin/bash", str(COMMIT_SCRIPT)], env=env).returncode
