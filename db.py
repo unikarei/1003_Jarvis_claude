@@ -123,6 +123,13 @@ def find_source_by_url(url: str) -> sqlite3.Row | None:
     return _fetchone("SELECT * FROM nodes WHERE type = 'Source' AND url = ?", (url,))
 
 
+def find_recent_source_by_title(category: str, title: str, days: int = 30) -> sqlite3.Row | None:
+    """同じカテゴリ・同じ題名の Source を直近 days 日から探す（URL を変えて再配信される記事の重複を防ぐ）。"""
+    since = (datetime.now() - timedelta(days=days)).isoformat()
+    return _fetchone("SELECT * FROM nodes WHERE type = 'Source' AND category = ? AND title = ? AND created_at >= ?",
+                     (category, title, since))
+
+
 def get_recent_knowledge(category: str | None = None, since: str | None = None) -> list[sqlite3.Row]:
     query = "SELECT * FROM nodes WHERE type = 'Knowledge'"
     params: list[str] = []
