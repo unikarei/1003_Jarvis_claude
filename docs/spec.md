@@ -128,6 +128,7 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
   - 書き込み前に対象ノートの現在のsha（GitHub Contents API）を取得し、それを使って更新する。取得後に他端末等で編集され競合した場合はAPIが409を返すため、分かりやすいエラーメッセージで中断する（ボルトのREADMEにある「編集前に取得、編集後に保存」の運用方針に準拠し、上書き事故を防ぐ）
   - 認証は`ingest_obsidian.py`と同様に`gh auth token`を使う。トークンや認証情報は本リポジトリに保存しない
 - `ingest_obsidian.py` を拡張し、既存ノートの内容が変わっていたらSource/Knowledgeのcontentを更新する（上記4-5に追記済み）。これにより、JARVISでの書き込み後に再取り込みすれば最新内容がask.pyの検索対象になる
+- **ローカル Vault への改修（4-10 の前提、`../docs/decisions.md` ADR-0016）**: 書き込み先を GitHub Contents API から Mac mini のローカル Vault（`~/work/obsidian/<Vault>`）に変える。`create_note` / `append_note` の関数名・引数・CLI・追記の書式は変えない。sha 照合の代わりに、読み込み時と書き込み直前の内容のハッシュ、対象ファイルの未コミット変更、Git の操作中（merge・rebase・ロック）を確認し、一時ファイルから原子的に置き換える。Git の commit・push はしない（Obsidian Git に任せる）。書き込みの共通部分は `vault.py` に置き、CKC と共用する
 - 受け入れ条件:
   - 新規ノートを作成できる（既存パスと衝突する場合はエラーになる）
   - 既存ノートに追記できる
@@ -210,6 +211,17 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
   - 再実行してもURL重複により新規ノードが増えない。内容変更時はcontentが更新される
   - API未稼働時に提案してもエラーで停止せず、未送信としてJARVIS側に保持される
   - API稼働時は実際に`POST /api/ingest`で送信され、`ingestion_id`が得られる
+
+#### 4-10. Conversation Knowledge Collector（CKC）Phase 1: 明示的なナレッジ登録
+
+全体仕様 `../docs/spec.md` §3.3（FR-013）を正とし、ここには本リポジトリでの実装の要点だけを書く。設計は `../docs/architecture.md` §10、受け入れ基準は `../docs/testing.md`、タスクは `../docs/tasks.md`（T-101〜T-117）。
+
+- 会話（貼り付け・テキストファイル・`chat.py` の対話）から、LLM で知識の候補を抽出し、6種類（Decision / Preference / Hypothesis / Finding / Task / Question）に分類する
+- 候補を CLI（`ckc_cli.py`）で一覧・修正・承認・却下し、承認したものだけを Vault の `_jarvis/knowledge/<種類>/` に1件1ノートで保存し、ナレッジグラフに Source（会話）と Knowledge（知識）として登録する
+- 保存先: 大洗だけに関わる知識は `oarai-obsidian`、それ以外は `jarvis-knowledge`（`../docs/spec.md` §3.3.8）
+- 会話の原文と候補は Vault に置かず、`data/ckc/`（Git の外）と `jarvis.db` に置く
+- LLM は `llm.complete()` を通して使い、既定は `claude -p`（ツールなし）。既存の `ask_claude` / `ask_claude_tiered` は変えない。失敗時に有料 API へ自動で切り替えない
+- 開発・テストは worktree と開発用の `.venv` で行い、本番の `jarvis.db`・Vault・定期処理に影響させない（`../docs/spec.md` §3.3.12）
 
 ## 4. データモデル
 

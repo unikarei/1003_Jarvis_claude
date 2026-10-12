@@ -153,3 +153,25 @@
 - [ ] Docker 化（MAP Phase 4）: `Dockerfile` / `compose.yaml`、DB・レポート・ログの永続 Volume、Healthcheck
 - [ ] HTTP API 化（MAP Phase 5）: `/health`、`/api/v1/`、OpenAPI 仕様
 - [ ] Architecture Registry の参照（MAP Phase 2 で Registry 作成後）
+
+## CKC Phase 1（Conversation Knowledge Collector、MAP 外の追加）
+
+タスク・受け入れ基準の正本は `../docs/tasks.md`（T-101〜T-117）と `../docs/testing.md`。ここには状態だけを書く。開発は worktree（`../.worktrees/1003-ckc`、ブランチ `feat/ckc-phase1`）で行う。
+
+- [x] T-101 docs（spec 4-10、architecture 3.9、本節）
+- [ ] T-102 テストの基盤（開発用 `.venv`、pytest、本番パスの検出、パスの環境変数）
+- [ ] T-103 データ型と契約テスト
+- [ ] T-104 秘密情報の検出（Codex）
+- [ ] T-105 ノートの生成と読み取り（Codex）
+- [ ] T-106 抽出結果の検証（Codex）
+- [ ] T-107 LLM の共通関数
+- [ ] T-108 ローカル Vault への書き込みと `update_obsidian.py` の改修
+- [ ] T-109 記録（CKC 用テーブル）
+- [ ] T-110 取り込み
+- [ ] T-111 抽出
+- [ ] T-112 振り分けと照合
+- [ ] T-113 保存
+- [ ] T-114 CLI
+- [ ] T-115 `chat.py` との連携
+- [ ] T-116 受け入れテスト
+- [ ] T-117 ChatGPT・Claude のエクスポートの取り込み（Codex、任意）

@@ -91,6 +91,19 @@
 - `oarai_project_os.py`（新規）: `build_ingestion_envelope()` / `propose_change()`でingestion envelope（oarai-project-os側API仕様と同スキーマ）を構築し、`check_api_health()`でAPI疎通を確認した上で、疎通可能なら`POST /api/ingest`、不可能ならJARVISのDBにTaskノード（category=minpaku、「未送信」）として保持する`submit_or_hold()`を提供。`resubmit_pending_proposals()`で保留分の再送信を行う
 - `config.py`: `OARAI_PROJECT_OS_API_BASE`（`https://oarai.rebirth-lab.site`）等を追加
 
+## 3.9 モジュール構成（CKC Phase 1、ローカル Vault 書き込み）
+
+設計の詳細は `../docs/architecture.md` §10（モジュールの一覧、データの正本、競合の防止、品質管理、本番環境の保護）。
+
+- `vault.py`（新規）: Vault の resource_id からパスを解決し、ローカル Vault に安全に書き込む。`update_obsidian.py` と `ckc/publish.py` が使う
+- `update_obsidian.py`（改修）: 書き込み先をローカル Vault に変更。関数名・CLI は変えない
+- `llm.py`（追加）: `complete(prompt)` とプロバイダー（`claude_cli` / `anthropic_api`）の選択。既存の関数は変えない
+- `ckc/`（新規パッケージ）: `models` / `secrets` / `capture` / `extract` / `schema` / `route` / `reconcile` / `render` / `store` / `publish`
+- `ckc_cli.py`（新規）: CKC の CLI。`chat.py` に「ナレッジ化」のコマンドを追加
+- `config.py`: `JARVIS_DB_PATH`・`JARVIS_VAULT_ROOT`・`JARVIS_CKC_DATA_DIR`・`JARVIS_LLM_PROVIDER` の環境変数での差し替え、`VAULTS`・`PROJECTS`
+- `schema.sql`: CKC 用のテーブル（`ckc_conversations`・`ckc_candidates`）を `CREATE TABLE IF NOT EXISTS` で追加。既存の `nodes`・`edges` は変えない
+- テスト: `tests/`（pytest、開発用依存 `requirements-dev.txt`）
+
 ## 4. 実行基盤
 
 - 開発・実行の中心: Mac mini M4 Pro（48GB）。Windows PC は Tailscale / SSH 経由の操作端末（JARVIS-MAP-002 §3）

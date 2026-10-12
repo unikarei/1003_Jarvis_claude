@@ -171,6 +171,12 @@ JARVISはこの契約に従う。
 - 今後の予定（全体計画）: Docker 化（MAP Phase 4）、`/health`・`/api/v1/` を持つ HTTP API 化（MAP Phase 5）。着手時は先に `docs/` を更新する
 - リポジトリ: https://github.com/unikarei/1003_Jarvis_claude （main）
 
+## テスト
+
+- 実行: `.venv/bin/python -m pytest tests -q`（開発用の `.venv` に `requirements-dev.txt` を入れておく）
+- テストは本番の `jarvis.db`・Obsidian の Vault・`data/` を使わない。`tests/conftest.py` が一時フォルダに差し替え、本番のパスを検出したら止める
+- 開発は worktree で行い、本番の作業フォルダ（launchd が動かす `main`）を変更しない（`../docs/spec.md` §3.3.12）
+
 ## 開発プロセス（SDD: 仕様駆動開発）
 
 仕様を先に書き、仕様に従って実装する。次の3ファイルを `docs/` フォルダ下に作成し、常に最新に保ち、コードより先に更新する。
