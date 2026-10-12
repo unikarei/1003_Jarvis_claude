@@ -196,3 +196,9 @@
 - [x] T-404 `scripts/commit_registry_outputs.sh`（対象の4ファイルだけ、main のみ、強制 push なし）、`scripts/launchd/com.ohide.jarvis.discovery.plist`（毎日 7:00。**登録は Owner の承認後**）
 - [ ] T-405 受け入れ（2026-10-13 未明に実データで実行し Registry に記録 f37ab70。Owner の確認待ち）
 
+## Architecture Control Center（ACC、MAP Phase 6、静的版）
+
+- [x] `acc/build.py`: Registry と Discovery の結果から、問題・Project View・Infrastructure View・Layer View・全体構成図を1つの HTML に（`python -m acc.build`、既定の出力は `reports/acc/index.html`）
+- [ ] Tailscale 経由での配信（ネットワークへの公開のため Owner の承認待ち）
+- [ ] React / React Flow の対話型画面（npm の依存の追加のため Owner の承認待ち）
+
