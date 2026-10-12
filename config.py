@@ -32,6 +32,12 @@ SUMMARY_MODEL = os.environ.get("JARVIS_SUMMARY_MODEL", "claude-haiku-4-5-2025100
 # 呼び出し側がforce_escalate=Trueを指定した場合のみ使用する。
 ESCALATION_MODEL = os.environ.get("JARVIS_ESCALATION_MODEL", "claude-sonnet-5-5")
 
+# llm.complete() のプロバイダー（../docs/decisions.md ADR-0020）。既定は Claude Code CLI（サブスクリプション内）。
+# "anthropic_api" は従量課金のため、既定にする変更は Owner の個別承認が必要。失敗時の自動切り替えはしない。
+LLM_PROVIDER = os.environ.get("JARVIS_LLM_PROVIDER", "claude_cli")
+CLAUDE_BIN = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local" / "bin" / "claude"))
+CLAUDE_CLI_TIMEOUT_SECONDS = int(os.environ.get("JARVIS_CLAUDE_CLI_TIMEOUT", "300"))
+
 # ①ピアノ教室: アクセス分析用（Search Console / GA4、サービスアカウント認証）
 GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
 SEARCH_CONSOLE_SITE_URL = os.environ.get("SEARCH_CONSOLE_SITE_URL")

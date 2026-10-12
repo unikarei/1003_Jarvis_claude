@@ -1,9 +1,14 @@
 """Claude APIへの問い合わせを共通化するヘルパー。"""
 
+import json
+import subprocess
+import tempfile
+
 import anthropic
 
 from agent_log import log_event
-from config import ANTHROPIC_API_KEY, ESCALATION_MODEL, SUMMARY_MODEL
+from config import (ANTHROPIC_API_KEY, CLAUDE_BIN, CLAUDE_CLI_TIMEOUT_SECONDS, ESCALATION_MODEL,
+                    LLM_PROVIDER, SUMMARY_MODEL)
 
 MIN_VALID_LENGTH = 5  # これより短い応答は検証失敗（空応答・応答エラー等）とみなす
 
@@ -46,3 +51,54 @@ def ask_claude_tiered(
         prompt_preview=prompt[:200],
     )
     return heavy_response
+
+
+# --- プロバイダーを切り替えられる共通関数（../docs/decisions.md ADR-0020） ---
+# 既存の ask_claude / ask_claude_tiered は変更しない。CKC など新しい処理は complete() を使う。
+
+
+class LLMError(Exception):
+    """LLM の呼び出しに失敗した（CLI の異常終了、上限到達、タイムアウトなど）。別のプロバイダーには切り替えない。"""
+
+
+def _complete_claude_cli(prompt: str) -> str:
+    """Claude Code CLI（claude -p）をツールなしで実行し、最終応答のテキストを返す。"""
+    cmd = [CLAUDE_BIN, "-p", "--tools", "", "--no-session-persistence", "--output-format", "json"]
+    with tempfile.TemporaryDirectory(prefix="jarvis-llm-") as workdir:
+        try:
+            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                                  cwd=workdir, timeout=CLAUDE_CLI_TIMEOUT_SECONDS)
+        except FileNotFoundError:
+            raise LLMError(f"Claude Code CLI が見つかりません: {CLAUDE_BIN}") from None
+        except subprocess.TimeoutExpired:
+            raise LLMError(f"Claude Code CLI が {CLAUDE_CLI_TIMEOUT_SECONDS} 秒でタイムアウトしました") from None
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()[:500]
+        raise LLMError(f"Claude Code CLI が終了コード {proc.returncode} で終了しました（利用上限の可能性あり）: {detail}")
+    try:
+        envelope = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        raise LLMError("Claude Code CLI の出力が JSON ではありません") from None
+    if envelope.get("is_error") or envelope.get("subtype") != "success":
+        raise LLMError(f"Claude Code CLI がエラーを返しました: subtype={envelope.get('subtype')} "
+                       f"result={str(envelope.get('result', ''))[:200]}")
+    return envelope.get("result", "")
+
+
+def _complete_anthropic_api(prompt: str) -> str:
+    try:
+        return ask_claude(prompt, max_tokens=4000, model=ESCALATION_MODEL)
+    except anthropic.APIError as e:
+        raise LLMError(f"Claude API の呼び出しに失敗しました: {e}") from None
+
+
+PROVIDERS = {"claude_cli": _complete_claude_cli, "anthropic_api": _complete_anthropic_api}
+
+
+def complete(prompt: str, provider: str | None = None) -> str:
+    """設定（JARVIS_LLM_PROVIDER）のプロバイダーでプロンプトを実行する。失敗時は LLMError。"""
+    name = provider or LLM_PROVIDER
+    if name not in PROVIDERS:
+        raise LLMError(f"未知の LLM プロバイダーです: {name}（{', '.join(PROVIDERS)}）")
+    return PROVIDERS[name](prompt)
