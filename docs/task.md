@@ -186,3 +186,49 @@
 
 - [x] `ingest_obsidian.py`: GitHub API ではなくローカルの Vault（Registry から場所を取得）を読む。oarai-obsidian は `民泊@大洗/`、jarvis-knowledge は `_jarvis/` を除く全体。URL は従来の GitHub の blob URL と同じ形（既存ノードと重複しない、ファイル名は NFC）。Git は操作しない
 
+## Discovery / Guardian / Mermaid（MAP Phase 3、T-401〜T-405）
+
+設計は `../docs/architecture.md` §11。
+
+- [x] T-401 `discovery/collect.py`（読み取りだけ、fetch なし、1件の失敗で全体を止めない）
+- [x] T-402 `discovery/guardian.py`（Verified / Failed / Unknown、未登録・存在しない・停止・障害・同期・バックアップ・依存の不整合）
+- [x] T-403 `discovery/output.py`・`discover.py`（latest.json・guardian-report.md・architecture.mmd・STATUS.md、`--dry-run`）
+- [x] T-404 `scripts/commit_registry_outputs.sh`（対象の4ファイルだけ、main のみ、強制 push なし）、`scripts/launchd/com.ohide.jarvis.discovery.plist`（毎日 7:00。**登録は Owner の承認後**）
+- [ ] T-405 受け入れ（2026-10-13 未明に実データで実行し Registry に記録 f37ab70。Owner の確認待ち）
+
+## Architecture Control Center（ACC、MAP Phase 6、静的版）
+
+- [x] `acc/build.py`: Registry と Discovery の結果から、問題・Project View・Infrastructure View・Layer View・全体構成図を1つの HTML に（`python -m acc.build`、既定の出力は `reports/acc/index.html`）
+- [ ] Tailscale 経由での配信（ネットワークへの公開のため Owner の承認待ち）
+- [ ] React / React Flow の対話型画面（npm の依存の追加のため Owner の承認待ち）
+
+## API 連携（MAP Phase 5）
+
+- [x] `insight_reporter_api.py`: Insight Reporter の `/api/v1` のクライアント（接続先は Registry、`ApiUnavailable`・`ApiError` の区別、任意のトークン）
+- [x] `ingest_insight_reporter.load_latest_report()`: API → ファイルの順に取得（API が止まっていても従来どおり動く）
+- [ ] Jarvis 自身の API（`/health`・`/api/v1/`）: Web フレームワーク（FastAPI）の追加が必要なため、Owner の承認待ち
+
+## Knowledge Engine（MAP Phase 7）
+
+- [x] `knowledge_engine.py`・`knowledge_cli.py`: プロジェクト横断の検索（BM25、プロジェクトで絞り込み）、出典の追跡（Vault・Registry・会話まで）、重複と鮮度の監査、検索結果だけを根拠に答える（RAG、llm.complete）
+- [ ] 意味検索（埋め込み）: ローカル LLM（Ollama）の埋め込みモデルの導入が必要なため Owner の承認待ち
+
+## Knowledge Architect（MAP Phase 8）
+
+- [x] `architect.py`: 既存資産（知識・Registry の Project と Resource）の再利用の提案、必要なら新しい Project・保存先・ノートの構成の提案（LLM の出力は検証）。適用は確認の後だけで、ノートの雛形は Vault の `_jarvis/themes/<project_id>/`、Registry への Project の追加は一時 worktree から PR（マージは Owner）
+- [x] `chat.py`: 「テーマ登録: <テーマ>」で提案 → 確認 → 適用
+
+## Multi-Agent Governance（MAP Phase 9）
+
+- [x] `governance.py`: board（tasks.md と Registry に登録されたリポジトリの PR から、着手できるタスク・承認待ち・PR の注意点（積み重ね・同じファイル・古い PR））、prompt（Codex 向けの指示の下書き）、review（PR の差分の LLM レビュー案。投稿しない）
+
+## 自律改善・継続運用（MAP Phase 10）
+
+- [x] `improve.py`: 構成（Guardian）・知識（重複・鮮度）・開発（ボード・PR）・技術的負債（TODO・長いファイル・マージ済みのブランチ）・バックアップを監査し、改善候補を根拠付きで優先度順に出す。開発の再開の要約（progress.md）も付ける
+- [x] ACC に「改善候補と開発の再開」を追加（一画面で開発を管理）
+- [x] `scripts/launchd/com.ohide.jarvis.improve.plist`（毎週月曜 7:30。**登録は Owner の承認後**）
+
+## 定期処理の失敗の通知（T-203）
+
+- [x] `discovery/notify.py`・`discover.py --notify`: Guardian がエラーを見つけたら Mac の通知センターに出す（同じ内容は1日1回。外部のサービスには送らない）。Discovery の plist に `--notify` を追加
+

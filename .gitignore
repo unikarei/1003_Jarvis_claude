@@ -12,3 +12,6 @@ jarvis-piano-reader-key.json
 data/
 .dev/
 .pytest_cache/
+
+# Docker の検証用フォルダ（compose.yaml の既定のマウント先）
+db/

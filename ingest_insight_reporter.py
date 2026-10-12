@@ -6,12 +6,16 @@
 
 JARVISはInsight Reporter配下のファイルを読み取るのみで、変更・importは一切行わない
 （Insight Reporter側のclaude.mdにも同様の方針が明記されている）。
+
+2026-10（MAP Phase 5）から、まず Insight Reporter の API（GET /api/v1/reports/{id}/latest）で取得し、
+API が止まっているとき・失敗したときは、従来どおりファイル（reports/<id>/latest.json）を読む。
 """
 
 import json
 from datetime import datetime
 from pathlib import Path
 
+import insight_reporter_api
 from config import INSIGHT_REPORTER_DIR, MAX_REPORT_AGE_DAYS, REPORT_CATEGORY_MAP
 from db import find_knowledge_by_url, find_source_by_url, insert_edge, insert_node, update_node_content
 
@@ -23,7 +27,19 @@ def _latest_report_path(report_id: str) -> Path:
 
 
 def load_latest_report(report_id: str) -> dict | None:
-    """Insight Reporterの最新report.jsonを読み込む。存在しない・壊れている場合はNoneを返す。"""
+    """Insight Reporterの最新レポートを取得する。API → ファイルの順に試し、どちらもなければNoneを返す。"""
+    try:
+        report = insight_reporter_api.latest_report(report_id)
+    except (insight_reporter_api.ApiUnavailable, insight_reporter_api.ApiError) as e:
+        print(f"[Insight Reporter API] {e}。ファイルを読みます")
+        report = None
+    if report is not None:
+        return report
+    return _load_latest_report_file(report_id)
+
+
+def _load_latest_report_file(report_id: str) -> dict | None:
+    """Insight Reporterの最新report.jsonをファイルから読む。存在しない・壊れている場合はNoneを返す。"""
     path = _latest_report_path(report_id)
     if not path.is_file():
         return None

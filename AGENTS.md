@@ -171,6 +171,11 @@ JARVISはこの契約に従う。
 - 今後の予定（全体計画）: Docker 化（MAP Phase 4）、`/health`・`/api/v1/` を持つ HTTP API 化（MAP Phase 5）。着手時は先に `docs/` を更新する
 - リポジトリ: https://github.com/unikarei/1003_Jarvis_claude （main）
 
+## Discovery / Guardian（MAP Phase 3）
+
+- `python discover.py --dry-run` で Registry と実態の差分を表示する。`--commit` で Registry の `discovered/`・`generated/` に記録する（`../docs/architecture.md` §11）
+- 調べるだけで何も変更しない。Registry の YAML（設計上の意図）は書き換えない
+
 ## テスト
 
 - 実行: `.venv/bin/python -m pytest tests -q`（開発用の `.venv` に `requirements-dev.txt` を入れておく）

@@ -1,0 +1,27 @@
+# Jarvis（統合ワークスペースの architecture.md §12）。
+# 日次処理を 1 回実行: docker compose run --rm jarvis-daily
+# 本番の切り替え（launchd の com.ohide.jarvis.daily-news のコマンドを置き換える）は Owner の承認後（tasks.md T-505）。
+services:
+  jarvis-daily:
+    build: .
+    image: jarvis/jarvis-daily:local
+    env_file:
+      - path: .env
+        required: false   # 本番は .env がある。検証では環境変数で渡す
+    environment:
+      JARVIS_DB_PATH: /work/1003_Jarvis_claude/data-db/jarvis.db
+    volumes:
+      # DB はフォルダごとマウントする（SQLite のジャーナルファイルも同じ場所に作られるため）
+      - ${JARVIS_DB_DIR:-./db}:/work/1003_Jarvis_claude/data-db
+      - ${JARVIS_REPORTS_DIR:-./reports}:/work/1003_Jarvis_claude/reports
+      - ${JARVIS_CKC_DIR:-./data}:/work/1003_Jarvis_claude/data
+      # 1004 のレポート（上位ソース）と Registry の生成物は読み取り専用
+      - ${INSIGHT_REPORTER_REPORTS_DIR:-../1004_insight_reporter/reports}:/work/1004_insight_reporter/reports:ro
+      - ${REGISTRY_GENERATED_DIR:-../jarvis-architecture-registry/generated}:/work/jarvis-architecture-registry/generated:ro
+      # Google のサービスアカウント鍵（.env と同じパスで読み取り専用）
+      - ${GOOGLE_APPLICATION_CREDENTIALS}:${GOOGLE_APPLICATION_CREDENTIALS}:ro
+    networks: [jarvis-net]
+
+networks:
+  jarvis-net:
+    name: jarvis-net
