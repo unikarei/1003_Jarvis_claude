@@ -1,0 +1,16 @@
+# 秘密情報・データ・生成物・開発環境はイメージに入れない
+.env
+.env.*
+*key*.json
+jarvis.db
+jarvis.db-*
+data/
+reports/
+.venv/
+.dev/
+.git/
+__pycache__/
+.pytest_cache/
+voicevox_download/
+voicevox_engine/
+*.log
