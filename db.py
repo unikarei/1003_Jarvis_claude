@@ -229,6 +229,13 @@ def get_or_create_agent(name: str) -> str:
     return insert_node(node_type="Agent", title=name)
 
 
+def find_skill_by_name(name: str) -> sqlite3.Row | None:
+    """jarvis-skills のスキル名（meta の skill_name）に対応する Skill ノード（FR-014）。"""
+    return _fetchone(
+        "SELECT * FROM nodes WHERE type = 'Skill' AND json_extract(meta, '$.skill_name') = ? "
+        "ORDER BY created_at LIMIT 1", (name,))
+
+
 def find_skill_by_title(title: str) -> sqlite3.Row | None:
     """タイトルが部分一致するSkillノードを探す（同種タスクの再実行時に既存Skillを再利用するため）。"""
     return _fetchone(

@@ -105,3 +105,6 @@ def test_chat_question_answers_with_sources_and_traces(chat, db_path, monkeypatc
     assert traced == [order[0][1], order[1][1]]                    # 「その出典は」→ 1 件目、「2 番目」→ 2 件目
     assert "← 出典: 補助金の記事  https://example.com/src" in out
     assert k2
+    # 3 回の発言がそれぞれ Task として記録される（T-1209）
+    tasks = db._fetchall("SELECT meta FROM nodes WHERE type = 'Task' ORDER BY created_at")
+    assert [json.loads(t["meta"])["skill"] for t in tasks] == ["knowledge-answer", "knowledge-trace", "knowledge-trace"]

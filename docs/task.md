@@ -247,5 +247,5 @@
 - [x] T-1206 `skills.py`（索引の読み込みと予備の索引）
 - [x] T-1207 `orchestrator.py`（ルール → LLM の振り分け、入力の検証、権限の確認、実行）
 - [x] T-1208 `chat.py` の切り替え（振り分け、普通の質問は Knowledge Engine、会話の文脈）
-- [ ] T-1209 実行の記録（Task → uses → Skill、成否・所要時間・振り分けの方法）
+- [x] T-1209 実行の記録（Task → uses → Skill、成否・所要時間・振り分けの方法）
 - [ ] T-1210 受け入れ（`../docs/testing.md` §9）

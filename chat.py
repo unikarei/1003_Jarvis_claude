@@ -13,6 +13,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 import orchestrator  # noqa: E402
 from ckc.models import Speaker, Turn  # noqa: E402
+from db import init_db  # noqa: E402
+from run_task import record  # noqa: E402
 
 GREETING = """JARVISと対話します（終了: exit / quit / Ctrl+C）
 例:「民泊の補助金について知ってることは？」→「その出典は？」「2 番目の出典は？」
@@ -23,6 +25,7 @@ GREETING = """JARVISと対話します（終了: exit / quit / Ctrl+C）
 
 def main():
     print(GREETING)
+    init_db()
     ctx = orchestrator.Context()
 
     while True:
@@ -40,6 +43,10 @@ def main():
 
         outcome = orchestrator.handle(user_input, ctx)
         print(f"\nJARVIS > {outcome.text}\n")
+        try:
+            record(user_input, outcome)   # 使ったスキルと成否をナレッジグラフに記録する
+        except Exception as e:  # 記録の失敗で対話を止めない
+            print(f"[記録できませんでした] {type(e).__name__}: {e}\n")
         # ナレッジ化の材料にする対話（ナレッジ化そのものと、実行しなかった・失敗したものは除く）
         if outcome.ok and outcome.error is None and outcome.skill != "knowledge-capture":
             ctx.history += [Turn(Speaker.OWNER, user_input), Turn(Speaker.AI, outcome.text)]
