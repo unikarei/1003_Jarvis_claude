@@ -1,7 +1,7 @@
-"""JARVISとの対話型CLI。質問・依頼を入力すると、ナレッジ検索またはコード実行サブエージェントに
-振り分けて実行する（run_task.pyと同じ分類ロジックで、Task/Skill/Agentグラフにも記録される）。
+"""JARVISとの対話型CLI。発言を振り分けて、Jarvis のスキル（知識の検索・出典の追跡・構成の照合・開発ボード・
+改善の監査・管理画面・ナレッジ化・テーマ登録・コードの依頼など）を実行する（FR-014、orchestrator.py）。
 
-終了: exit または quit と入力、もしくは Ctrl+C / Ctrl+D。
+書き込みのあるスキルは、実行の前に確認する。終了: exit または quit と入力、もしくは Ctrl+C / Ctrl+D。
 """
 
 import sys
@@ -11,35 +11,19 @@ import sys
 sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
 
+import orchestrator  # noqa: E402
 from ckc.models import Speaker, Turn  # noqa: E402
-from chat_actions import run_architect, run_ckc  # noqa: E402,F401
-from run_task import run_task  # noqa: E402
 
-# 「ナレッジ化して」などで、それまでの対話を CKC で知識にする（../docs/spec.md §3.3、CKC Phase 1）
-CKC_TRIGGERS = ("/ckc", "ナレッジ化して", "ナレッジ化する")
-
-
-def is_ckc_request(text: str) -> bool:
-    return text.strip().lower() == "/ckc" or any(t in text for t in CKC_TRIGGERS[1:])
-
-
-THEME_PREFIXES = ("テーマ登録:", "テーマ登録：", "/theme ")
-
-
-def theme_request(text: str) -> str | None:
-    """「テーマ登録: …」なら、テーマの本文を返す（Knowledge Architect、MAP Phase 8）。"""
-    for prefix in THEME_PREFIXES:
-        if text.startswith(prefix):
-            return text[len(prefix):].strip() or None
-    return None
+GREETING = """JARVISと対話します（終了: exit / quit / Ctrl+C）
+例:「民泊の補助金について知ってることは？」→「その出典は？」「2 番目の出典は？」
+   「システムの状態は？」「次にやることは？」「改善すべき点は？」「全体を見せて」
+   「ナレッジ化して」（それまでの対話を知識にする）「テーマ登録: <テーマ>」「〜する関数を書いて」
+"""
 
 
 def main():
-    print("JARVISと対話します（終了: exit / quit / Ctrl+C）")
-    print("例:「大洗の物件の所在地は？」「OpenAIに関する最近のニュースは？」「Pythonで○○する関数を書いて」")
-    print("「ナレッジ化して」で、それまでの対話から知識を抽出して Obsidian に保存します。")
-    print("「テーマ登録: <テーマ>」で、既存資産の再利用と新しいテーマの構成を提案します。\n")
-    history: list[Turn] = []
+    print(GREETING)
+    ctx = orchestrator.Context()
 
     while True:
         try:
@@ -53,23 +37,12 @@ def main():
         if user_input.lower() in ("exit", "quit"):
             print("終了します。")
             return
-        theme = theme_request(user_input)
-        if theme:
-            run_architect(theme)
-            continue
-        if is_ckc_request(user_input):
-            if run_ckc(history):
-                history = []
-            continue
 
-        try:
-            response = run_task(user_input)
-        except Exception as e:
-            print(f"[エラー] {type(e).__name__}: {e}\n")
-            continue
-
-        history += [Turn(Speaker.OWNER, user_input), Turn(Speaker.AI, response)]
-        print(f"\nJARVIS > {response}\n")
+        outcome = orchestrator.handle(user_input, ctx)
+        print(f"\nJARVIS > {outcome.text}\n")
+        # ナレッジ化の材料にする対話（ナレッジ化そのものと、実行しなかった・失敗したものは除く）
+        if outcome.ok and outcome.error is None and outcome.skill != "knowledge-capture":
+            ctx.history += [Turn(Speaker.OWNER, user_input), Turn(Speaker.AI, outcome.text)]
 
 
 if __name__ == "__main__":

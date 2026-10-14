@@ -109,7 +109,7 @@
 
 設計の詳細は `../docs/architecture.md` §19（流れ、jarvis-skills の形式、Phase 1 のスキル 11 件、振り分け、権限、文脈）。
 
-- `skills.py`（新規）: jarvis-skills の `generated/skills.json` を読む（Registry の `repo-jarvis-skills` の locator、または環境変数 `JARVIS_SKILLS_JSON`）。読めなければ予備の索引（`knowledge-answer` だけ）で動き、警告を出す
+- `skills.py`（新規）: jarvis-skills の `generated/skills.json` を読む（Registry の `repo-jarvis-skills` の locator、または環境変数 `JARVIS_SKILLS_JSON`）。読めなければ予備の索引（FR-014 より前から chat.py にあった `knowledge-answer`・`knowledge-capture`・`theme-register`・`code-task`）で動き、警告を出す（後方互換）
 - `orchestrator.py`（新規）: 振り分け（ルール → LLM）、入力の検証、権限の確認、実行、結果の整形、対話の文脈。スキル名 → 本リポジトリの関数の対応表を持ち、索引にあって `active` のものだけを呼ぶ
 - `chat_actions.py`（新規、T-1207）: `chat.py` から「ナレッジ化」「テーマ登録」の処理を分けたもの（`chat.py` は読み込み時に標準入出力の設定を変えるため）。`chat.py` と `orchestrator.py` が使う
 - `chat.py`（改修）: 発言を `orchestrator` に渡す。「ナレッジ化して」「テーマ登録:」の動作は変えない

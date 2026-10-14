@@ -53,7 +53,8 @@ def test_unreadable_index_falls_back_with_one_warning(index, content):
         index.write_text(content, encoding="utf-8")
     with pytest.warns(UserWarning, match="予備の索引"):
         first = skills.load()
-    assert set(first) == {"knowledge-answer"}
+    assert set(first) == {"knowledge-answer", "knowledge-capture", "theme-register", "code-task"}
+    assert first["knowledge-capture"].permission == "local_write" and "ナレッジ化して" in first["knowledge-capture"].phrases
     assert first["knowledge-answer"].entry["function"] == "knowledge_engine.answer"
     with warnings.catch_warnings():
         warnings.simplefilter("error")
