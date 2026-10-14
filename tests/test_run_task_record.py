@@ -48,3 +48,13 @@ def test_legacy_skill_nodes_are_linked(db_path):
     assert len(_skill_nodes()) == 2
     executed = db._fetchone("SELECT dst_id FROM edges WHERE src_id = ? AND type = 'executed_by'", (t2,))["dst_id"]
     assert db.get_node(executed)["title"] == "code_agent"
+
+
+def test_record_masks_secrets(db_path):
+    """発言・入力・結果に貼られた秘密情報を記録に残さない（FR-014 F-4）。"""
+    db.init_db()
+    key = "sk-ant-" + "x" * 40
+    outcome = orc.Outcome("knowledge-search", "rule", {"query": f"鍵 {key}"}, f"結果 {key}", True, 0.1)
+    task = db.get_node(run_task.record(f"これを探して {key}", outcome))
+    stored = task["title"] + task["content"] + task["meta"]
+    assert key not in stored and "REDACTED" in stored

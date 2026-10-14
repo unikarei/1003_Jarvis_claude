@@ -18,6 +18,8 @@ import llm
 import skills
 
 DEFAULT_SKILL = "knowledge-answer"
+ROUTE_TIMEOUT_SECONDS = 60      # LLM での振り分けの上限（F-3）
+SKILL_TIMEOUT_SECONDS = 120     # 確認の入力を待たないスキルの実行の上限（F-3）
 _TRIM = " 　、。,.?？!！は"
 
 
@@ -145,7 +147,8 @@ def route_by_llm(text: str, active: dict[str, skills.Skill], ctx: Context) -> Ro
     """LLM にスキルを選ばせる。索引にない・入力が合わない・JSON でない応答は採用しない（None）。"""
     context = "\n".join(f"{i}. {it['title']}（{it['knowledge_id']}）" for i, it in enumerate(ctx.items, 1)) or "なし"
     try:
-        reply = llm.complete(ROUTE_PROMPT.format(skills=_skills_for_prompt(active), context=context, text=text))
+        reply = llm.complete(ROUTE_PROMPT.format(skills=_skills_for_prompt(active), context=context, text=text),
+                             timeout=ROUTE_TIMEOUT_SECONDS)
     except llm.LLMError:
         return None
     data = _extract_json(reply)
@@ -300,9 +303,46 @@ HANDLERS: dict[str, Callable] = {
 }
 
 
+# 1003 が持つ最低限の権限（F-2）: スキル名 → (最低限の段階, 確認が必須か, 対話で入力を待つか)。
+# 実際の段階と確認は、索引の値とこの表のうち厳しい方。索引の書き換えで確認が外れないようにする
+FLOOR = {
+    "knowledge-capture": ("local_write", True, True),
+    "theme-register": ("local_write", True, True),
+    "control-center": ("local_write", True, False),
+    "code-task": ("read", True, False),          # OpenAI API（従量課金）に発言を送る（F-1）
+}
+_RANK = {"read": 0, "local_write": 1, "external": 2}
+
+
+def effective(skill: skills.Skill) -> tuple[str, bool]:
+    """(実際の権限の段階, 確認が必要か)。"""
+    floor_perm, floor_confirm, _ = FLOOR.get(skill.name, ("read", False, False))
+    perm = max(skill.permission, floor_perm, key=_RANK.__getitem__)
+    return perm, perm == "local_write" or skill.confirm or floor_confirm
+
+
+def _interactive(name: str) -> bool:
+    return FLOOR.get(name, ("read", False, False))[2]
+
+
+def _run_with_timeout(handler, inputs, ctx, text, seconds: int):
+    """確認の入力を待たないスキルを上限付きで動かす。超えたら TimeoutError（処理は裏で終わるまで続く）。"""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(handler, inputs, ctx, text)
+    try:
+        return future.result(timeout=seconds)
+    except FutureTimeout:
+        raise TimeoutError(f"{seconds} 秒以内に終わりませんでした") from None
+    finally:
+        pool.shutdown(wait=False)
+
+
 def confirm_text(skill: skills.Skill, inputs: dict) -> str:
     shown = "、".join(f"{k}: {v}" for k, v in inputs.items()) or "なし"
-    return f"「{skill.name}」を実行します（{skill.description}）。入力: {shown}\n書き込みがあります。実行しますか？ [y/N] > "
+    perm, _ = effective(skill)
+    why = "書き込みがあります" if perm == "local_write" else "外部のサービスに送信します（課金があります）"
+    return f"「{skill.name}」を実行します（{skill.description}）。入力: {shown}\n{why}。実行しますか？ [y/N] > "
 
 
 def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None = None) -> Outcome:
@@ -318,15 +358,21 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
     handler = HANDLERS.get(skill.name)
     if handler is None or skill.entry.get("repo") != "repo-1003-jarvis-claude":
         return done(f"スキル {skill.name} は Jarvis の会話からは実行できません。", ok=False, error="no_handler")
-    if skill.permission == "external":
+    perm, needs_confirm = effective(skill)
+    if perm == "external":
         return done(f"スキル {skill.name} は外部への書き込みを含むため、会話からは実行しません。", ok=False,
                     error="external")
-    if skill.permission == "local_write":
+    if needs_confirm:
         ask = ask or input
         if ask(confirm_text(skill, r.inputs)).strip().lower() != "y":
             return done("実行しませんでした。", ok=True, items=ctx.items, error="declined")
     try:
-        message, items = handler(r.inputs, ctx, text)
+        if _interactive(skill.name):     # 対話で入力を待つスキル（ナレッジ化・テーマ登録）は打ち切らない
+            message, items = handler(r.inputs, ctx, text)
+        else:
+            message, items = _run_with_timeout(handler, r.inputs, ctx, text, SKILL_TIMEOUT_SECONDS)
+    except TimeoutError as e:
+        return done(f"[時間切れ] {skill.name}: {e}", ok=False, error="timeout")
     except Exception as e:   # スキルの失敗で対話を止めない
         return done(f"[エラー] {skill.name}: {type(e).__name__}: {e}", ok=False, error=type(e).__name__)
     return done(message, items=items)

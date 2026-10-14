@@ -46,7 +46,7 @@ def index(tmp_path, monkeypatch):
 def _llm(monkeypatch, reply):
     calls = []
 
-    def fake(prompt, provider=None):
+    def fake(prompt, provider=None, timeout=None):
         calls.append(prompt)
         if isinstance(reply, Exception):
             raise reply
@@ -167,3 +167,59 @@ def test_ordinal():
     assert orc._ordinal("３件目") == 3
     assert orc._ordinal("[4] の出典") == 4
     assert orc._ordinal("その出典は") is None
+
+
+# ---------------------------------------------------------------- 開発レビューの反映（T-1211）
+
+def _index_with(monkeypatch, tmp_path, **extra):
+    data = dict(INDEX)
+    data.update(extra)
+    path = tmp_path / "skills2.json"
+    path.write_text(json.dumps({"skills": data}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("JARVIS_SKILLS_JSON", str(path))
+    skills.reset_cache()
+
+
+def test_confirm_flag_requires_confirmation_for_read(index, monkeypatch, tmp_path):
+    """confirm: true のスキルは read でも確認する（F-1）。"""
+    sk = _s("外部の API に送る", phrases=["送って"])
+    sk["confirm"] = True
+    _index_with(monkeypatch, tmp_path, **{"send-out": sk})
+    called = _handlers(monkeypatch)
+    monkeypatch.setitem(orc.HANDLERS, "send-out", orc.HANDLERS["system-status"])
+    asked = []
+    out = orc.handle("これを送って", orc.Context(), ask=lambda q: asked.append(q) or "n", use_llm=False)
+    assert asked and "課金" in asked[0] and out.error == "declined" and called == []
+
+
+@pytest.mark.parametrize("name, phrase", [("theme-register", "テーマ登録:"), ("code-task", "関数を書いて")])
+def test_floor_keeps_confirmation_even_if_index_is_weakened(index, monkeypatch, tmp_path, name, phrase):
+    """索引で read・確認なしに下げても、1003 の最低限の権限で確認する（F-2）。"""
+    weakened = _s("弱めた", "read", [phrase], {"theme": {"type": "string"}} if name == "theme-register" else {})
+    weakened["confirm"] = False
+    _index_with(monkeypatch, tmp_path, **{name: weakened})
+    called = _handlers(monkeypatch)
+    asked = []
+    out = orc.handle(f"{phrase} 太陽光", orc.Context(), ask=lambda q: asked.append(q) or "n", use_llm=False)
+    assert out.skill == name and asked and out.error == "declined" and called == []
+    assert orc.effective(skills.active()[name])[1] is True
+
+
+def test_route_llm_gets_timeout(index, monkeypatch):
+    seen = {}
+
+    def fake(prompt, provider=None, timeout=None):
+        seen["timeout"] = timeout
+        return "{}"
+    monkeypatch.setattr(llm, "complete", fake)
+    orc.route("よく分からない依頼", orc.Context())
+    assert seen["timeout"] == orc.ROUTE_TIMEOUT_SECONDS == 60
+
+
+def test_slow_skill_times_out_and_chat_continues(index, monkeypatch):
+    import time as _time
+    monkeypatch.setattr(orc, "SKILL_TIMEOUT_SECONDS", 0.2)
+    _handlers(monkeypatch)
+    monkeypatch.setitem(orc.HANDLERS, "system-status", lambda i, c, t: _time.sleep(1) or ("遅い", []))
+    out = orc.handle("システムの状態は？", orc.Context(), use_llm=False)
+    assert not out.ok and out.error == "timeout" and "時間切れ" in out.text and out.seconds < 1

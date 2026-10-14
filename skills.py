@@ -28,6 +28,7 @@ class Skill:
     inputs: dict = field(default_factory=dict)      # 入力名 → {"type", "required", "description"}
     phrases: tuple[str, ...] = ()
     verify: str | None = None
+    confirm: bool = False                            # true なら read でも実行のたびに確認する（課金・外部への送信）
 
     def required_inputs(self) -> list[str]:
         return [k for k, v in self.inputs.items() if v.get("required")]
@@ -50,7 +51,8 @@ FALLBACK = {s.name: s for s in (
     Skill("code-task", "コードの生成・修正・デバッグをコード用のサブエージェントに任せる。「〜する関数を書いて」のとき。",
           "active", "read", {"repo": _R1003, "function": "code_agent.run_code_task"},
           {"task": {"type": "string", "required": False, "description": "依頼の内容"}},
-          ("コードを書いて", "関数を書いて", "スクリプトを書いて", "デバッグして", "リファクタして", "バグを直して")),
+          ("コードを書いて", "関数を書いて", "スクリプトを書いて", "デバッグして", "リファクタして", "バグを直して"),
+          confirm=True),   # OpenAI API（従量課金）に発言を送るため、毎回確認する
 )}
 
 _cache: dict[str, Skill] | None = None
@@ -87,8 +89,11 @@ def _parse(name: str, raw: dict) -> Skill:
     phrases = raw.get("phrases") or []
     if not isinstance(phrases, list) or not all(isinstance(p, str) and p for p in phrases):
         raise ValueError("phrases が不正")
+    confirm = raw.get("confirm", False)
+    if not isinstance(confirm, bool):
+        raise ValueError("confirm が真偽値ではない")
     return Skill(name, str(raw.get("description") or ""), raw["status"], raw["permission"], dict(entry),
-                 {k: dict(v) for k, v in inputs.items()}, tuple(phrases), raw.get("verify"))
+                 {k: dict(v) for k, v in inputs.items()}, tuple(phrases), raw.get("verify"), confirm)
 
 
 def load() -> dict[str, Skill]:

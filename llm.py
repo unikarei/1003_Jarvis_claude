@@ -61,17 +61,18 @@ class LLMError(Exception):
     """LLM の呼び出しに失敗した（CLI の異常終了、上限到達、タイムアウトなど）。別のプロバイダーには切り替えない。"""
 
 
-def _complete_claude_cli(prompt: str) -> str:
+def _complete_claude_cli(prompt: str, timeout: int | None = None) -> str:
     """Claude Code CLI（claude -p）をツールなしで実行し、最終応答のテキストを返す。"""
+    timeout = timeout or CLAUDE_CLI_TIMEOUT_SECONDS
     cmd = [CLAUDE_BIN, "-p", "--tools", "", "--no-session-persistence", "--output-format", "json"]
     with tempfile.TemporaryDirectory(prefix="jarvis-llm-") as workdir:
         try:
             proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                                  cwd=workdir, timeout=CLAUDE_CLI_TIMEOUT_SECONDS)
+                                  cwd=workdir, timeout=timeout)
         except FileNotFoundError:
             raise LLMError(f"Claude Code CLI が見つかりません: {CLAUDE_BIN}") from None
         except subprocess.TimeoutExpired:
-            raise LLMError(f"Claude Code CLI が {CLAUDE_CLI_TIMEOUT_SECONDS} 秒でタイムアウトしました") from None
+            raise LLMError(f"Claude Code CLI が {timeout} 秒でタイムアウトしました") from None
 
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip()[:500]
@@ -86,7 +87,7 @@ def _complete_claude_cli(prompt: str) -> str:
     return envelope.get("result", "")
 
 
-def _complete_anthropic_api(prompt: str) -> str:
+def _complete_anthropic_api(prompt: str, timeout: int | None = None) -> str:  # timeout は SDK の既定に任せる
     try:
         return ask_claude(prompt, max_tokens=4000, model=ESCALATION_MODEL)
     except anthropic.APIError as e:
@@ -96,9 +97,11 @@ def _complete_anthropic_api(prompt: str) -> str:
 PROVIDERS = {"claude_cli": _complete_claude_cli, "anthropic_api": _complete_anthropic_api}
 
 
-def complete(prompt: str, provider: str | None = None) -> str:
-    """設定（JARVIS_LLM_PROVIDER）のプロバイダーでプロンプトを実行する。失敗時は LLMError。"""
+def complete(prompt: str, provider: str | None = None, timeout: int | None = None) -> str:
+    """設定（JARVIS_LLM_PROVIDER）のプロバイダーでプロンプトを実行する。失敗時は LLMError。
+
+    timeout（秒）は claude -p の上限。省略すると従来の既定（CLAUDE_CLI_TIMEOUT_SECONDS）。"""
     name = provider or LLM_PROVIDER
     if name not in PROVIDERS:
         raise LLMError(f"未知の LLM プロバイダーです: {name}（{', '.join(PROVIDERS)}）")
-    return PROVIDERS[name](prompt)
+    return PROVIDERS[name](prompt, timeout=timeout) if timeout else PROVIDERS[name](prompt)

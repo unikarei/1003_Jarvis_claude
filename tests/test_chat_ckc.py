@@ -36,7 +36,7 @@ def test_chat_records_turns_and_runs_ckc(chat, db_path, ckc_data_dir, make_vault
     item = {"kind": "Decision", "title": "週次で確認する", "body": "レポートは週次で確認する", "projects": ["jarvis"],
             "category": None, "confidence": "confirmed",
             "evidence": [{"quote": "レポートは週次で確認することにする", "speaker": "owner"}]}
-    monkeypatch.setattr(llm, "complete", lambda prompt, provider=None: json.dumps({"items": [item]}, ensure_ascii=False))
+    monkeypatch.setattr(llm, "complete", lambda prompt, provider=None, timeout=None: json.dumps({"items": [item]}, ensure_ascii=False))
     # 1行目は普通の質問（振り分けの LLM は不正な応答 → knowledge-answer）。ナレッジ化は書き込みがあるので確認（y）
     _inputs(monkeypatch, "レポートは週次で確認することにする", "ナレッジ化して", "y", "a", "y",
             "ナレッジ化して", "y", "exit")
@@ -51,7 +51,7 @@ def test_chat_records_turns_and_runs_ckc(chat, db_path, ckc_data_dir, make_vault
 
 
 def test_chat_ckc_declined_writes_nothing(chat, db_path, ckc_data_dir, monkeypatch):
-    monkeypatch.setattr(llm, "complete", lambda prompt, provider=None: "答え")
+    monkeypatch.setattr(llm, "complete", lambda prompt, provider=None, timeout=None: "答え")
     _inputs(monkeypatch, "質問です", "確認せずにナレッジ化して", "n", "exit")
     with pytest.warns(UserWarning):
         chat.main()
@@ -91,7 +91,7 @@ def test_chat_question_answers_with_sources_and_traces(chat, db_path, monkeypatc
     k2 = db.insert_node("Knowledge", category="minpaku", title="補助金の申請期限", content="民泊の補助金の期限",
                         url="https://example.com/b")
 
-    def fake(prompt, provider=None):
+    def fake(prompt, provider=None, timeout=None):
         return "振り分けません" if "振り分け係" in prompt else "補助金には条件があります [1]"
     monkeypatch.setattr(llm, "complete", fake)
     _inputs(monkeypatch, "民泊の補助金の条件は？", "その出典は？", "2 番目の出典は？", "exit")

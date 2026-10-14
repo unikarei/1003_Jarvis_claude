@@ -50,10 +50,13 @@ def skill_node(name: str) -> str:
 
 def record(text: str, outcome) -> str:
     """会話でのスキルの実行を記録する（Task → uses → Skill、Task → executed_by → Agent。FR-014、T-1209）。"""
+    from ckc.secrets import mask_secrets   # 発言や結果に貼られた秘密情報を記録に残さない（FR-014 F-4）
+
     agent = CODE_AGENT_NAME if outcome.skill == "code-task" else ORCHESTRATOR_AGENT_NAME
-    task_id = insert_node(node_type="Task", title=text, content=outcome.text, meta={
+    inputs = {k: mask_secrets(v) if isinstance(v, str) else v for k, v in outcome.inputs.items()}
+    task_id = insert_node(node_type="Task", title=mask_secrets(text), content=mask_secrets(outcome.text), meta={
         "skill": outcome.skill, "method": outcome.method, "ok": outcome.ok, "error": outcome.error,
-        "seconds": outcome.seconds, "inputs": outcome.inputs})
+        "seconds": outcome.seconds, "inputs": inputs})
     insert_edge(task_id, skill_node(outcome.skill), "uses")
     insert_edge(task_id, get_or_create_agent(agent), "executed_by")
     return task_id
