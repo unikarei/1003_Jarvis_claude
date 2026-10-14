@@ -47,9 +47,12 @@ def main():
             record(user_input, outcome)   # 使ったスキルと成否をナレッジグラフに記録する
         except Exception as e:  # 記録の失敗で対話を止めない
             print(f"[記録できませんでした] {type(e).__name__}: {e}\n")
-        # ナレッジ化の材料にする対話（ナレッジ化そのものと、実行しなかった・失敗したものは除く）
-        if outcome.ok and outcome.error is None and outcome.skill != "knowledge-capture":
-            ctx.history += [Turn(Speaker.OWNER, user_input), Turn(Speaker.AI, outcome.text)]
+        # ナレッジ化の材料にする対話。Owner の発言は、応答が失敗・時間切れでも残す（決定や好みは Owner の発言にある）。
+        # Jarvis の応答は成功したものだけ。ナレッジ化そのものは材料にしない
+        if not (outcome.skill == "knowledge-capture" and outcome.method == "rule"):
+            ctx.history.append(Turn(Speaker.OWNER, user_input))
+            if outcome.ok and outcome.error is None:
+                ctx.history.append(Turn(Speaker.AI, outcome.text))
 
 
 if __name__ == "__main__":

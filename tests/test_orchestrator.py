@@ -82,7 +82,7 @@ def test_llm_routing_accepts_valid_choice(index, monkeypatch):
     ctx = orc.Context(items=[{"knowledge_id": "k1", "title": "大洗_空調", "url": None}])
     r = orc.route("補助金のことを調べたい", ctx)
     assert (r.skill, r.inputs, r.method) == ("knowledge-search", {"query": "補助金"}, "llm")
-    assert "大洗_空調" in calls[0] and "post-sns" in calls[0] and "old-skill" not in calls[0]
+    assert "大洗_空調" in calls[0] and "post-sns" not in calls[0] and "old-skill" not in calls[0]
 
 
 @pytest.mark.parametrize("reply", [
@@ -223,3 +223,11 @@ def test_slow_skill_times_out_and_chat_continues(index, monkeypatch):
     monkeypatch.setitem(orc.HANDLERS, "system-status", lambda i, c, t: _time.sleep(1) or ("遅い", []))
     out = orc.handle("システムの状態は？", orc.Context(), use_llm=False)
     assert not out.ok and out.error == "timeout" and "時間切れ" in out.text and out.seconds < 1
+
+
+def test_llm_cannot_choose_write_or_paid_skills(index, monkeypatch):
+    """書き込み・課金のあるスキルは LLM では選ばない（決まった言い回しのときだけ）。T-1210 の受け入れの指摘。"""
+    calls = _llm(monkeypatch, '{"skill": "theme-register", "inputs": {"theme": "家具"}}')
+    r = orc.route("家具は来月までに買うことにする", orc.Context())
+    assert (r.skill, r.method) == ("knowledge-answer", "default")
+    assert "theme-register" not in calls[0] and "knowledge-search" in calls[0]

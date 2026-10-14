@@ -160,9 +160,16 @@ def route_by_llm(text: str, active: dict[str, skills.Skill], ctx: Context) -> Ro
     return Route(data["skill"], inputs, "llm")
 
 
+def llm_candidates(active: dict[str, skills.Skill]) -> dict[str, skills.Skill]:
+    """LLM に選ばせてよいスキル: 確認の要らない読み取りだけ。書き込み・課金のあるスキルは、
+    決まった言い回し（ルール）で明示されたときだけ使う（T-1210 の受け入れで、決定を述べた発言が
+    ナレッジ化に振り分けられたため）。"""
+    return {name: s for name, s in active.items() if effective(s) == ("read", False)}
+
+
 def route(text: str, ctx: Context, use_llm: bool = True) -> Route:
     active = skills.active()
-    found = route_by_rule(text, active) or (route_by_llm(text, active, ctx) if use_llm else None)
+    found = route_by_rule(text, active) or (route_by_llm(text, llm_candidates(active), ctx) if use_llm else None)
     if found:
         return found
     return Route(DEFAULT_SKILL, {"question": text}, "default")

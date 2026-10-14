@@ -108,3 +108,20 @@ def test_chat_question_answers_with_sources_and_traces(chat, db_path, monkeypatc
     # 3 回の発言がそれぞれ Task として記録される（T-1209）
     tasks = db._fetchall("SELECT meta FROM nodes WHERE type = 'Task' ORDER BY created_at")
     assert [json.loads(t["meta"])["skill"] for t in tasks] == ["knowledge-answer", "knowledge-trace", "knowledge-trace"]
+
+
+def test_owner_turn_is_kept_when_answer_fails(chat, db_path, ckc_data_dir, monkeypatch):
+    """応答が失敗しても Owner の発言はナレッジ化の材料に残す（T-1210 の受け入れで、時間切れの後の決定が抜け落ちた）。"""
+    import orchestrator
+    captured = []
+    monkeypatch.setattr("chat_actions.run_ckc", lambda history: captured.append(list(history)) or True)
+
+    def fail(inputs, ctx, text):
+        raise TimeoutError("120 秒以内に終わりませんでした")
+    monkeypatch.setitem(orchestrator.HANDLERS, "knowledge-answer", fail)
+    monkeypatch.setattr(llm, "complete", lambda prompt, provider=None, timeout=None: "{}")
+    _inputs(monkeypatch, "家具は来月までに買うことにする", "ナレッジ化して", "y", "exit")
+    with pytest.warns(UserWarning):
+        chat.main()
+    [history] = captured
+    assert [(t.speaker.value, t.text) for t in history] == [("owner", "家具は来月までに買うことにする")]
