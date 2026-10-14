@@ -111,6 +111,7 @@
 
 - `skills.py`（新規）: jarvis-skills の `generated/skills.json` を読む（Registry の `repo-jarvis-skills` の locator、または環境変数 `JARVIS_SKILLS_JSON`）。読めなければ予備の索引（`knowledge-answer` だけ）で動き、警告を出す
 - `orchestrator.py`（新規）: 振り分け（ルール → LLM）、入力の検証、権限の確認、実行、結果の整形、対話の文脈。スキル名 → 本リポジトリの関数の対応表を持ち、索引にあって `active` のものだけを呼ぶ
+- `chat_actions.py`（新規、T-1207）: `chat.py` から「ナレッジ化」「テーマ登録」の処理を分けたもの（`chat.py` は読み込み時に標準入出力の設定を変えるため）。`chat.py` と `orchestrator.py` が使う
 - `chat.py`（改修）: 発言を `orchestrator` に渡す。「ナレッジ化して」「テーマ登録:」の動作は変えない
 - `run_task.py`（改修）: 実行の記録（Task → uses → Skill、成否・所要時間・振り分けの方法）。既存の `run_task()` は残す
 - `config.py`: `JARVIS_SKILLS_JSON` の差し替え

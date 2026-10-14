@@ -12,6 +12,7 @@ sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
 
 from ckc.models import Speaker, Turn  # noqa: E402
+from chat_actions import run_architect, run_ckc  # noqa: E402,F401
 from run_task import run_task  # noqa: E402
 
 # 「ナレッジ化して」などで、それまでの対話を CKC で知識にする（../docs/spec.md §3.3、CKC Phase 1）
@@ -20,26 +21,6 @@ CKC_TRIGGERS = ("/ckc", "ナレッジ化して", "ナレッジ化する")
 
 def is_ckc_request(text: str) -> bool:
     return text.strip().lower() == "/ckc" or any(t in text for t in CKC_TRIGGERS[1:])
-
-
-def run_ckc(history: list[Turn]) -> bool:
-    """対話を CKC に渡す。取り込めたら True（呼び出し側は記録をリセットする）。"""
-    if not history:
-        print("ナレッジ化する対話がまだありません。\n")
-        return False
-    from ckc.capture import CaptureError
-    from ckc.extract import ExtractError
-    from ckc_cli import import_turns
-    from db import init_db
-
-    init_db()
-    try:
-        import_turns(history, title=f"JARVIS との対話: {history[0].text.splitlines()[0][:30]}")
-    except (CaptureError, ExtractError) as e:
-        print(f"[CKC] {e}\n")
-        return False
-    print()
-    return True
 
 
 THEME_PREFIXES = ("テーマ登録:", "テーマ登録：", "/theme ")
@@ -51,26 +32,6 @@ def theme_request(text: str) -> str | None:
         if text.startswith(prefix):
             return text[len(prefix):].strip() or None
     return None
-
-
-def run_architect(theme: str) -> None:
-    import architect
-    from vault import VaultError
-
-    try:
-        proposal = architect.propose(theme)
-        print("\n" + architect.format_proposal(proposal))
-        if input("\nこの内容でノートの雛形と（必要なら）Registry の PR を作りますか？ [y/N] > ").strip().lower() != "y":
-            print(f"適用しませんでした（あとで python architect.py apply {proposal.proposal_id} で適用できます）。\n")
-            return
-        applied = architect.apply(proposal)
-        for path in applied.applied.get("notes", []):
-            print(f"ノートを作成: {path}")
-        if applied.applied.get("registry_pr"):
-            print(f"Registry の PR: {applied.applied['registry_pr']}（Owner がレビューしてマージ）")
-        print()
-    except (architect.ArchitectError, VaultError) as e:
-        print(f"[Architect] {e}\n")
 
 
 def main():
