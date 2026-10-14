@@ -80,7 +80,7 @@ def test_rule_ignores_inactive_and_needs_inputs(index, monkeypatch):
 def test_llm_routing_accepts_valid_choice(index, monkeypatch):
     calls = _llm(monkeypatch, '選びました {"skill": "knowledge-search", "inputs": {"query": "補助金"}}')
     ctx = orc.Context(items=[{"knowledge_id": "k1", "title": "大洗_空調", "url": None}])
-    r = orc.route("補助金のことを調べたい", ctx)
+    r = orc.route("補助金のことを調べたい", ctx, use_llm=True)
     assert (r.skill, r.inputs, r.method) == ("knowledge-search", {"query": "補助金"}, "llm")
     assert "大洗_空調" in calls[0] and "post-sns" not in calls[0] and "old-skill" not in calls[0]
 
@@ -98,7 +98,7 @@ def test_llm_routing_accepts_valid_choice(index, monkeypatch):
 ])
 def test_llm_routing_rejects_invalid(index, monkeypatch, reply):
     _llm(monkeypatch, reply)
-    r = orc.route("よく分からない依頼", orc.Context())
+    r = orc.route("よく分からない依頼", orc.Context(), use_llm=True)
     assert (r.skill, r.method, r.inputs) == ("knowledge-answer", "default", {"question": "よく分からない依頼"})
 
 
@@ -212,7 +212,7 @@ def test_route_llm_gets_timeout(index, monkeypatch):
         seen["timeout"] = timeout
         return "{}"
     monkeypatch.setattr(llm, "complete", fake)
-    orc.route("よく分からない依頼", orc.Context())
+    orc.route("よく分からない依頼", orc.Context(), use_llm=True)
     assert seen["timeout"] == orc.ROUTE_TIMEOUT_SECONDS == 60
 
 
@@ -228,6 +228,6 @@ def test_slow_skill_times_out_and_chat_continues(index, monkeypatch):
 def test_llm_cannot_choose_write_or_paid_skills(index, monkeypatch):
     """書き込み・課金のあるスキルは LLM では選ばない（決まった言い回しのときだけ）。T-1210 の受け入れの指摘。"""
     calls = _llm(monkeypatch, '{"skill": "theme-register", "inputs": {"theme": "家具"}}')
-    r = orc.route("家具は来月までに買うことにする", orc.Context())
+    r = orc.route("家具は来月までに買うことにする", orc.Context(), use_llm=True)
     assert (r.skill, r.method) == ("knowledge-answer", "default")
     assert "theme-register" not in calls[0] and "knowledge-search" in calls[0]

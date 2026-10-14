@@ -64,6 +64,8 @@ ESCALATION_MODEL = os.environ.get("JARVIS_ESCALATION_MODEL", "claude-sonnet-5-5"
 LLM_PROVIDER = os.environ.get("JARVIS_LLM_PROVIDER", "claude_cli")
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local" / "bin" / "claude"))
 CLAUDE_CLI_TIMEOUT_SECONDS = int(os.environ.get("JARVIS_CLAUDE_CLI_TIMEOUT", "300"))
+# 会話の振り分けに LLM を使うか（FR-014、T-1212）。claude -p の起動に約 3 秒かかるため既定は使わない
+ROUTE_WITH_LLM = os.environ.get("JARVIS_ROUTE_WITH_LLM", "0") == "1"
 
 # ①ピアノ教室: アクセス分析用（Search Console / GA4、サービスアカウント認証）
 GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")

@@ -175,11 +175,19 @@ ANSWER_PROMPT = """次の「資料」だけを根拠に、質問に日本語で�
 """
 
 
-def answer(question: str, projects: list[str] | None = None, limit: int = 8) -> tuple[str, list[Hit]]:
+def answer(question: str, projects: list[str] | None = None, limit: int = 8,
+           on_text=None) -> tuple[str, list[Hit]]:
+    """検索結果だけを根拠に答える。on_text を渡すと、答えを生成しながら差分を渡す（逐次表示、T-1212）。"""
     hits = search(question, projects=projects, limit=limit)
     if not hits:
-        return "蓄積された知識には該当する情報がありません。", []
+        message = "蓄積された知識には該当する情報がありません。"
+        if on_text is not None:
+            on_text(message)
+        return message, []
     context = "\n\n".join(f"[{i}] {h.title}（{', '.join(h.projects) or '-'}、{h.created_at[:10]}）\n"
                           f"{(get_node(h.knowledge_id)['content'] or '')[:1500]}"
                           for i, h in enumerate(hits, 1))
-    return llm.complete(ANSWER_PROMPT.format(question=question, context=context)), hits
+    prompt = ANSWER_PROMPT.format(question=question, context=context)
+    if on_text is not None:
+        return llm.complete_stream(prompt, on_text), hits
+    return llm.complete(prompt), hits

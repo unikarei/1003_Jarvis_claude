@@ -255,3 +255,10 @@
 
 - [x] `discovery/collect.run`: コマンドがない（launchd の PATH）・時間切れでも例外にせず、失敗の終了コードを返す（T-401 の「収集の例外で全体を止めない」）
 - [x] 定期ジョブそのものの失敗の通知: `discover.py --notify` は例外・0 以外の終了コードも通知、`improve.weekly()`（改善の監査 → ACC）も失敗を通知。launchd の plist の PATH に `/usr/local/bin`（docker）を追加
+
+## 応答の速さ（FR-014、`../docs/tasks.md` T-1212、2026-10-14 Owner 承認）
+
+- [x] LLM での振り分けを既定で無効（`JARVIS_ROUTE_WITH_LLM=1` で有効）。ルールに当たらない発言は普通の質問として答える
+- [x] 回答の逐次表示: `llm.complete_stream`（claude -p の stream-json）、`knowledge_engine.answer(on_text=)`、`orchestrator.Context.stream`、`chat.py`
+- [x] システムの状態は前回の照合結果（Registry の guardian-report.md）の要約。「最新」「今の」などのときだけその場で照合
+- [x] テストで本物の claude -p を逐次出力で呼ばない安全策（conftest）
