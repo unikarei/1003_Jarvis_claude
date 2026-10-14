@@ -14,6 +14,7 @@ os.environ["JARVIS_DB_PATH"] = str(_TMP_ROOT / "jarvis.db")
 os.environ["JARVIS_VAULT_ROOT"] = str(_TMP_ROOT / "vaults")
 os.environ["JARVIS_CKC_DATA_DIR"] = str(_TMP_ROOT / "ckc")
 os.environ["JARVIS_REGISTRY_JSON"] = str(_TMP_ROOT / "registry.json")
+os.environ["JARVIS_SKILLS_JSON"] = str(_TMP_ROOT / "skills.json")   # 置かない（テストごとに作る）
 
 import config  # noqa: E402
 

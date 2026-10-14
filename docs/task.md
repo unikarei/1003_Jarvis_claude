@@ -244,7 +244,7 @@
 ## スキルと会話からの実行（FR-014 Phase 1、`../docs/tasks.md` §12）
 
 - [x] T-1205 設計の更新（spec.md 4-11、architecture.md 3.10、本節）
-- [ ] T-1206 `skills.py`（索引の読み込みと予備の索引）
+- [x] T-1206 `skills.py`（索引の読み込みと予備の索引）
 - [ ] T-1207 `orchestrator.py`（ルール → LLM の振り分け、入力の検証、権限の確認、実行）
 - [ ] T-1208 `chat.py` の切り替え（振り分け、普通の質問は Knowledge Engine、会話の文脈）
 - [ ] T-1209 実行の記録（Task → uses → Skill、成否・所要時間・振り分けの方法）
