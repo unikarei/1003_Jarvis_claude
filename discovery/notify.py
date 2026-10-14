@@ -46,3 +46,11 @@ def notify_errors(report: Report, today: date | None = None, state_file: Path = 
     state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text(json.dumps({"date": today, "digest": digest}), encoding="utf-8")
     return True
+
+
+def notify_failure(job: str, detail: str) -> None:
+    """定期ジョブそのものが失敗したことを通知する（毎回。外部のサービスには送らない）。"""
+    script = (f"display notification {_osascript_string(detail[:200])} "
+              f"with title {_osascript_string(f'Jarvis: {job}の失敗')} "
+              f"subtitle {_osascript_string('~/Library/Logs/jarvis/ のログを確認')}")
+    run(["osascript", "-e", script])
