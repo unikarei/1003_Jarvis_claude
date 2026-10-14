@@ -240,3 +240,12 @@
 - [x] T-902 `architect.py`: LLM の提案の検証を強化（提案全体・配列の各要素・必須項目・真偽値・型を検査し、不正な構造を日本語のエラーで拒否。`reuse: [null]`・`notes: [{}]`・id が `[]`・`{}` でも例外にならない）
 - [x] T-903 新しいテーマの適用の受け入れ（本番とは別の Vault・Registry・DB のコピー）: 本物の claude -p で新しい Project `home-solar` の提案 → 適用（ノートの雛形 5 件、一時 worktree でブランチ・コミット・ローカルの bare リポジトリへ push）→ Owner のマージ（模擬）→ validate・render → `registry.projects()` で参照、を確認。GitHub への PR 作成（gh）だけは外部への書き込みのため実行せず、呼び出し内容を記録
 - [x] T-312（1003 分）: 本番で動いている `com.ohide.jarvis.daily-news.plist` を `scripts/launchd/` に保存（再構築の手順書の入手先。秘密情報なし。登録の手順は README）
+
+## スキルと会話からの実行（FR-014 Phase 1、`../docs/tasks.md` §12）
+
+- [x] T-1205 設計の更新（spec.md 4-11、architecture.md 3.10、本節）
+- [ ] T-1206 `skills.py`（索引の読み込みと予備の索引）
+- [ ] T-1207 `orchestrator.py`（ルール → LLM の振り分け、入力の検証、権限の確認、実行）
+- [ ] T-1208 `chat.py` の切り替え（振り分け、普通の質問は Knowledge Engine、会話の文脈）
+- [ ] T-1209 実行の記録（Task → uses → Skill、成否・所要時間・振り分けの方法）
+- [ ] T-1210 受け入れ（`../docs/testing.md` §9）
