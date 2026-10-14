@@ -135,3 +135,15 @@ def test_vault_branch_mismatch_and_merge_in_progress(repo, no_network):
     findings = []
     state, _ = guardian._judge_repository("vault-v", res, collect.collect_vault(res), findings)
     assert state == "Failed" and findings[0].kind == "sync"
+
+
+def test_run_tolerates_missing_command_and_timeout(monkeypatch):
+    """launchd の PATH にコマンドがない・時間切れでも例外にしない（2026-10-14 の初回の定期実行で docker が見つからず停止した）。"""
+    out = collect.run(["jarvis-no-such-command-xyz", "ps"])
+    assert out.returncode == 127 and "見つかりません" in out.stderr
+
+    def slow(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd=a[0], timeout=1)
+    monkeypatch.setattr(subprocess, "run", slow)
+    out = collect.run(["sleep", "10"], timeout=1)
+    assert out.returncode == 124 and "時間切れ" in out.stderr

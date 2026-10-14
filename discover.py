@@ -19,13 +19,27 @@ from pathlib import Path
 from discovery import settings
 from discovery.collect import collect
 from discovery.guardian import evaluate
-from discovery.notify import notify_errors
+from discovery.notify import notify_errors, notify_failure
 from discovery.output import render_outputs, write_outputs
 
 COMMIT_SCRIPT = Path(__file__).resolve().parent / "scripts" / "commit_registry_outputs.sh"
 
 
 def main(argv=None) -> int:
+    """--notify のときは、ジョブそのものの失敗（例外・0 以外の終了コード）も通知する。"""
+    notify = "--notify" in (sys.argv[1:] if argv is None else argv)
+    try:
+        rc = _main(argv)
+    except Exception as e:
+        if notify:
+            notify_failure("Discovery", f"{type(e).__name__}: {e}")
+        raise
+    if rc != 0 and notify:
+        notify_failure("Discovery", f"終了コード {rc}")
+    return rc
+
+
+def _main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Registry と実態の差分を調べる")
     parser.add_argument("--registry-dir", type=Path, default=settings.REGISTRY_DIR)
     parser.add_argument("--dry-run", action="store_true")

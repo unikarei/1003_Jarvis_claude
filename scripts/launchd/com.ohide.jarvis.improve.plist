@@ -10,12 +10,12 @@
   <array>
     <string>/Users/ohide/work/0002_Jarvis2/1003_Jarvis_claude/.venv/bin/python</string>
     <string>-c</string>
-    <string>import improve, sys; from acc import build; sys.exit(improve.main([]) or build.main([]))</string>
+    <string>import improve, sys; sys.exit(improve.weekly())</string>
   </array>
   <key>WorkingDirectory</key><string>/Users/ohide/work/0002_Jarvis2/1003_Jarvis_claude</string>
   <key>StartCalendarInterval</key><dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>30</integer></dict>
   <key>EnvironmentVariables</key>
-  <dict><key>PATH</key><string>/Users/ohide/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <dict><key>PATH</key><string>/Users/ohide/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
   <key>StandardOutPath</key><string>/Users/ohide/Library/Logs/jarvis/improve.log</string>
   <key>StandardErrorPath</key><string>/Users/ohide/Library/Logs/jarvis/improve.log</string>
 </dict>
