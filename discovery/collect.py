@@ -19,8 +19,16 @@ from discovery import settings
 
 
 def run(cmd: list[str], cwd: Path | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
-    """外部コマンドを実行する（テストではこの関数を差し替える）。"""
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    """外部コマンドを実行する（テストではこの関数を差し替える）。
+
+    コマンドがない（launchd の PATH に入っていないなど）・時間切れのときも例外にせず、失敗の終了コードを返す。
+    呼び出し側は終了コードを見て、その資産を Unknown にして全体の収集を続ける（T-401）。"""
+    try:
+        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(cmd, 127, "", f"コマンドが見つかりません: {cmd[0]}")
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", f"{timeout} 秒で時間切れ: {cmd[0]}")
 
 
 def now_iso() -> str:

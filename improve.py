@@ -183,5 +183,20 @@ def main(argv=None) -> int:
     return 0
 
 
+
+def weekly() -> int:
+    """週次の定期実行（launchd）: 改善の監査 → ACC の生成。失敗したら通知する。"""
+    from acc import build
+    from discovery.notify import notify_failure
+    try:
+        rc = main([]) or build.main([])
+    except Exception as e:
+        notify_failure("改善の監査", f"{type(e).__name__}: {e}")
+        raise
+    if rc != 0:
+        notify_failure("改善の監査", f"終了コード {rc}")
+    return rc
+
+
 if __name__ == "__main__":
     sys.exit(main())

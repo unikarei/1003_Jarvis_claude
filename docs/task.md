@@ -240,3 +240,8 @@
 - [x] T-902 `architect.py`: LLM の提案の検証を強化（提案全体・配列の各要素・必須項目・真偽値・型を検査し、不正な構造を日本語のエラーで拒否。`reuse: [null]`・`notes: [{}]`・id が `[]`・`{}` でも例外にならない）
 - [x] T-903 新しいテーマの適用の受け入れ（本番とは別の Vault・Registry・DB のコピー）: 本物の claude -p で新しい Project `home-solar` の提案 → 適用（ノートの雛形 5 件、一時 worktree でブランチ・コミット・ローカルの bare リポジトリへ push）→ Owner のマージ（模擬）→ validate・render → `registry.projects()` で参照、を確認。GitHub への PR 作成（gh）だけは外部への書き込みのため実行せず、呼び出し内容を記録
 - [x] T-312（1003 分）: 本番で動いている `com.ohide.jarvis.daily-news.plist` を `scripts/launchd/` に保存（再構築の手順書の入手先。秘密情報なし。登録の手順は README）
+
+## 定期実行の初回で見つかった不具合（2026-10-14）
+
+- [x] `discovery/collect.run`: コマンドがない（launchd の PATH）・時間切れでも例外にせず、失敗の終了コードを返す（T-401 の「収集の例外で全体を止めない」）
+- [x] 定期ジョブそのものの失敗の通知: `discover.py --notify` は例外・0 以外の終了コードも通知、`improve.weekly()`（改善の監査 → ACC）も失敗を通知。launchd の plist の PATH に `/usr/local/bin`（docker）を追加
