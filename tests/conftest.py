@@ -106,3 +106,13 @@ def _reset_registry_cache():
     yield
     registry.reset_cache()
 
+
+
+@pytest.fixture(autouse=True)
+def no_real_claude_stream(monkeypatch):
+    """テストでは本物の claude -p を逐次出力で呼ばない（T-1212）。必要なテストは complete_stream を差し替える。"""
+    import llm
+
+    def refuse(prompt, on_text, timeout=None):
+        raise llm.LLMError("テストでは本物の claude -p を呼ばない（complete_stream を差し替えること）")
+    monkeypatch.setattr(llm, "_stream_claude_cli", refuse)

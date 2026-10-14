@@ -105,3 +105,68 @@ def complete(prompt: str, provider: str | None = None, timeout: int | None = Non
     if name not in PROVIDERS:
         raise LLMError(f"未知の LLM プロバイダーです: {name}（{', '.join(PROVIDERS)}）")
     return PROVIDERS[name](prompt, timeout=timeout) if timeout else PROVIDERS[name](prompt)
+
+
+def _stream_claude_cli(prompt: str, on_text, timeout: int | None = None) -> str:
+    """claude -p の逐次出力（stream-json）。差分のテキストを on_text に渡し、最後に全文を返す（FR-014、T-1212）。"""
+    import selectors
+    import time
+
+    timeout = timeout or CLAUDE_CLI_TIMEOUT_SECONDS
+    cmd = [CLAUDE_BIN, "-p", "--tools", "", "--no-session-persistence", "--output-format", "stream-json",
+           "--verbose", "--include-partial-messages"]
+    deadline = time.monotonic() + timeout
+    with tempfile.TemporaryDirectory(prefix="jarvis-llm-") as workdir:
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, cwd=workdir)
+        except FileNotFoundError:
+            raise LLMError(f"Claude Code CLI が見つかりません: {CLAUDE_BIN}") from None
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+        selector = selectors.DefaultSelector()
+        selector.register(proc.stdout, selectors.EVENT_READ)
+        result = None
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise LLMError(f"Claude Code CLI が {timeout} 秒でタイムアウトしました")
+                if not selector.select(timeout=remaining):
+                    continue
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "stream_event":
+                    delta = (event.get("event") or {}).get("delta") or {}
+                    if delta.get("type") == "text_delta" and delta.get("text"):
+                        on_text(delta["text"])
+                elif event.get("type") == "result":
+                    result = event
+        finally:
+            selector.close()
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+    if result is None:
+        detail = (proc.stderr.read() if proc.stderr else "").strip()[:500]
+        raise LLMError(f"Claude Code CLI が終了コード {proc.returncode} で終了しました（利用上限の可能性あり）: {detail}")
+    if result.get("is_error") or result.get("subtype") != "success":
+        raise LLMError(f"Claude Code CLI がエラーを返しました: subtype={result.get('subtype')} "
+                       f"result={str(result.get('result', ''))[:200]}")
+    return result.get("result", "")
+
+
+def complete_stream(prompt: str, on_text, provider: str | None = None, timeout: int | None = None) -> str:
+    """complete() の逐次表示版。claude_cli では生成中の差分を on_text に渡す。
+    逐次出力のないプロバイダーは、全文を一度だけ on_text に渡す。失敗時は LLMError（別のプロバイダーに切り替えない）。"""
+    name = provider or LLM_PROVIDER
+    if name == "claude_cli" and PROVIDERS.get(name) is _complete_claude_cli:
+        return _stream_claude_cli(prompt, on_text, timeout)
+    text = complete(prompt, provider=provider, timeout=timeout)
+    on_text(text)
+    return text

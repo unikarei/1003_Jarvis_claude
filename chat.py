@@ -23,10 +23,22 @@ GREETING = """JARVISと対話します（終了: exit / quit / Ctrl+C）
 """
 
 
+_STREAM_STATE: dict = {}
+
+
+def _stream(chunk: str) -> None:
+    """答えを生成しながら表示する（T-1212）。最初の差分で「JARVIS >」を出す。"""
+    started = _STREAM_STATE.get("started")
+    if started is not None and not started[0]:
+        started[0] = True
+        print("\nJARVIS > ", end="", flush=True)
+    print(chunk, end="", flush=True)
+
+
 def main():
     print(GREETING)
     init_db()
-    ctx = orchestrator.Context()
+    ctx = orchestrator.Context(stream=_stream)
 
     while True:
         try:
@@ -41,8 +53,16 @@ def main():
             print("終了します。")
             return
 
+        started = [False]
+        _STREAM_STATE["started"] = started
         outcome = orchestrator.handle(user_input, ctx)
-        print(f"\nJARVIS > {outcome.text}\n")
+        if started[0] and ctx.shown and outcome.text.startswith(ctx.shown):
+            rest = outcome.text[len(ctx.shown):].strip()          # 答えは表示済み。出典などの残りだけ
+            print(("\n\n" + rest if rest else "") + "\n")
+        else:
+            if started[0]:
+                print()
+            print(f"\nJARVIS > {outcome.text}\n")
         try:
             record(user_input, outcome)   # 使ったスキルと成否をナレッジグラフに記録する
         except Exception as e:  # 記録の失敗で対話を止めない

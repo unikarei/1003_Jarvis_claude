@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
+import config
 import llm
 import skills
 
@@ -29,6 +30,8 @@ class Context:
     history: list = field(default_factory=list)   # ckc.models.Turn（ナレッジ化に使う）
     items: list[dict] = field(default_factory=list)   # 直前の結果の知識 {"knowledge_id", "title", "url"}
     last_skill: str | None = None
+    stream: Callable[[str], None] | None = None   # 答えを生成しながら表示する（chat.py が設定、T-1212）
+    shown: str = ""                               # stream で表示済みの部分（chat.py は残りだけを表示する）
 
 
 @dataclass
@@ -167,7 +170,9 @@ def llm_candidates(active: dict[str, skills.Skill]) -> dict[str, skills.Skill]:
     return {name: s for name, s in active.items() if effective(s) == ("read", False)}
 
 
-def route(text: str, ctx: Context, use_llm: bool = True) -> Route:
+def route(text: str, ctx: Context, use_llm: bool | None = None) -> Route:
+    """use_llm を省くと設定（config.ROUTE_WITH_LLM、既定は使わない。T-1212）に従う。"""
+    use_llm = config.ROUTE_WITH_LLM if use_llm is None else use_llm
     active = skills.active()
     found = route_by_rule(text, active) or (route_by_llm(text, llm_candidates(active), ctx) if use_llm else None)
     if found:
@@ -189,7 +194,9 @@ def _ordinal(text: str) -> int | None:
 
 def _answer(inputs, ctx, text):
     import knowledge_engine as ke
-    answer, hits = ke.answer(inputs.get("question") or text, projects=_projects(inputs))
+    answer, hits = ke.answer(inputs.get("question") or text, projects=_projects(inputs), on_text=ctx.stream)
+    if ctx.stream is not None:
+        ctx.shown = answer        # 答えの本文は表示済み。出典だけが残り
     lines = [answer, ""] + [f"[{i}] {h.title}  {h.url or h.knowledge_id}" for i, h in enumerate(hits, 1)]
     return "\n".join(lines).strip(), _hit_items(hits)
 
@@ -247,12 +254,36 @@ def _registry_dir():
     return settings.REGISTRY_DIR
 
 
+LIVE_WORDS = ("最新", "今の", "いまの", "今すぐ", "照合して")
+
+
+def summarize_guardian(report_md: str, source: str) -> str:
+    """Guardian レポート（Markdown）を、件数とエラー・警告だけの短い答えにする（T-1212）。"""
+    checked = re.search(r"検査日時: (\S+)", report_md)
+    counts = re.search(r"エラー \d+ 件・警告 \d+ 件・情報 \d+ 件", report_md)
+    lines = [f"{counts.group(0) if counts else '件数不明'}（{source}、検査日時 "
+             f"{checked.group(1)[:16].replace('T', ' ') if checked else '不明'}）"]
+    for label in ("エラー", "警告"):
+        section = re.search(rf"^## {label}\n\n(.*?)(?=\n## |\Z)", report_md, re.S | re.M)
+        if section:
+            lines += [f"{label}:"] + [line for line in section.group(1).strip().splitlines() if line.startswith("- ")]
+    if len(lines) == 1:
+        lines.append("エラー・警告はありません。")
+    return "\n".join(lines)
+
+
 def _system_status(inputs, ctx, text):
+    """既定は毎朝 07:00 の照合結果の要約。「最新」などのときだけ、その場で照合する（9〜13 秒）。"""
+    registry_dir = _registry_dir()
+    cached = registry_dir / "generated" / "guardian-report.md"
+    if not any(w in text for w in LIVE_WORDS) and cached.exists():
+        return summarize_guardian(cached.read_text(encoding="utf-8"),
+                                  "前回の照合結果（毎朝 07:00）。今の状態は「最新のシステムの状態は？」"), []
     from discovery.collect import collect
     from discovery.guardian import evaluate
     from discovery.output import guardian_report
-    registry = json.loads((_registry_dir() / "generated" / "registry.json").read_text(encoding="utf-8"))
-    return guardian_report(evaluate(registry, collect(registry))), []
+    registry = json.loads((registry_dir / "generated" / "registry.json").read_text(encoding="utf-8"))
+    return summarize_guardian(guardian_report(evaluate(registry, collect(registry))), "今の照合結果（書き込みなし）"), []
 
 
 def _dev_board(inputs, ctx, text):
@@ -385,8 +416,9 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
     return done(message, items=items)
 
 
-def handle(text: str, ctx: Context, ask: Callable[[str], str] | None = None, use_llm: bool = True) -> Outcome:
+def handle(text: str, ctx: Context, ask: Callable[[str], str] | None = None, use_llm: bool | None = None) -> Outcome:
     """発言を振り分けて実行し、文脈を更新する。"""
+    ctx.shown = ""
     r = route(text, ctx, use_llm=use_llm)
     outcome = execute(r, ctx, text, ask)
     if outcome.ok and outcome.items is not None and outcome.error != "declined":
