@@ -105,6 +105,19 @@
 - `schema.sql`: CKC 用のテーブル（`ckc_conversations`・`ckc_candidates`）を `CREATE TABLE IF NOT EXISTS` で追加。既存の `nodes`・`edges` は変えない
 - テスト: `tests/`（pytest、開発用依存 `requirements-dev.txt`）
 
+## 3.10 モジュール構成（スキルと会話からの実行、FR-014 Phase 1）
+
+設計の詳細は `../docs/architecture.md` §19（流れ、jarvis-skills の形式、Phase 1 のスキル 11 件、振り分け、権限、文脈）。
+
+- `skills.py`（新規）: jarvis-skills の `generated/skills.json` を読む（Registry の `repo-jarvis-skills` の locator、または環境変数 `JARVIS_SKILLS_JSON`）。読めなければ予備の索引（FR-014 より前から chat.py にあった `knowledge-answer`・`knowledge-capture`・`theme-register`・`code-task`）で動き、警告を出す（後方互換）
+- `orchestrator.py`（新規）: 振り分け（ルール → LLM）、入力の検証、権限の確認、実行、結果の整形、対話の文脈。スキル名 → 本リポジトリの関数の対応表を持ち、索引にあって `active` のものだけを呼ぶ
+- `chat_actions.py`（新規、T-1207）: `chat.py` から「ナレッジ化」「テーマ登録」の処理を分けたもの（`chat.py` は読み込み時に標準入出力の設定を変えるため）。`chat.py` と `orchestrator.py` が使う
+- `chat.py`（改修）: 発言を `orchestrator` に渡す。「ナレッジ化して」「テーマ登録:」の動作は変えない
+- `run_task.py`（改修）: 実行の記録（Task → uses → Skill、成否・所要時間・振り分けの方法）。既存の `run_task()` は残す
+- `config.py`: `JARVIS_SKILLS_JSON` の差し替え
+- 受け入れ（T-1210）で見つかった点の修正: LLM で選ぶのは確認の要らない読み取りのスキルだけ（書き込み・課金のあるスキルは決まった言い回しのときだけ）。Owner の発言は、応答が失敗・時間切れでもナレッジ化の材料に残す
+- 開発レビュー（`../docs/review-2026-10-14.md` §3.2）の反映（T-1211）: `confirm: true` のスキルと `code-task` は毎回確認、`orchestrator.FLOOR` に関数ごとの最低限の権限（索引と比べて厳しい方を使う）、振り分けの LLM は 60 秒・確認を待たないスキルは 120 秒で打ち切り（`llm.complete` に任意の `timeout`、`code_agent` の OpenAI に 120 秒）、実行の記録は `ckc/secrets.mask_secrets` で伏せ字
+
 ## 4. 実行基盤
 
 - 開発・実行の中心: Mac mini M4 Pro（48GB）。Windows PC は Tailscale / SSH 経由の操作端末（JARVIS-MAP-002 §3）

@@ -8,6 +8,8 @@ from openai import OpenAI
 from agent_log import log_event
 from config import OPENAI_API_KEY
 
+CODE_AGENT_TIMEOUT_SECONDS = 120
+
 CODE_MODEL = "gpt-4o-mini"  # 低単価・コード特化レイヤー
 
 SYSTEM_PROMPT = (
@@ -21,7 +23,7 @@ def run_code_task(task: str) -> str:
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEYが設定されていません。.envに追加してください。")
 
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    client = OpenAI(api_key=OPENAI_API_KEY, timeout=CODE_AGENT_TIMEOUT_SECONDS)  # 会話を止めないための上限（FR-014 F-3）
     response = client.chat.completions.create(
         model=CODE_MODEL,
         messages=[

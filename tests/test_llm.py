@@ -113,3 +113,12 @@ def test_failure_does_not_fall_back_to_paid_api(monkeypatch):
 def test_unknown_provider_raises():
     with pytest.raises(llm.LLMError, match="未知"):
         llm.complete("本文", provider="nope")
+
+
+def test_complete_passes_timeout_only_when_given(monkeypatch):
+    """timeout を渡したときだけプロバイダーに渡す（既定の動作は変えない、FR-014 F-3）。"""
+    seen = []
+    monkeypatch.setitem(llm.PROVIDERS, "fake", lambda prompt, timeout=None: seen.append(timeout) or "ok")
+    assert llm.complete("p", provider="fake") == "ok"
+    assert llm.complete("p", provider="fake", timeout=60) == "ok"
+    assert seen == [None, 60]

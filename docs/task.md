@@ -241,6 +241,16 @@
 - [x] T-903 新しいテーマの適用の受け入れ（本番とは別の Vault・Registry・DB のコピー）: 本物の claude -p で新しい Project `home-solar` の提案 → 適用（ノートの雛形 5 件、一時 worktree でブランチ・コミット・ローカルの bare リポジトリへ push）→ Owner のマージ（模擬）→ validate・render → `registry.projects()` で参照、を確認。GitHub への PR 作成（gh）だけは外部への書き込みのため実行せず、呼び出し内容を記録
 - [x] T-312（1003 分）: 本番で動いている `com.ohide.jarvis.daily-news.plist` を `scripts/launchd/` に保存（再構築の手順書の入手先。秘密情報なし。登録の手順は README）
 
+## スキルと会話からの実行（FR-014 Phase 1、`../docs/tasks.md` §12）
+
+- [x] T-1205 設計の更新（spec.md 4-11、architecture.md 3.10、本節）
+- [x] T-1206 `skills.py`（索引の読み込みと予備の索引）
+- [x] T-1207 `orchestrator.py`（ルール → LLM の振り分け、入力の検証、権限の確認、実行）
+- [x] T-1208 `chat.py` の切り替え（振り分け、普通の質問は Knowledge Engine、会話の文脈）
+- [x] T-1209 実行の記録（Task → uses → Skill、成否・所要時間・振り分けの方法）
+- [x] T-1211 開発レビューの反映（確認の必須化、最低限の権限、時間の上限、記録の伏せ字）
+- [x] T-1210 受け入れ（`../docs/testing.md` §9）: 本番とは別の DB・Vault で本物の claude -p を使い、12 の発言を確認。見つかった 2 点（Owner の発言が失敗時に材料から抜ける、決定の発言を LLM がナレッジ化に振り分ける）を修正し再確認
+
 ## 定期実行の初回で見つかった不具合（2026-10-14）
 
 - [x] `discovery/collect.run`: コマンドがない（launchd の PATH）・時間切れでも例外にせず、失敗の終了コードを返す（T-401 の「収集の例外で全体を止めない」）

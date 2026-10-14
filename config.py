@@ -25,6 +25,9 @@ CKC_DATA_DIR = Path(os.environ.get("JARVIS_CKC_DATA_DIR", BASE_DIR / "data" / "c
 REGISTRY_JSON = Path(os.environ.get(
     "JARVIS_REGISTRY_JSON", BASE_DIR.parent / "jarvis-architecture-registry" / "generated" / "registry.json"))
 HOST_ID = os.environ.get("JARVIS_HOST_ID", "host-mac-mini")  # Registry の locator を選ぶ端末
+# スキルの索引（jarvis-skills の生成物、FR-014）。skills.py が読む。Registry に repo-jarvis-skills があればその場所を優先する
+SKILLS_JSON = Path(os.environ.get(
+    "JARVIS_SKILLS_JSON", BASE_DIR.parent / "jarvis-skills" / "generated" / "skills.json"))
 FALLBACK_VAULTS = {
     "vault-oarai-obsidian": "oarai-obsidian",
     "vault-jarvis-knowledge": "jarvis-knowledge",
