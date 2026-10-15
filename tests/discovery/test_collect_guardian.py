@@ -79,6 +79,16 @@ def test_launchd_and_http(no_network, monkeypatch):
     assert collect.collect_http({"url": "https://x/"})["error"] == "ConnectionError"
 
 
+def test_healthcheck_none_is_not_checked(monkeypatch):
+    """healthcheck の type が none なら base_url も調べず、Unknown・通知なしにする（未配備の API。2026-10-16）。"""
+    monkeypatch.setattr(requests, "get", lambda url, **k: pytest.fail("調べてはいけない"))
+    res = {"resource_type": "api", "base_url": "https://x/api", "healthcheck": {"type": "none", "target": "未配備"}}
+    facts = collect.collect_http(res)
+    assert facts == {"skipped": "検査しない: 未配備"}
+    findings = []
+    assert guardian._judge_http("api-x", res, facts, findings) == ("Unknown", "検査しない: 未配備") and findings == []
+
+
 def test_full_collect_and_guardian(repo, tmp_path, monkeypatch, no_network):
     monkeypatch.setattr(settings, "WORKSPACE_DIR", tmp_path)       # repo（登録済み）と other（未登録）
     monkeypatch.setattr(settings, "VAULT_PARENT", tmp_path / "none")

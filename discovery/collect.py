@@ -124,6 +124,8 @@ def collect_launchd(resource: dict, jobs: dict[str, dict]) -> dict:
 
 def collect_http(resource: dict) -> dict:
     hc = resource.get("healthcheck") or {}
+    if hc.get("type") == "none":  # Registry で「検査しない」と決めたもの（未配備など）。target は理由
+        return {"skipped": f"検査しない: {hc.get('target') or '理由の記載なし'}"}
     url = hc.get("target") if hc.get("type") == "http" else (resource.get("url") or resource.get("base_url"))
     if not url:
         return {"skipped": "検査する URL がない"}
