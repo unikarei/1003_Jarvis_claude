@@ -175,6 +175,7 @@ JARVISはこの契約に従う。
 
 - `python discover.py --dry-run` で Registry と実態の差分を表示する。`--commit` で Registry の `discovered/`・`generated/` に記録する（`../docs/architecture.md` §11）
 - 調べるだけで何も変更しない。Registry の YAML（設計上の意図）は書き換えない
+- `--acc` で、書いた後に ACC（`reports/acc/index.html`）を作り直す（T-704。日次の launchd はこの引数で動かす）
 
 ## テスト
 

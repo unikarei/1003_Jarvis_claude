@@ -5,8 +5,10 @@
     python discover.py               # Registry リポジトリの discovered/・generated/ に書く
     python discover.py --commit      # 書いたうえで scripts/commit_registry_outputs.sh でコミット・push
     python discover.py --notify      # エラーがあれば Mac の通知センターに出す（T-203。--commit と併用可）
+    python discover.py --acc         # 書いたうえで ACC（reports/acc/index.html）を作り直す（T-704）
 
 調べるだけで、何も変更しない（git は読み取りだけ、fetch もしない）。Registry の YAML は書き換えない。
+--acc で書くのは 1003 の reports/acc/ だけ。ACC の生成に失敗してもコミットは続け、終了コードを 0 以外にする。
 """
 
 import argparse
@@ -45,6 +47,7 @@ def _main(argv=None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--commit", action="store_true")
     parser.add_argument("--notify", action="store_true", help="エラーがあれば Mac の通知センターに出す")
+    parser.add_argument("--acc", action="store_true", help="書いた後に ACC を作り直す（--dry-run では作らない）")
     args = parser.parse_args(argv)
 
     registry_json = args.registry_dir / "generated" / "registry.json"
@@ -64,10 +67,24 @@ def _main(argv=None) -> int:
         print(f"書きました: {path}")
     if args.notify and notify_errors(report):
         print("エラーを通知しました")
+    acc_rc = _build_acc(args.registry_dir) if args.acc else 0
     if args.commit:
         env = {**os.environ, "REGISTRY_REPO": str(args.registry_dir)}
-        return subprocess.run(["/bin/bash", str(COMMIT_SCRIPT)], env=env).returncode
-    return 0
+        return subprocess.run(["/bin/bash", str(COMMIT_SCRIPT)], env=env).returncode or acc_rc
+    return acc_rc
+
+
+def _build_acc(registry_dir: Path) -> int:
+    """Discovery の結果から ACC を作り直す。失敗しても Registry の出力のコミットは止めない。"""
+    from acc import build
+    try:
+        rc = build.main(["--registry-dir", str(registry_dir)])
+    except Exception as e:
+        print(f"ACC を作れません: {type(e).__name__}: {e}", file=sys.stderr)
+        return 1
+    if rc != 0:
+        print(f"ACC を作れません（終了コード {rc}）", file=sys.stderr)
+    return rc
 
 
 if __name__ == "__main__":

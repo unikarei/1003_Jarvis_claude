@@ -201,6 +201,7 @@
 - [x] `acc/build.py`: Registry と Discovery の結果から、問題・Project View・Infrastructure View・Layer View・全体構成図を1つの HTML に（`python -m acc.build`、既定の出力は `reports/acc/index.html`）
 - [ ] Tailscale 経由での配信（ネットワークへの公開のため Owner の承認待ち）
 - [ ] React / React Flow の対話型画面（npm の依存の追加のため Owner の承認待ち）
+- [x] ACC の自動更新（`../docs/tasks.md` T-704、2026-10-15 Owner 事前承認（AGENTS.md §2.1 適用））: `discover.py --acc` で Discovery の結果を書いた後・コミットの前に `acc.build` を実行。ACC の失敗ではコミットを止めず、終了コードを 0 以外にする（`--notify` で通知）。登録済みの plist に `--acc` を追加（本番への反映は main へのマージ後）
 
 ## API 連携（MAP Phase 5）
 
