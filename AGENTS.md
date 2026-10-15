@@ -100,8 +100,9 @@ Insight Reporterの定期収集を**上位ソース**として優先し、JARVIS
 - `unikarei/oarai-project-os-since2026`（private）: 大洗物件の購入判断〜開業準備を管理する「Project OS」
   （React SPA + FastAPI + 構造化JSON、独自のSDD統治`AGENTS.md`を持つ）。`data/*.json`・`docs/**/*.md` を
   読み取り専用でJARVISに取り込む（`ingest_oarai_project_os.py`）
-- 本番サイト `https://oarai.rebirth-lab.site/` とそのAPI: フロントエンドは稼働中だが、バックエンドAPI
-  （`/api/*`）は2026-10-09時点で停止中（500エラー）。復旧次第、下記の提案送信に利用する
+- 本番サイト `https://oarai.rebirth-lab.site/`: 2026-09-15 から静的モード（API を呼ばない）。API は Xserver では
+  動かさず、Mac mini のローカル（`http://127.0.0.1:8010`、環境変数 `JARVIS_OARAI_API_BASE` で変更可）で動かして
+  下記の提案送信に使う（`../docs/project-os-api-restart-plan.md` 案 A、2026-10-16 Owner 承認）
 
 ### JARVISからの「改造」（対話から構造化変更を提案）
 
@@ -114,7 +115,7 @@ JARVISはこの契約に従う。
   ステージングも行わない（同リポジトリの `runtime/` は `.gitignore` 対象であり、サーバーローカルの
   一時領域として設計されているため、GitHubコミットでは本番に反映されない）
 - 対話から生成した提案（ingestion envelope、`oarai-project-os`のAPIスキーマと同形式）はJARVIS側の
-  DBにTaskノードとして保持し、本番APIが復旧し次第 `POST /api/ingest` で送信する（`oarai_project_os.py`）
+  DBにTaskノードとして保持し、APIが応答するようになったら `POST /api/ingest` で送信する（`oarai_project_os.py`）
 - `decision_candidate` は常に `requires_user_approval=True` として扱う（oarai-project-os側のAPI仕様と
   AGENTS.mdのApproval ruleに準拠）
 

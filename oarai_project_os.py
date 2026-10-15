@@ -106,7 +106,7 @@ def submit_or_hold(envelope: dict[str, Any]) -> dict[str, Any]:
             title=f"{SUBMITTED_PREFIX}{envelope['raw_summary'][:60]}",
             content=json.dumps({"envelope": envelope, "response": response}, ensure_ascii=False),
         )
-        return {"status": "submitted", **response}
+        return {**response, "status": "submitted", "api_status": response.get("status")}
 
     node_id = insert_node(
         node_type="Task", category="minpaku",
