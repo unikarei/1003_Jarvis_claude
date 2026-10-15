@@ -262,3 +262,9 @@
 - [x] 回答の逐次表示: `llm.complete_stream`（claude -p の stream-json）、`knowledge_engine.answer(on_text=)`、`orchestrator.Context.stream`、`chat.py`
 - [x] システムの状態は前回の照合結果（Registry の guardian-report.md）の要約。「最新」「今の」などのときだけその場で照合
 - [x] テストで本物の claude -p を逐次出力で呼ばない安全策（conftest）
+
+## 声での会話（FR-014、`../docs/tasks.md` T-1213〜T-1215、2026-10-14 Owner 承認）
+
+- [x] T-1213 `voice/record.py`（Enter で開始、周囲の音から決めたしきい値で無音 0.8 秒で区切る、最長 20 秒、保存しない）、`voice/speak.py`（文ごとの読み上げ、URL・出典の番号・コード・表の区切りは読まない、スキルごとの話し言葉の要約）
+- [x] T-1214 `voice_chat.py`（orchestrator・逐次表示・読み上げ・キーボードでの確認・記録・ナレッジ化の材料）、`speech_to_text.transcribe_array`（認識のヒントの語）、faster-whisper の small モデルのダウンロード
+- [ ] T-1215 受け入れ（Owner の声で）

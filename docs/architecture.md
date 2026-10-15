@@ -115,6 +115,7 @@
 - `chat.py`（改修）: 発言を `orchestrator` に渡す。「ナレッジ化して」「テーマ登録:」の動作は変えない
 - `run_task.py`（改修）: 実行の記録（Task → uses → Skill、成否・所要時間・振り分けの方法）。既存の `run_task()` は残す
 - `config.py`: `JARVIS_SKILLS_JSON` の差し替え
+- 声での会話（`../docs/architecture.md` §19.6）: `voice_chat.py`、`voice/record.py`、`voice/speak.py`、`speech_to_text.transcribe_array`。読み上げは macOS の `say`（声 `JARVIS_VOICE`、既定 Kyoko。出力先 `JARVIS_VOICE_OUTPUT`、既定は入力と同じ機器＝ヘッドセット）。認識のヒントの語は `JARVIS_VOICE_VOCAB`
 - 受け入れ（T-1210）で見つかった点の修正: LLM で選ぶのは確認の要らない読み取りのスキルだけ（書き込み・課金のあるスキルは決まった言い回しのときだけ）。Owner の発言は、応答が失敗・時間切れでもナレッジ化の材料に残す
 - 開発レビュー（`../docs/review-2026-10-14.md` §3.2）の反映（T-1211）: `confirm: true` のスキルと `code-task` は毎回確認、`orchestrator.FLOOR` に関数ごとの最低限の権限（索引と比べて厳しい方を使う）、振り分けの LLM は 60 秒・確認を待たないスキルは 120 秒で打ち切り（`llm.complete` に任意の `timeout`、`code_agent` の OpenAI に 120 秒）、実行の記録は `ckc/secrets.mask_secrets` で伏せ字
 
