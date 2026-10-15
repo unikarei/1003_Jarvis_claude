@@ -255,6 +255,7 @@
 
 ## 定期実行の初回で見つかった不具合（2026-10-14）
 
+- [x] `discovery/collect.collect_http`: `healthcheck.type` が `none` なら base_url も調べず Unknown（通知なし）。未配備の Project OS API の誤通知の解消（2026-10-16）
 - [x] `discovery/collect.run`: コマンドがない（launchd の PATH）・時間切れでも例外にせず、失敗の終了コードを返す（T-401 の「収集の例外で全体を止めない」）
 - [x] 定期ジョブそのものの失敗の通知: `discover.py --notify` は例外・0 以外の終了コードも通知、`improve.weekly()`（改善の監査 → ACC）も失敗を通知。launchd の plist の PATH に `/usr/local/bin`（docker）を追加
 
