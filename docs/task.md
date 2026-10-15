@@ -8,6 +8,7 @@
 - [x] config.py（RSSフィード一覧・設定）
 - [x] db.py（初期化・ノード/エッジ操作・ID採番）
 - [x] fetch_news.py（RSS取得→Sourceノード、URL重複排除）— 実フィードで動作確認済み（50件取得、再実行で重複0件）
+  - [x] 題名の重複の排除（`../docs/tasks.md` T-803、PR #17）: 直近30日の同じカテゴリ・同じ題名をスキップ。2026-10-16 修正: 保存済みの題名も NFKC・空白をそろえて比べる（全角スペースの残る古い題名で再配信がすり抜けた）
 - [x] summarize.py（Claude APIで要約→Knowledge/Taskノード）— 動作確認済み（Source50件→Knowledge50件、Haiku 4.5で要約品質良好）
 - [x] generate_report.py（直近KnowledgeからMarkdownレポート生成）— 動作確認済み
 - [x] run_daily.py（上記を一気通貫で実行するエントリポイント）— 通し実行確認済み（exit 0、fetch→summarize→reportの順で正常動作）

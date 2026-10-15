@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import unicodedata
 import uuid
 from datetime import datetime, timedelta
 
@@ -123,11 +124,23 @@ def find_source_by_url(url: str) -> sqlite3.Row | None:
     return _fetchone("SELECT * FROM nodes WHERE type = 'Source' AND url = ?", (url,))
 
 
+def normalize_title(title: str | None) -> str:
+    """題名の比較用の形（NFKC で全角スペースなどをそろえ、連続する空白を1つにする）。"""
+    return " ".join(unicodedata.normalize("NFKC", title or "").split())
+
+
 def find_recent_source_by_title(category: str, title: str, days: int = 30) -> sqlite3.Row | None:
-    """同じカテゴリ・同じ題名の Source を直近 days 日から探す（URL を変えて再配信される記事の重複を防ぐ）。"""
+    """同じカテゴリ・同じ題名の Source を直近 days 日から探す（URL を変えて再配信される記事の重複を防ぐ）。
+
+    保存済みの題名も同じ規則で正規化して比べる（空白をそろえる前に保存した題名に全角スペースが残っていて、
+    完全一致では見つからなかった。2026-10-16）。"""
     since = (datetime.now() - timedelta(days=days)).isoformat()
-    return _fetchone("SELECT * FROM nodes WHERE type = 'Source' AND category = ? AND title = ? AND created_at >= ?",
-                     (category, title, since))
+    key = normalize_title(title)
+    for row in _fetchall("SELECT * FROM nodes WHERE type = 'Source' AND category = ? AND created_at >= ?",
+                         (category, since)):
+        if normalize_title(row["title"]) == key:
+            return row
+    return None
 
 
 def get_recent_knowledge(category: str | None = None, since: str | None = None) -> list[sqlite3.Row]:
