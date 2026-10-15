@@ -94,7 +94,9 @@ MAX_REPORT_AGE_DAYS = 10  # 週次レポート想定。これを超えると「�
 # JARVISはdata/*.json・docs/**/*.mdを読み取るのみで、直接書き換えやGitHubへの
 # ステージングコミットは行わない（runtime/は同リポジトリの.gitignore対象のため）。
 OARAI_PROJECT_OS_REPO = "unikarei/oarai-project-os-since2026"
-OARAI_PROJECT_OS_API_BASE = "https://oarai.rebirth-lab.site"
+# 提案の送信先。Xserver の公開サイトは静的モードで API がないため、Mac mini のローカルで動かす API に送る
+# （../docs/project-os-api-restart-plan.md 案 A、2026-10-16 Owner 承認）。止まっていれば 1003 の DB に保留する。
+OARAI_PROJECT_OS_API_BASE = os.environ.get("JARVIS_OARAI_API_BASE", "http://127.0.0.1:8010").rstrip("/")
 
 CATEGORY_NEWS = "news"
 CATEGORY_TRADING = "trading"

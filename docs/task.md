@@ -271,3 +271,8 @@
 - [x] T-1213 `voice/record.py`（Enter で開始、周囲の音から決めたしきい値で無音 0.8 秒で区切る、最長 20 秒、保存しない）、`voice/speak.py`（文ごとの読み上げ、URL・出典の番号・コード・表の区切りは読まない、スキルごとの話し言葉の要約）
 - [x] T-1214 `voice_chat.py`（orchestrator・逐次表示・読み上げ・キーボードでの確認・記録・ナレッジ化の材料）、`speech_to_text.transcribe_array`（認識のヒントの語）、faster-whisper の small モデルのダウンロード
 - [ ] T-1215 受け入れ（Owner の声で）
+
+## Project OS API の再開（`../docs/tasks.md` T-1216・`../docs/project-os-api-restart-plan.md` 案 A、2026-10-16 Owner 承認）
+
+- [x] 送信先を `JARVIS_OARAI_API_BASE`（既定 `http://127.0.0.1:8010`）に。`submit_or_hold()` が API の応答の status で "submitted" を上書きしていた不具合を修正（API の状態は `api_status`）。保留・再送・送信のテスト
+- [ ] Mac mini のローカルの API の常駐（Project OS 側の PR と launchd の登録の後に受け入れ）
