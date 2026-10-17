@@ -1,5 +1,6 @@
 """Claude APIへの問い合わせを共通化するヘルパー。"""
 
+import codecs
 import json
 import os
 import subprocess
@@ -143,8 +144,27 @@ def _stream_claude_cli(prompt: str, on_text, timeout: int | None = None, cancel=
         selector = selectors.DefaultSelector()
         selector.register(proc.stdout, selectors.EVENT_READ)
         result = None
+        fd = proc.stdout.fileno()
+        os.set_blocking(fd, False)                 # 改行を待たずに読む（行の途中で止まっても取り消せる）
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        pending, lines, eof = "", [], False
         try:
             while True:
+                if lines:
+                    line = lines.pop(0)
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("type") == "stream_event":
+                        delta = (event.get("event") or {}).get("delta") or {}
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            on_text(delta["text"])
+                    elif event.get("type") == "result":
+                        result = event
+                    continue
+                if eof:
+                    break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise LLMError(f"Claude Code CLI が {timeout} 秒でタイムアウトしました")
@@ -152,19 +172,19 @@ def _stream_claude_cli(prompt: str, on_text, timeout: int | None = None, cancel=
                     raise LLMCancelled("取り消されました")   # finally で claude -p を止める
                 if not selector.select(timeout=min(remaining, 0.1)):
                     continue
-                line = proc.stdout.readline()
-                if not line:
-                    break
                 try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
+                    chunk = os.read(fd, 65536)
+                except BlockingIOError:
                     continue
-                if event.get("type") == "stream_event":
-                    delta = (event.get("event") or {}).get("delta") or {}
-                    if delta.get("type") == "text_delta" and delta.get("text"):
-                        on_text(delta["text"])
-                elif event.get("type") == "result":
-                    result = event
+                if not chunk:
+                    eof = True
+                    pending += decoder.decode(b"", final=True)
+                    if pending:
+                        lines.append(pending)
+                    continue
+                pending += decoder.decode(chunk)
+                *complete, pending = pending.split("\n")
+                lines.extend(complete)
         finally:
             selector.close()
             if proc.poll() is None:

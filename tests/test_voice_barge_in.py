@@ -91,7 +91,9 @@ def test_player_plays_in_order_and_records_reference():
     out = s.pump()
     assert np.allclose(out[:, 0], 0.1)
     s.pump(2)
-    assert p.heard(1) == ["一文目。", "二文目。"] and not p.speaking()
+    assert p.heard(1) == ["一文目。", "二文目。"]
+    time.sleep(p.output_latency + 0.01)                   # 出力の遅れの間は読み上げ中
+    assert not p.speaking()
     assert p.level(0, time.monotonic() + 1) == pytest.approx(0.1 * 32768, rel=0.01)
 
 
@@ -431,3 +433,25 @@ def test_E2_barge_in_before_the_first_character_stops_generation(kb, monkeypatch
     assert time.monotonic() - started < 3                  # 5 秒の生成を待たずに次へ
     assert cancelled == [["とても遅い答え。"]]
     assert "二の答え。" in [s for _, s in session.player.played]
+
+
+def test_player_rejects_audio_of_interrupted_turns():
+    """合成が終わる前に割り込まれた発言の音は、後から再生の列に入らない（2 回目の指摘 1）。"""
+    p, s = _player()
+    p.set_turn(1)
+    p.set_turn(2)                                         # 割り込みで番号が進んだ
+    p.enqueue(1, "古い文。", np.full(300, 0.1, dtype=np.float32))
+    assert not p.speaking()
+    p.enqueue(2, "新しい文。", np.full(300, 0.1, dtype=np.float32))
+    assert p.speaking()
+
+
+def test_player_is_speaking_until_the_output_delay_passes():
+    """最後の音を出力に渡しても、出力の遅れの間は読み上げ中（2 回目の指摘 3）。"""
+    p, s = _player()
+    p.output_latency = 0.2
+    p.enqueue(1, "一文目。", np.full(300, 0.1, dtype=np.float32))
+    s.pump()
+    assert p.speaking()
+    time.sleep(0.25)
+    assert not p.speaking()

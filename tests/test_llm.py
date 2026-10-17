@@ -178,3 +178,69 @@ def test_stream_stops_claude_when_cancelled(monkeypatch):
         fresh._stream_claude_cli("本文", lambda t: None, timeout=30, cancel=lambda: _time.monotonic() - started > 0.2)
     assert state["killed"] and _time.monotonic() - started < 1.0
     __import__("os").close(w)
+
+
+def test_stream_can_cancel_in_the_middle_of_a_line(monkeypatch):
+    """claude -p が JSON の行の途中まで出して止まっても、取り消せる（改行を待たない）。"""
+    import importlib.util
+    import os as _os
+    import time as _time
+    spec = importlib.util.spec_from_file_location("llm_fresh3", llm.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    r, w = _os.pipe()
+    _os.write(w, b'{"type": "stream_event", "event": {"delta": {"type": "text_')   # 行の途中
+    state = {"killed": False}
+
+    class HalfLineProc:
+        def __init__(self, cmd, **kwargs):
+            self.stdin = open(_os.devnull, "w")
+            self.stdout = _os.fdopen(r, "r")
+            self.stderr = None
+            self.returncode = None
+        def poll(self): return None if not state["killed"] else -9
+        def kill(self): state["killed"] = True
+        def wait(self): return -9
+    monkeypatch.setattr(fresh.subprocess, "Popen", HalfLineProc)
+    started = _time.monotonic()
+    with pytest.raises(fresh.LLMCancelled):
+        fresh._stream_claude_cli("本文", lambda t: None, timeout=30, cancel=lambda: _time.monotonic() - started > 0.3)
+    assert state["killed"] and _time.monotonic() - started < 1.0
+    _os.close(w)
+
+
+def test_stream_parses_lines_split_across_reads(monkeypatch):
+    """1 行が複数回の読み取りに分かれても、日本語の途中で切れても正しく読む。"""
+    import importlib.util
+    import json as _json
+    import os as _os
+    import threading as _threading
+    import time as _time
+    spec = importlib.util.spec_from_file_location("llm_fresh4", llm.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    r, w = _os.pipe()
+    data = (_json.dumps({"type": "stream_event", "event": {"delta": {"type": "text_delta", "text": "こんにちは"}}},
+                        ensure_ascii=False) + "\n" +
+            _json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "こんにちは"},
+                        ensure_ascii=False) + "\n").encode()
+
+    def writer():
+        for i in range(0, len(data), 7):                  # 7 バイトずつ（文字の途中で切れる）
+            _os.write(w, data[i:i + 7])
+            _time.sleep(0.005)
+        _os.close(w)
+    _threading.Thread(target=writer, daemon=True).start()
+
+    class Proc:
+        def __init__(self, cmd, **kwargs):
+            self.stdin = open(_os.devnull, "w")
+            self.stdout = _os.fdopen(r, "r")
+            self.stderr = None
+            self.returncode = 0
+        def poll(self): return 0
+        def kill(self): pass
+        def wait(self): return 0
+    monkeypatch.setattr(fresh.subprocess, "Popen", Proc)
+    got = []
+    assert fresh._stream_claude_cli("本文", got.append, timeout=10) == "こんにちは" and got == ["こんにちは"]

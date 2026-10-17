@@ -102,6 +102,8 @@ class Player:
         self.ref: deque = deque(maxlen=3000)    # (時刻, 再生した音量 int16 換算)
         self.played: list[tuple[int, str, float]] = []   # 最後まで再生した文と、その時刻（聞いた文として履歴に残す）
         self.output_latency = 0.0
+        self.turn: int | None = None             # 受け付ける発言の番号（set_turn。古い番号の音は enqueue しない）
+        self._last_sound = 0.0                   # 最後に音を出力に渡した時刻
         if stream_factory is None:
             import sounddevice as sd
             stream_factory = lambda cb: sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",  # noqa: E731
@@ -125,6 +127,7 @@ class Player:
                 out[filled:filled + n] = audio[pos:pos + n]
                 filled += n
                 self._current[3] = pos + n
+                self._last_sound = time.monotonic()
                 if pos + n >= len(audio):
                     self.played.append((turn, sentence, time.monotonic()))
                     self._current = None
@@ -133,7 +136,15 @@ class Player:
 
     def enqueue(self, turn: int, sentence: str, audio: np.ndarray) -> None:
         with self._lock:
+            if self.turn is not None and turn != self.turn:
+                return                            # 割り込まれた発言の音は再生しない（合成と停止の競合）
             self._queue.append((turn, sentence, audio.astype(np.float32)))
+
+    def set_turn(self, turn: int) -> None:
+        """この番号の音だけを受け付け、それ以外の未再生の音を捨てる。"""
+        with self._lock:
+            self.turn = turn
+        self.stop()
 
     def stop(self) -> None:
         """未再生の音を捨てる。再生中の文も途中で止める（その文は聞いた文にしない）。出力の遅れの間に
@@ -141,12 +152,15 @@ class Player:
         with self._lock:
             self._queue.clear()
             self._current = None
+            self._last_sound = 0.0                # 止めたので、出力の遅れの分を待たない
             heard_before = time.monotonic() - self.output_latency
             self.played = [p for p in self.played if p[2] <= heard_before]
 
     def speaking(self) -> bool:
+        """再生中か、最後の音がまだスピーカーから出ている（出力の遅れの間）なら True。"""
         with self._lock:
-            return self._current is not None or bool(self._queue)
+            return (self._current is not None or bool(self._queue)
+                    or time.monotonic() < self._last_sound + self.output_latency)
 
     def level(self, start: float, end: float) -> float:
         """時刻 start〜end に再生した音量の最大（参照）。"""
@@ -229,6 +243,8 @@ class DuplexSpeaker(Speaker):
         with self._lock:
             self.turn += 1
             turn = self.turn
+        if hasattr(self.player, "set_turn"):
+            self.player.set_turn(turn)            # 再生の側でも古い番号の音を受け付けない
         self.stop()
         return turn
 
