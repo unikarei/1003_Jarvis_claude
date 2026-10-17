@@ -144,6 +144,10 @@ def dev_section(runs: list[dict] | None) -> str:
     guide = ('<p class="muted">開始・進捗・停止は操作画面で行う（VS Code のターミナルで '
              '<code>python -m acc.dev_console</code>、表示された 127.0.0.1 の URL を開く）。'
              'この表はページを生成した時点のもの。</p>')
+    archived = sum(1 for r in runs or [] if r.get("archived"))
+    runs = [r for r in runs or [] if not r.get("archived")]
+    if archived:
+        guide += f'<p class="muted">後片付け済みの run {archived} 件は操作画面の「履歴」に出す。</p>'
     if not runs:
         return guide + '<p class="muted">実行の記録はまだありません。</p>'
     def pr(url):
@@ -207,7 +211,7 @@ def main(argv=None) -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     try:
         from acc import dev_console
-        dev_runs = dev_console.list_runs(10)
+        dev_runs = dev_console.list_runs()
     except OSError:
         dev_runs = None
     args.out.write_text(build_html(registry, snapshot, improvement, dev_runs), encoding="utf-8")

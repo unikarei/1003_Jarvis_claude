@@ -289,3 +289,25 @@ def test_cleanup_refusal_and_bad_input(server, monkeypatch, tmp_path):
 def test_page_has_cleanup_button_and_help(server):
     _, page, _ = request(server, "GET", "/")
     assert "作業フォルダを削除" in page and "6. 後片付け（マージの後）" in page
+
+
+def test_cleaned_up_runs_move_to_history(ws):
+    base = ws / ".orchestrator" / "runs" / "T-7"
+    def run(name, started, events=()):
+        d = base / name
+        d.mkdir(parents=True)
+        (d / "state.json").write_text(json.dumps({"task_id": "T-7", "status": "PASS", "started_at": started,
+                                                  "cycles": [], "pid": None}))
+        (d / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    run("20261017T100000", "2026-10-17T10:00:00+09:00",
+        [{"at": "2026-10-17T10:05:00+09:00", "stage": "finished"}, {"at": "2026-10-17T12:00:00+09:00", "stage": "cleanup"}])
+    run("20261017T110000", "2026-10-17T11:00:00+09:00")   # 後片付けより前（同じタスクの別の run）も履歴へ
+    run("20261017T130000", "2026-10-17T13:00:00+09:00")   # 後片付けの後に同じ ID で開始した run は一覧に戻る
+    runs = {r["run"]: r["archived"] for r in dev_console.list_runs()}
+    assert runs == {"20261017T100000": True, "20261017T110000": True, "20261017T130000": False}
+    assert (base / "20261017T100000" / "state.json").exists()   # 記録は消さない
+
+
+def test_page_has_history_section(server):
+    _, page, _ = request(server, "GET", "/")
+    assert "履歴（後片付け済み）" in page and 'id="history"' in page
