@@ -252,7 +252,7 @@ class FakeSession:
 
     def arm(self):
         self.barged.clear(); self.armed = True
-    def disarm(self):
+    def disarm(self, turn=None):
         self.armed = False
     def listen(self, from_barge_in=False):
         self.listened.append(from_barge_in)
@@ -702,3 +702,37 @@ def test_confirmation_rearms_barge_in(kb, monkeypatch):
         warnings.simplefilter("ignore", UserWarning)
         assert voice_chat.run_barge_in(session, transcribe=lambda a: a, keys=AnswerOnAsk()) == 0
     assert armed_after["armed"] is True
+
+
+
+def test_decision_started_before_rearm_does_not_fire():
+    """判定の途中で disarm と次の arm が済んだら、前の判定では割り込みを確定しない（8 回目の指摘 2）。"""
+    s, speaker = _session()
+    s.arm()
+    gen = s._arm_gen
+    for _ in range(5):
+        s.push(_frame(5000))
+    s.disarm()
+    s.arm()                                                 # 次の発言
+    assert s._arm_gen == gen + 2
+    s.push(_frame(5000))                                    # ゲートは arm でやり直しなので、ここでは確定しない
+    assert speaker.stops == 0
+
+
+def test_disarm_with_turn_only_affects_that_turn():
+    s, speaker = _session()
+    speaker.turn = 5
+    s.arm()
+    s.disarm(turn=4)                                        # 古い発言の確認からの disarm は効かない
+    assert s.armed
+    s.disarm(turn=5)
+    assert not s.armed
+
+
+def test_player_writes_output_inside_the_lock():
+    """stop() の後のコールバックは必ず無音（出力の確定と停止が同じロック、8 回目の指摘 3）。"""
+    p, s = _player()
+    p.enqueue(1, "一文目。", np.full(3200, 0.1, dtype=np.float32))
+    s.pump()
+    p.stop()
+    assert not s.pump().any()

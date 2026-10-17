@@ -141,7 +141,7 @@ class Player:
                     self.played.append((turn, sentence, time.monotonic()))
                     self._current = None
             self.ref.append((time.monotonic(), float(np.sqrt(np.mean((out * 32768.0) ** 2)))))
-        outdata[:, 0] = out
+            outdata[:, 0] = out                   # stop() と同じロックの中で出力を確定する（停止の後に古い音を渡さない）
 
     def enqueue(self, turn: int, sentence: str, audio: np.ndarray) -> None:
         with self._lock:
@@ -351,6 +351,7 @@ class Session:
         self.armed = False
         self._arm_lock = threading.Lock()
         self._arm_turn: int | None = None          # arm したときの発言の番号（割り込みはこの発言だけを止める）
+        self._arm_gen = 0                          # arm のたびに進める（判定の途中で arm し直されたら確定しない）
         self.barged = threading.Event()
         self.barge_index: int | None = None
         self.stop_latency: list[float] = []   # 検出から再生の停止の指示までの時間（記録用）
@@ -378,12 +379,15 @@ class Session:
                 self.base += drop
             index = self.base + len(self.frames) - 1  # 通し番号
             self._cond.notify_all()
-        if self.armed and self.gate is not None:
+        with self._arm_lock:
+            armed, gen, gate = self.armed, self._arm_gen, self.gate
+        if armed and gate is not None:
             ref = self.player.level(now - self.delay - 0.04, now - self.delay + 0.04)
-            if self.gate.update(level, ref):
-                with self._arm_lock:              # disarm・次の arm と同期し、arm したときの発言だけを止める
+            if gate.update(level, ref):
+                with self._arm_lock:              # disarm・次の arm と同期し、判定を始めた arm の発言だけを止める
                     target = self._arm_turn
-                    if not self.armed or target != getattr(self.speaker, "turn", target):
+                    if (not self.armed or self._arm_gen != gen
+                            or target != getattr(self.speaker, "turn", target)):
                         return
                     self.armed = False
                     # まず止める（目標 200 ms 以内）。番号も進め、検出の後に届く古い発言の文・生成をすぐ捨てさせる
@@ -437,11 +441,15 @@ class Session:
                 self.gate.reset()
             self.barged.clear()
             self._arm_turn = getattr(self.speaker, "turn", None)
+            self._arm_gen += 1
             self.armed = True
 
-    def disarm(self) -> None:
+    def disarm(self, turn: int | None = None) -> None:
+        """割り込みを受け付けない。turn を渡したら、その発言に対して arm しているときだけ。"""
         with self._arm_lock:
-            self.armed = False
+            if turn is None or self._arm_turn == turn:
+                self.armed = False
+                self._arm_gen += 1
 
     # 録音 -------------------------------------------------------------
 
