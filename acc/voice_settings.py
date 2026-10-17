@@ -134,11 +134,18 @@ def make_handler(token: str, port: int):
         def do_POST(self):
             if not self._guard(write=True):
                 return
-            length = min(int(self.headers.get("Content-Length") or 0), 10_000)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return self._json(400, {"error": "Content-Length が違います"})
+            if not 0 <= length <= 10_000:              # 負の値・大きすぎる要求は読まない
+                return self._json(400, {"error": "要求が大きすぎるか、長さが違います"})
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except ValueError:
                 return self._json(400, {"error": "JSON ではありません"})
+            if not isinstance(body, dict):
+                return self._json(400, {"error": "JSON のオブジェクトではありません"})
             if self.path == "/api/preview":
                 try:
                     with lock:

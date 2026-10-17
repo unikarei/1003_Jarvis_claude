@@ -147,7 +147,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise urllib.error.HTTPError(req.full_url, code, "転送は追いません", headers, fp)
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+# プロキシを使わない（環境変数の HTTP_PROXY があっても、ローカルのエンジンへの文を外のプロキシへ送らない）
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
 
 
 def _cancellable(fn, cancel: threading.Event | None, timeout: float):
@@ -226,6 +227,8 @@ class VoicevoxEngine(Engine):
             query = json.loads(_cancellable(
                 lambda: self._post("/audio_query?" + urlencode({"text": text, "speaker": style})), cancel,
                 HTTP_TIMEOUT))
+            if not isinstance(query, dict):
+                raise TTSError(f"{self.label} の応答の形が違います")
             query.update(speedScale=settings.rate, intonationScale=settings.intonation, pitchScale=settings.pitch)
             wav = _cancellable(lambda: self._post("/synthesis?" + urlencode({"speaker": style}),
                                                   json.dumps(query).encode()), cancel, HTTP_TIMEOUT)

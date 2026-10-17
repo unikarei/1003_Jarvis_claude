@@ -369,3 +369,30 @@ def test_code_fence_line_with_commas_is_not_spoken():
     sp.wait()
     assert played == ["終わりの文。"]
     sp.close()
+
+
+
+def test_local_engine_ignores_proxy_and_rejects_odd_query(fake_voicevox, monkeypatch):
+    """HTTP_PROXY があってもプロキシを使わない。/audio_query の応答が辞書でなければ TTSError（5 回目の指摘 1・2）。"""
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")              # 使われたら接続に失敗する
+    monkeypatch.setenv("NO_PROXY", "")
+    engine, _ = fake_voicevox
+    assert len(engine.synthesize("文", tts.VoiceSettings(engine="voicevox", speaker="13"))) == 16000
+    monkeypatch.setattr(engine, "_post", lambda path, body=None, timeout=10: b"[]")
+    with pytest.raises(tts.TTSError):
+        engine.synthesize("文", tts.VoiceSettings(engine="voicevox", speaker="13"))
+
+
+def test_settings_page_rejects_bad_content_length(server):
+    """負の・大きすぎる・数でない Content-Length は読まずに断る（5 回目の指摘 3）。"""
+    port = server.server_address[1]
+    for value in ("-1", "100000", "abc"):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        c.putrequest("POST", "/api/settings")
+        for k, v in (("Host", f"127.0.0.1:{port}"), ("Cookie", f"jarvis_voice_settings={TOKEN}"),
+                     ("X-Jarvis-Console", "1"), ("Content-Length", value)):
+            c.putheader(k, v)
+        c.endheaders()
+        assert c.getresponse().status == 400, value
+        c.close()
+    assert req(server, "POST", "/api/settings", [1, 2])[0] == 400
