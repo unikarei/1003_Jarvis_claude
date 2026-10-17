@@ -41,6 +41,15 @@ if sys.argv[1] == "run":
         sys.exit(4)
     signal.signal(signal.SIGTERM, stop)
     time.sleep(30)
+elif sys.argv[1] == "worktrees":
+    Path(os.environ["FAKE_ARGS"] + ".wt").write_text("called")
+    print(os.environ.get("FAKE_WORKTREES", "[]"))
+elif sys.argv[1] == "cleanup":
+    Path(os.environ["FAKE_ARGS"] + ".cleanup").write_text(json.dumps(sys.argv[1:]))
+    if os.environ.get("FAKE_CLEANUP_REFUSE"):
+        print("消しません: origin/main にマージされていない", file=sys.stderr)
+        sys.exit(1)
+    print("消しました: /ws/.worktrees/demo-orch-t-9")
 elif sys.argv[1] == "stop":
     pid = int(lock.read_text())
     os.kill(pid, signal.SIGTERM)
@@ -244,3 +253,39 @@ def test_help_dialog(server):
                  "5. 結果を見て判断する", "同じ ID は使い回せません"):
         assert text in page, text
     assert "help.showModal()" in page
+
+
+WT = [{"task_id": "T-9", "run": "20261017T100000", "removable": True, "reason": None},
+      {"task_id": "T-8", "run": "20261017T090000", "removable": False, "reason": "origin/main にマージされていない"}]
+
+
+def test_worktrees_are_listed_and_cached(server, monkeypatch, tmp_path):
+    monkeypatch.setenv("FAKE_WORKTREES", json.dumps(WT))
+    code, data, _ = request(server, "GET", "/api/worktrees")
+    assert code == 200 and data["worktrees"] == WT
+    (tmp_path / "args.json.wt").unlink()
+    request(server, "GET", "/api/worktrees")
+    assert not (tmp_path / "args.json.wt").exists()        # 60 秒は使い回す（git fetch を減らす）
+    request(server, "GET", "/api/worktrees?refresh=1")
+    assert (tmp_path / "args.json.wt").exists()
+    assert request(server, "GET", "/api/worktrees", cookie=False)[0] == 401
+
+
+def test_cleanup_calls_orchestrator_with_fixed_args(server, tmp_path):
+    code, data, _ = request(server, "POST", "/api/cleanup", {"task_id": "T-9"})
+    assert code == 200 and "消しました" in data["message"]
+    assert json.loads((tmp_path / "args.json.cleanup").read_text()) == ["cleanup", "T-9"]
+
+
+def test_cleanup_refusal_and_bad_input(server, monkeypatch, tmp_path):
+    monkeypatch.setenv("FAKE_CLEANUP_REFUSE", "1")
+    code, data, _ = request(server, "POST", "/api/cleanup", {"task_id": "T-8"})
+    assert code == 409 and "マージされていない" in data["message"]
+    for bad in ("../x", "T-9; rm -rf /", ""):
+        assert request(server, "POST", "/api/cleanup", {"task_id": bad})[0] == 400, bad
+    assert request(server, "POST", "/api/cleanup", {"task_id": "T-9"}, csrf=False)[0] == 403
+
+
+def test_page_has_cleanup_button_and_help(server):
+    _, page, _ = request(server, "GET", "/")
+    assert "作業フォルダを削除" in page and "6. 後片付け（マージの後）" in page
