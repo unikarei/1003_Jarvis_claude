@@ -172,6 +172,20 @@ def test_ollama_stream_cancel_closes_socket_held_by_response(ollama, protocol, c
     assert not any(t.name == "jarvis-ollama-reader" and t.is_alive() for t in threading.enumerate())
 
 
+def test_ollama_stream_cancel_in_last_delta_with_done(ollama):
+    """done: true の行に本文があり、その on_text の中で取り消されたら、全文を返さず LLMCancelled。"""
+    def stream(h, body):
+        _start_stream(h)
+        h.wfile.write(_line("最初"))
+        h.wfile.write(_line("最後", done=True))
+        h.wfile.flush()
+    ollama.on_post = stream
+    got = []
+    with pytest.raises(llm.LLMCancelled):
+        llm.complete_stream("質問", got.append, provider="ollama", cancel=lambda: "最後" in got)
+    assert got == ["最初", "最後"]
+
+
 def test_ollama_stream_cancel_while_waiting(ollama):
     """最初の行が届く前でも、0.1 秒ごとに取り消しを確かめる。"""
     ollama.on_post = lambda h, body: (_start_stream(h), h.wfile.flush(), time.sleep(3))

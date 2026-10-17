@@ -455,6 +455,8 @@ def _stream_ollama(prompt: str, on_text, timeout: int | None = None, cancel=None
             if text:
                 parts.append(text)
                 on_text(text)
+            if cancel is not None and cancel():        # 最後の差分の on_text の中で取り消された
+                raise LLMCancelled("取り消されました")
             if event.get("done"):
                 break
     finally:
