@@ -79,13 +79,15 @@ def allowed_tasks() -> dict[str, dict]:
 
 
 def completed_task_ids() -> set[str]:
-    """一度でも PASS した task_id（完了済み）。開始のリストから外し、開始も断る。"""
+    """完了済みの task_id: 一度でも PASS したもの、または後片付け（作業フォルダの削除）が済んだもの。
+    後片付けは作業ブランチが main にマージ済みのときだけできるため、判定が PASS でなくても（Claude Code が
+    残りを確かめてマージした場合など）完了として扱う。開始のリストから外し、開始も断る。"""
     done = set()
     for f in runs_dir().glob("*/*/state.json"):
         s = _read_json(f)
         if isinstance(s, dict) and s.get("status") == "PASS" and s.get("task_id"):
             done.add(s["task_id"])
-    return done
+    return done | set(cleanup_times([f.parent for f in runs_dir().glob("*/*/state.json")]))
 
 
 def startable_tasks() -> tuple[dict[str, dict], list[dict]]:
@@ -215,7 +217,7 @@ class Controller:
     def start(self, name: str, pr: bool) -> tuple[int, dict]:
         tasks, done = startable_tasks()
         if any(t["name"] == name for t in done):
-            return 400, {"error": "完了済み（PASS 済み）の指示書です。やり直すときは新しい task_id の指示書を作ってください"}
+            return 400, {"error": "完了済み（PASS 済み、またはマージして後片付け済み）の指示書です。やり直すときは新しい task_id の指示書を作ってください"}
         if name not in tasks:
             return 400, {"error": "開始できる指示書ではありません（docs/codex/ の、コミット済みで未変更のものだけ）"}
         with self._lock:
@@ -447,7 +449,7 @@ test: .venv/bin/python -m pytest tests -q
 ## 制約（変更してよいファイル、変えてはいけないこと）</pre>
 <p>見本は <code>docs/codex/T-1304_knowledge_audit_json.md</code>。Codex は「仕様と制約を満たしているか」でレビューするため、具体的に書くほど判定の精度が上がります。Claude Code に「〜の指示書を作って」と頼むこともできます。</p>
 <h3>2. 指示書をコミットする</h3>
-<p>一度 PASS した指示書（完了済み）は開始のリストに出ません。やり直すときは新しい task_id の指示書を作ります。</p>
+<p>一度 PASS した指示書と、マージして後片付けした指示書（完了済み）は開始のリストに出ません。やり直すときは新しい task_id の指示書を作ります。</p>
 <p>指示書の <code>setup</code>・<code>test</code> はシェルで実行されるため、画面に出るのは<strong>コミット済みで、その後に変更していない</strong>指示書だけです。</p>
 <h3>3. 画面で開始する</h3>
 <p>指示書を選ぶ → 必要なら「PASS なら PR を作る」にチェック → 「開始」→ 確認で OK。Claude・Codex の利用枠を使います。05:30〜07:30 は開始できません（理由が出ます）。</p>
@@ -514,7 +516,7 @@ async function loadTasks() {
   document.getElementById("task").innerHTML = d.tasks.map(t => `<option value="${esc(t.name)}">${esc(t.task_id)}（${esc(t.repo)}）${esc(t.name)}</option>`).join("") ||
     '<option value="">開始できる指示書はありません（新しい指示書を docs/codex/ にコミットする）</option>';
   document.getElementById("done").textContent = d.completed.length ?
-    `完了済み（PASS 済み）で外した指示書: ${d.completed.length} 件（${d.completed.map(t => t.task_id).join("、")}）` : "";
+    `完了済み（PASS 済み・マージして後片付け済み）で外した指示書: ${d.completed.length} 件（${d.completed.map(t => t.task_id).join("、")}）` : "";
 }
 async function loadRuns() {
   const [code, d] = await api("/api/runs");

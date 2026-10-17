@@ -328,3 +328,15 @@ def test_not_passed_tasks_stay_startable(ws, server):
     d.mkdir(parents=True)
     (d / "state.json").write_text(json.dumps({"task_id": "T-1", "status": "CHANGES_REQUESTED", "cycles": []}))
     assert [t["task_id"] for t in request(server, "GET", "/api/tasks")[1]["tasks"]] == ["T-1"]
+
+
+def test_cleaned_up_task_is_completed_even_without_pass(ws, server):
+    """判定が CHANGES_REQUESTED でも、後片付け（マージ済みでだけできる）が済めば完了済み。"""
+    d = ws / ".orchestrator" / "runs" / "T-1" / "20261017T090000"
+    d.mkdir(parents=True)
+    (d / "state.json").write_text(json.dumps({"task_id": "T-1", "status": "CHANGES_REQUESTED", "cycles": []}))
+    assert [t["task_id"] for t in request(server, "GET", "/api/tasks")[1]["tasks"]] == ["T-1"]
+    (d / "events.jsonl").write_text(json.dumps({"at": "2026-10-17T23:00:00+09:00", "stage": "cleanup"}) + "\n")
+    data = request(server, "GET", "/api/tasks")[1]
+    assert data["tasks"] == [] and [t["task_id"] for t in data["completed"]] == ["T-1"]
+    assert request(server, "POST", "/api/start", {"task": "T-1_ok.md"})[0] == 400
