@@ -1,0 +1,59 @@
+[
+  {
+    "title": "架空の旅行計画",
+    "create_time": 1760000000.5,
+    "update_time": 1760000300.0,
+    "id": "chatgpt-conv-001",
+    "current_node": "n5",
+    "unknown_field": {"ignored": true},
+    "mapping": {
+      "root": {"id": "root", "message": null, "parent": null, "children": ["n1"]},
+      "n1": {
+        "id": "n1", "parent": "root", "children": ["n2"],
+        "message": {"author": {"role": "system"}, "content": {"content_type": "text", "parts": ["あなたは親切なアシスタントです"]}, "create_time": 1760000000.0}
+      },
+      "n2": {
+        "id": "n2", "parent": "n1", "children": ["n3a", "n3b"],
+        "message": {"author": {"role": "user"}, "content": {"content_type": "multimodal_text", "parts": [{"asset_pointer": "file-service://dummy"}, "架空の町への旅行の候補を出して"]}, "create_time": 1760000010.0}
+      },
+      "n3a": {
+        "id": "n3a", "parent": "n2", "children": [],
+        "message": {"author": {"role": "assistant"}, "content": {"content_type": "text", "parts": ["表示されていない枝の回答"]}, "create_time": 1760000020.0}
+      },
+      "n3b": {
+        "id": "n3b", "parent": "n2", "children": ["n4"],
+        "message": {"author": {"role": "tool", "name": "browser"}, "content": {"content_type": "text", "parts": ["ツールの出力"]}, "create_time": 1760000030.0}
+      },
+      "n4": {
+        "id": "n4", "parent": "n3b", "children": ["n5"],
+        "message": {"author": {"role": "assistant"}, "content": {"content_type": "text", "parts": ["候補は海辺の町と山の町です"]}, "create_time": 1760000040.0}
+      },
+      "n5": {
+        "id": "n5", "parent": "n4", "children": [],
+        "message": {"author": {"role": "user"}, "content": {"content_type": "text", "parts": ["  海辺の町にします  "]}, "create_time": 1760000050.0}
+      }
+    }
+  },
+  {
+    "title": "mapping のない会話",
+    "create_time": 1760000100.0,
+    "id": "chatgpt-conv-002"
+  },
+  {
+    "create_time": 1760000200.0,
+    "conversation_id": "chatgpt-conv-003",
+    "mapping": {
+      "a": {"id": "a", "parent": null, "children": ["b"], "message": {"author": {"role": "user"}, "content": {"parts": ["題名のない質問"]}, "create_time": 1760000201.0}},
+      "b": {"id": "b", "parent": "a", "children": [], "message": {"author": {"role": "assistant"}, "content": {"parts": ["", "答えです"]}}}
+    }
+  },
+  {
+    "title": "システムの発言だけの会話",
+    "create_time": 1760000300.0,
+    "id": "chatgpt-conv-004",
+    "current_node": "s",
+    "mapping": {
+      "s": {"id": "s", "parent": null, "children": [], "message": {"author": {"role": "system"}, "content": {"parts": ["システム"]}}}
+    }
+  }
+]
