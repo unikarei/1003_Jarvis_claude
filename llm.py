@@ -426,6 +426,7 @@ def _stream_ollama(prompt: str, on_text, timeout: int | None = None, cancel=None
 
     threading.Thread(target=reader, name="jarvis-ollama-reader", daemon=True).start()
     parts = []
+    done = False
     try:
         while True:
             if cancel is not None and cancel():
@@ -437,7 +438,9 @@ def _stream_ollama(prompt: str, on_text, timeout: int | None = None, cancel=None
                 item = items.get(timeout=min(remaining, 0.1))
             except queue.Empty:
                 continue
-            if item is None:
+            if item is None:                       # 接続が終わった
+                if not done:                       # done: true の前に切れた（途中の答えを成功にしない）
+                    raise LLMError("Ollama の応答が途中で切れました（done を受け取れませんでした）")
                 break
             if isinstance(item, LLMError):
                 raise item
@@ -458,6 +461,7 @@ def _stream_ollama(prompt: str, on_text, timeout: int | None = None, cancel=None
             if cancel is not None and cancel():        # 最後の差分の on_text の中で取り消された
                 raise LLMCancelled("取り消されました")
             if event.get("done"):
+                done = True
                 break
     finally:
         with sock_lock:

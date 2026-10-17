@@ -392,3 +392,17 @@ def test_warm_up_claude_failure_returns_false(monkeypatch, tmp_path):
 
 def test_new_providers_registered():
     assert {"claude_cli", "anthropic_api", "ollama", "claude_warm"} <= set(llm.PROVIDERS)
+
+
+
+def test_ollama_stream_cut_before_done_raises(ollama):
+    """done: true の前に接続が切れたら、受け取った断片を成功として返さず LLMError（Codex の 3 回目の指摘）。"""
+    def stream(h, body):
+        _start_stream(h)
+        h.wfile.write(_line("途中まで"))
+        h.wfile.flush()
+        h.close_connection = True                          # done を送らずに終わる
+    ollama.on_post = stream
+    got = []
+    with pytest.raises(llm.LLMError, match="途中で切れました"):
+        llm.complete_stream("質問", got.append, provider="ollama")
