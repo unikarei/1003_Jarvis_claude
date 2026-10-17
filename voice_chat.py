@@ -106,6 +106,8 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
     def ask_for(turn: int):
         """発言 turn 専用の確認。割り込まれた（番号が進んだ）発言の確認は、何もせず「実行しない」にする。"""
         def ask(prompt: str) -> str:
+            if turn != speaker.turn:          # 割り込まれた発言の確認は、何も触らずに「実行しない」
+                return "n"
             # ロックの順番は「割り込みの判定 → 読み上げ」（マイクの側と同じ）。読み上げのロックを持ったまま
             # 割り込みの判定のロックを取らない（取り合いで止まらないように）
             session.disarm()                  # 確認を待つ間は割り込みを受けない
@@ -120,6 +122,8 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
                 return keys.get()
             finally:
                 state["asking"] = False
+                if turn == speaker.turn:
+                    session.arm()             # 確認の後の生成・読み上げでも割り込めるように
         return ask
 
     ctx = orchestrator.Context(voice=True)

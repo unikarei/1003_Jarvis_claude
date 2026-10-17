@@ -19,23 +19,33 @@ def _frame(level: float) -> np.ndarray:
 # ---------------------------------------------------------------- 判定
 
 def test_gate_ignores_noise_and_echo_but_fires_on_voice():
-    gate = duplex.EchoGate(noise=270, coupling=0.3, confirm_seconds=0.16)   # 8 フレーム
+    gate = duplex.EchoGate(noise=270, coupling=0.3)        # 0.16 秒のうち 0.12 秒（6 フレーム）
     assert gate.threshold(0) == 540                      # 再生がなければ周囲の音 × 2
     for _ in range(50):                                  # 周囲の音だけ
         assert not gate.update(280)
     for _ in range(50):                                  # 自分の声の回り込み（再生 2000 × 0.3 + 周囲の音）
         assert not gate.update(270 + 0.3 * 2000, ref=2000)
     fired = [gate.update(270 + 0.3 * 2000 + 3000, ref=2000) for _ in range(10)]   # 回り込みの上に人の声
-    assert fired.index(True) == 7 and fired.count(True) == 1    # 0.16 秒で 1 回だけ
+    assert fired.index(True) == 5 and fired.count(True) == 1    # 0.12 秒で 1 回だけ
 
 
 def test_gate_needs_sustained_voice():
     gate = duplex.EchoGate(noise=270)
-    for _ in range(5):                                   # 0.1 秒の物音では止めない
+    for _ in range(3):                                   # 0.06 秒の物音では止めない
         assert not gate.update(5000)
-    assert not gate.update(270)
-    assert not any(gate.update(5000) for _ in range(7))
+    for _ in range(8):
+        assert not gate.update(270)
+    assert not any(gate.update(5000) for _ in range(5))
     assert gate.update(5000)
+
+
+def test_gate_tolerates_a_short_pause_inside_a_word():
+    """「ちょっと」の「っ」のような短い間（約 0.04 秒）があっても数え直さない。"""
+    gate = duplex.EchoGate(noise=270)
+    pattern = [3000] * 4 + [270] * 2 + [3000] * 2
+    fired = [gate.update(x) for x in pattern]
+    assert fired[-1] and fired.count(True) == 1
+    assert gate.onset_back == 7                          # 声の始まりは 7 フレーム前
 
 
 def test_short_backchannel_is_detected():
@@ -190,10 +200,10 @@ def test_session_barges_in_only_when_armed():
     for _ in range(20):
         s.push(_frame(270 + 0.3 * 2000))                  # 自分の声の回り込みだけ
     assert not s.barged.is_set()
-    for _ in range(8):
+    for _ in range(6):
         s.push(_frame(5000))
     assert s.barged.is_set() and speaker.stops == 1 and not s.armed
-    assert s.barge_index == 47 - 8 - duplex.Session.PREROLL_FRAMES
+    assert s.barge_index == 45 - 5 - duplex.Session.PREROLL_FRAMES          # 声の始まりの 60 ms 前
     assert s.stop_latency and s.stop_latency[0] < 0.2
 
 
@@ -607,13 +617,13 @@ def test_barge_in_is_bound_to_the_armed_turn():
     s, speaker = _session()
     speaker.turn = 1
     s.arm()
-    for _ in range(7):
+    for _ in range(5):
         s.push(_frame(5000))
     s.disarm()
     s.push(_frame(5000))
     assert speaker.stops == 0 and not s.barged.is_set()
     s.arm()
-    for _ in range(7):
+    for _ in range(5):
         s.push(_frame(5000))
     speaker.turn = 2                                        # arm したまま、次の発言になった
     s.push(_frame(5000))
@@ -645,3 +655,50 @@ def test_normal_listening_starts_after_own_voice_ends():
     assert audio is not None
     assert int((np.abs(audio * 32768) > 3000).sum()) == 0   # 自分の声は入らない
     assert int((np.abs(audio * 32768) > 1500).sum()) >= 30 * duplex.FRAME
+
+
+
+def test_audio_after_barge_in_does_not_include_earlier_echo():
+    """割り込みの後の録音は、声の始まりの直前から。それより前の JARVIS の声の回り込みは入れない（7 回目の指摘 3）。"""
+    s, _ = _session(ref=2000)
+    for _ in range(20):
+        s.push(_frame(270))
+    s.arm()
+    for _ in range(25):                                     # 読み上げ中の回り込みだけ（0.5 秒）
+        s.push(_frame(270 + 0.3 * 2000 * 0.9))
+    for _ in range(30):                                     # Owner の声（回り込みの上に）
+        s.push(_frame(4000))
+    assert s.barged.is_set()
+    for _ in range(60):
+        s.push(_frame(270))
+    audio = s.listen(from_barge_in=True)
+    levels = np.abs(audio * 32768)
+    echo_samples = int(((levels > 700) & (levels < 3000)).sum())
+    assert echo_samples <= duplex.Session.PREROLL_FRAMES * duplex.FRAME   # 回り込みは始まりの 60 ms まで
+    assert int((levels > 3000).sum()) >= 30 * duplex.FRAME
+
+
+def test_confirmation_rearms_barge_in(kb, monkeypatch):
+    """書き込みの確認が終わったら、割り込みを受け付け直す（7 回目の指摘 2）。"""
+    import orchestrator
+    session = FakeSession(["書き込みの依頼"])
+    armed_after = {}
+
+    def fake_handle(text, ctx, ask=None):
+        ask("実行しますか？ [y/N] > ")
+        armed_after["armed"] = session.armed
+        return orchestrator.Outcome("knowledge-capture", "rule", {}, "実行しませんでした。", True, 0, [], "declined")
+    monkeypatch.setattr(orchestrator, "handle", fake_handle)
+
+    class AnswerOnAsk(queue.Queue):
+        """確認（get）のときだけ「n」を返す。会話の側の見回り（get_nowait）には何も渡さない。"""
+        def get(self, block=True, timeout=None):
+            if not block:
+                raise queue.Empty
+            return "n"
+    import voice_chat
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        assert voice_chat.run_barge_in(session, transcribe=lambda a: a, keys=AnswerOnAsk()) == 0
+    assert armed_after["armed"] is True

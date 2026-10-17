@@ -25,7 +25,8 @@ from voice.speak import SENTENCE_END, Speaker, speakable
 SAMPLE_RATE = 16000
 FRAME = 320                    # 20 ms
 FRAME_SECONDS = FRAME / SAMPLE_RATE
-CONFIRM_SECONDS = 0.16         # 割り込みとみなすまでの、声が続く長さ（物音・回り込みの一瞬で止めない）
+CONFIRM_SECONDS = 0.12         # 割り込みとみなす声の長さ（物音・回り込みの一瞬で止めない）
+WINDOW_SECONDS = 0.16          # この長さの中で CONFIRM_SECONDS 分が声なら割り込み（「ちょっと」の「っ」の間で数え直さない）
 ECHO_MARGIN = 3.0              # 予測した回り込みの何倍を超えたら人の声とみなすか
 ECHO_SAFETY = 1.5              # 測った回り込みに掛ける余裕
 MAX_DELAY_SECONDS = 0.3        # 再生からマイクに届くまでの遅れの探索の上限
@@ -51,10 +52,16 @@ class EchoGate:
     """20 ms ごとに、マイクの音量と、その時点で届いているはずの再生の音量（参照）から、人が話しているかを判定する。"""
 
     def __init__(self, noise: float, coupling: float = 0.0, factor: float = rec.THRESHOLD_FACTOR,
-                 margin: float = ECHO_MARGIN, confirm_seconds: float = CONFIRM_SECONDS):
+                 margin: float = ECHO_MARGIN, confirm_seconds: float | None = None,
+                 window_seconds: float = WINDOW_SECONDS):
         self.noise, self.coupling, self.factor, self.margin = noise, coupling, factor, margin
+        if confirm_seconds is None:
+            confirm_seconds = float(os.environ.get("JARVIS_VOICE_BARGE_CONFIRM_SECONDS", CONFIRM_SECONDS))
         self.confirm = max(1, round(confirm_seconds / FRAME_SECONDS))
-        self.count = 0
+        self.window = max(self.confirm, round(window_seconds / FRAME_SECONDS))
+        self.recent: deque = deque(maxlen=self.window)   # 直近のフレームが声だったか
+        self.fired = False
+        self.onset_back = 0                                # 割り込みの時、声の始まりは何フレーム前か
 
     def threshold(self, ref: float) -> float:
         """周囲の音のしきい値と、回り込みの予測 × 余裕の大きいほう。"""
@@ -62,15 +69,17 @@ class EchoGate:
         return max(base, self.noise + self.margin * self.coupling * ref)
 
     def update(self, mic: float, ref: float = 0.0) -> bool:
-        """声が confirm フレーム続いたら True（1 回だけ。reset まで再び True にならない）。"""
-        if mic >= self.threshold(ref):
-            self.count += 1
-            return self.count == self.confirm
-        self.count = 0
-        return False
+        """直近 window フレームのうち confirm フレームが声なら True（1 回だけ。reset まで再び True にならない）。"""
+        self.recent.append(mic >= self.threshold(ref))
+        if self.fired or not self.recent[-1] or sum(self.recent) < self.confirm:
+            return False
+        self.fired = True
+        self.onset_back = len(self.recent) - 1 - list(self.recent).index(True)
+        return True
 
     def reset(self) -> None:
-        self.count = 0
+        self.recent.clear()
+        self.fired = False
 
 
 def estimate_coupling(mic: list[float], ref: list[float], noise: float,
@@ -328,7 +337,8 @@ class DuplexSpeaker(Speaker):
 class Session:
     """マイクを開きっぱなしにして、割り込みの判定（arm の間）と発話の録音を行う。"""
 
-    PREROLL_FRAMES = 15        # 割り込みの検出の前 0.3 秒も発話に含める
+    PREROLL_FRAMES = 3         # 割り込みの声の始まり（判定の最初のフレーム）の 60 ms 前から録る。それより前は
+                               # JARVIS の声の回り込みが混ざりうるので含めない
 
     def __init__(self, player: Player, speaker: DuplexSpeaker, device: str | None = None,
                  stream_factory: Callable | None = None):
@@ -381,8 +391,8 @@ class Session:
                 stopped = time.monotonic()
                 self.stop_latency.append(stopped - now)
                 with self._cond:
-                    self.barge_index = max(self.base, index - self.gate.confirm - self.PREROLL_FRAMES)
-                    onset = self.frames[max(0, index - self.gate.confirm + 1 - self.base)][0]
+                    self.barge_index = max(self.base, index - self.gate.onset_back - self.PREROLL_FRAMES)
+                    onset = self.frames[max(0, index - self.gate.onset_back - self.base)][0]
                 out_ms = round(getattr(self.player, "output_latency", 0.0) * 1000)
                 self.events.append({"detect_ms": round((now - onset) * 1000 + FRAME_SECONDS * 1000),
                                     "stop_call_ms": round((stopped - now) * 1000, 1), "output_ms": out_ms})
@@ -468,7 +478,7 @@ class Session:
                         break
             self.barge_index = None
         # 割り込みの後は、判定がすでに人の声と確かめているので、短い相づち（「うん」「はい」）も録る
-        audio = rec.segment(self._blocks(start), threshold, preroll_blocks=3,
+        audio = rec.segment(self._blocks(start), threshold, preroll_blocks=0 if barge else 3,
                             min_speech_seconds=0.1 if barge else rec.MIN_SPEECH_SECONDS)
         return None if audio is None else audio.astype(np.float32) / 32768.0
 
