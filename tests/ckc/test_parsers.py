@@ -24,7 +24,7 @@ def test_chatgpt_converts_current_branch_only():
     assert conv.origin == Origin.CHATGPT
     assert conv.title == "架空の旅行計画"
     assert conv.captured_at == CAPTURED_AT
-    assert conv.occurred_at == "2025-10-09T08:53:20+00:00"
+    assert conv.occurred_at == "2025-10-09T08:53:20.500000+00:00"  # 小数秒を保つ
     # 表示されていない枝（n3a）・system・tool・文字列以外の parts は入らない
     assert [(t.speaker, t.text) for t in conv.turns] == [
         (Speaker.OWNER, "架空の町への旅行の候補を出して"),
@@ -85,6 +85,63 @@ def test_non_list_file_raises_value_error(tmp_path, parse, data):
     path.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(ValueError):
         parse(path, CAPTURED_AT)
+
+
+def _chatgpt_conv(conv_id, role="user", **extra):
+    node = {"parent": None, "children": [],
+            "message": {"author": {"role": role}, "content": {"parts": ["本文"]}}}
+    return {"id": conv_id, "create_time": 1760000000, "mapping": {"a": node}, **extra}
+
+
+def _claude_conv(conv_id, sender="human", **extra):
+    return {"uuid": conv_id, "created_at": "2026-10-01T09:00:00Z",
+            "chat_messages": [{"sender": sender, "text": "本文"}], **extra}
+
+
+def _write(tmp_path, data):
+    path = tmp_path / "conversations.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("value", [None, "1760000000", True, 1e30])
+def test_chatgpt_invalid_create_time_is_skipped_with_warning(tmp_path, value):
+    bad = _chatgpt_conv("bad")
+    if value is None:
+        del bad["create_time"]
+    else:
+        bad["create_time"] = value
+    result = parse_chatgpt_export(_write(tmp_path, [bad, _chatgpt_conv("ok")]), CAPTURED_AT)
+    assert [c.external_id for c in result.conversations] == ["ok"]
+    assert result.conversations[0].occurred_at == "2025-10-09T08:53:20+00:00"
+    assert len(result.warnings) == 1 and "bad" in result.warnings[0] and "create_time" in result.warnings[0]
+
+
+@pytest.mark.parametrize("value", [None, "", "昨日", 1759309200])
+def test_claude_invalid_created_at_is_skipped_with_warning(tmp_path, value):
+    bad = _claude_conv("bad")
+    if value is None:
+        del bad["created_at"]
+    else:
+        bad["created_at"] = value
+    result = parse_claude_export(_write(tmp_path, [bad, _claude_conv("ok")]), CAPTURED_AT)
+    assert [c.external_id for c in result.conversations] == ["ok"]
+    assert result.conversations[0].occurred_at == "2026-10-01T09:00:00Z"
+    assert len(result.warnings) == 1 and "bad" in result.warnings[0] and "created_at" in result.warnings[0]
+
+
+@pytest.mark.parametrize("role", [["user"], {"name": "user"}, 1])
+def test_chatgpt_non_string_role_is_excluded(tmp_path, role):
+    result = parse_chatgpt_export(_write(tmp_path, [_chatgpt_conv("bad", role), _chatgpt_conv("ok")]), CAPTURED_AT)
+    assert [c.external_id for c in result.conversations] == ["ok"]
+    assert len(result.warnings) == 1 and "bad" in result.warnings[0]
+
+
+@pytest.mark.parametrize("sender", [["human"], {"name": "human"}, 1])
+def test_claude_non_string_sender_is_excluded(tmp_path, sender):
+    result = parse_claude_export(_write(tmp_path, [_claude_conv("bad", sender), _claude_conv("ok")]), CAPTURED_AT)
+    assert [c.external_id for c in result.conversations] == ["ok"]
+    assert len(result.warnings) == 1 and "bad" in result.warnings[0]
 
 
 @pytest.mark.parametrize("parse", [parse_chatgpt_export, parse_claude_export])

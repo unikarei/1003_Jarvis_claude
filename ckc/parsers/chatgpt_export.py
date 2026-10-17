@@ -7,7 +7,7 @@
 from pathlib import Path
 
 from ckc.models import Conversation, Origin, Speaker, Turn, new_id
-from ckc.parsers import ParseResult, as_str, load_conversation_list, unix_to_iso
+from ckc.parsers import ParseResult, as_key, as_str, load_conversation_list, unix_to_iso
 
 _ROLES = {"user": Speaker.OWNER, "assistant": Speaker.AI}
 
@@ -41,7 +41,7 @@ def _turn(node: dict) -> Turn | None:
     if not isinstance(message, dict):
         return None
     author = message.get("author")
-    speaker = _ROLES.get(author.get("role")) if isinstance(author, dict) else None
+    speaker = _ROLES.get(as_key(author.get("role"))) if isinstance(author, dict) else None
     if speaker is None:
         return None
     content = message.get("content")
@@ -67,6 +67,10 @@ def parse_chatgpt_export(path: Path, captured_at: str) -> ParseResult:
             missing = "id" if external_id is None else "mapping"
             result.warnings.append(f"ChatGPT の {i} 件目: {missing} がないため飛ばしました")
             continue
+        occurred_at = unix_to_iso(item.get("create_time"))
+        if occurred_at is None:
+            result.warnings.append(f"ChatGPT の会話 {external_id}: create_time がないか不正なため飛ばしました")
+            continue
         start = _start_node(mapping, item.get("current_node"))
         turns = [t for t in (_turn(n) for n in _branch(mapping, start)) if t] if start else []
         if not turns:
@@ -74,5 +78,5 @@ def parse_chatgpt_export(path: Path, captured_at: str) -> ParseResult:
             continue
         result.conversations.append(Conversation(
             new_id("conv"), Origin.CHATGPT, as_str(item.get("title")) or "無題", turns, captured_at,
-            unix_to_iso(item.get("create_time")), external_id))
+            occurred_at, external_id))
     return result

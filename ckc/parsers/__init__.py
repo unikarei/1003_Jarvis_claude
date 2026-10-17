@@ -27,13 +27,29 @@ def load_conversation_list(path: Path) -> list:
 
 
 def unix_to_iso(value) -> str | None:
-    """UNIX 時刻（秒、小数あり）を ISO 8601（UTC）にする。数値でなければ None。"""
+    """UNIX 時刻（秒、小数あり）を ISO 8601（UTC）にする。小数秒は保つ。数値でなければ None。"""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     try:
-        return datetime.fromtimestamp(value, timezone.utc).isoformat(timespec="seconds")
+        return datetime.fromtimestamp(value, timezone.utc).isoformat()
     except (OverflowError, OSError, ValueError):
         return None
+
+
+def iso_or_none(value) -> str | None:
+    """ISO 8601 として読める文字列ならそのまま、それ以外は None。"""
+    if not isinstance(value, str):
+        return None
+    try:
+        datetime.fromisoformat(value.strip().removesuffix("Z").removesuffix("z"))
+    except ValueError:
+        return None
+    return value.strip()
+
+
+def as_key(value) -> str | None:
+    """辞書の引き当てに使える文字列ならそのまま、それ以外（配列・オブジェクトなど）は None。"""
+    return value if isinstance(value, str) else None
 
 
 def as_str(value) -> str | None:
