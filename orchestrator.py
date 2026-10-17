@@ -252,6 +252,45 @@ def _audit(inputs, ctx, text):
             "鮮度の期限切れ: " + (", ".join(f"{k} {v} 件" for k, v in a["stale"].items()) or "なし")), []
 
 
+_KANJI = {c: i for i, c in enumerate("一二三四五六七八九十", 1)}
+_NUM = r"(\d+|[一二三四五六七八九十])"
+
+
+def _stats_limit(text: str) -> int | None:
+    """「3つ」「三つ」「上位3」「トップ3」などから件数を取る。"""
+    text = text.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    m = re.search(rf"(?:上位|トップ)\s*{_NUM}|{_NUM}\s*(?:つ|個|件)(?!目)", text)
+    if not m:
+        return None
+    value = m.group(1) or m.group(2)
+    return int(value) if value.isdigit() else _KANJI[value]
+
+
+def _stats(inputs, ctx, text):
+    import knowledge_engine as ke
+    s = ke.stats()
+    try:
+        limit = int(inputs["limit"]) if inputs.get("limit") else _stats_limit(text)
+    except (TypeError, ValueError):
+        limit = _stats_limit(text)
+    by = inputs.get("by") or ("category" if any(w in text for w in ("分野", "カテゴリ")) else "source")
+    if by == "category":
+        label, rows = "分野別", [(x["category"], x) for x in s["by_category"]]
+    else:
+        label, rows = "データソース別", [(x["name"], x) for x in s["by_source"]]
+    shown = rows[:limit] if limit else rows
+    head = f"{ke.STATS_TARGET} {s['total']} 件のうち、{label}の" + (f"上位 {len(shown)} つ:" if limit else "件数:")
+    lines = [head]
+    for i, (name, x) in enumerate(shown, 1):
+        when = f"（最終更新 {x['last_updated'][:16].replace('T', ' ')}）" if x["last_updated"] else ""
+        lines.append(f"{i}. {name}: {x['count']} 件{when}")
+    if by != "category":
+        lines += [f"未取得: {x['name']}（jarvis.db に取り込まれていない）" for x in s["unavailable"]]
+        if s.get("registry_unavailable"):
+            lines.append("（Architecture Registry を読めないため、Vault・リポジトリを区別していません）")
+    return "\n".join(lines), []
+
+
 def _registry_dir():
     from discovery import settings
     return settings.REGISTRY_DIR
@@ -338,7 +377,7 @@ def _code(inputs, ctx, text):
 # スキル名 → 1003 の関数（inputs, ctx, 発言）→ (表示する文章, 文脈に覚える知識)
 HANDLERS: dict[str, Callable] = {
     "knowledge-answer": _answer, "knowledge-search": _search, "knowledge-trace": _trace,
-    "knowledge-audit": _audit, "system-status": _system_status, "dev-board": _dev_board,
+    "knowledge-audit": _audit, "knowledge-stats": _stats, "system-status": _system_status, "dev-board": _dev_board,
     "improvement-review": _improvement, "control-center": _control_center,
     "knowledge-capture": _capture, "theme-register": _theme, "code-task": _code,
 }
