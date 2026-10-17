@@ -333,6 +333,7 @@ tr.sel { background:rgba(37,99,235,.08); }
 .running { color:var(--run); }
 button { font:inherit; padding:4px 12px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
 button.danger { color:var(--ng); border-color:var(--ng); }
+button:disabled { opacity:.35; cursor:not-allowed; }
 select { font:inherit; padding:4px; max-width:100%; }
 pre { background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; overflow:auto; font-size:12px; max-height:320px; white-space:pre-wrap; }
 #msg { min-height:1.4em; }
@@ -368,6 +369,7 @@ async function loadRuns() {
     <td>${badge(r.status)}${r.reason ? `<div class="muted">${esc(r.reason)}</div>` : ""}</td><td>${esc(r.stage)}</td>
     <td>${esc(r.cycles)} / ${esc(r.max_cycles)}（${esc(r.findings.join("・"))}）</td><td>${esc(r.started_at)}</td><td>${link(r.pr_url)}</td></tr>`).join("");
   document.getElementById("stop").disabled = !d.running;
+  document.getElementById("start").disabled = d.running;
   if (selected) loadDetail(selected);
 }
 async function loadDetail(k) {
