@@ -51,3 +51,18 @@ def test_main_writes_file(tmp_path, monkeypatch):
     assert build.main(["--registry-dir", str(reg), "--out", str(out)]) == 0
     assert out.read_text(encoding="utf-8").startswith("<!doctype html>")
     assert build.main(["--registry-dir", str(tmp_path / "none"), "--out", str(out)]) == 2
+
+
+def test_dev_section_lists_runs_and_escapes():
+    runs = [{"task_id": "T-<x>", "status": "PASS", "cycles": 2, "reason": None, "started_at": "2026-10-17T16:51:16+09:00",
+             "pr_url": "https://github.com/unikarei/demo/pull/7"},
+            {"task_id": "T-2", "status": "BLOCKED", "cycles": 1, "reason": "rate_limited", "started_at": "t",
+             "pr_url": "javascript:alert(1)"}]
+    page = build.build_html(_registry(), _snapshot(), dev_runs=runs)
+    assert 'id="dev"' in page and "python -m acc.dev_console" in page
+    assert "T-&lt;x&gt;" in page and '<a href="https://github.com/unikarei/demo/pull/7">7</a>' in page
+    assert "rate_limited" in page and "javascript:" not in page
+
+
+def test_dev_section_without_runs():
+    assert "実行の記録はまだありません" in build.build_html(_registry(), _snapshot())
