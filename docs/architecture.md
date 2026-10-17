@@ -13,7 +13,7 @@
 | L2 Data Foundation | 外部取得・Raw Data・DB・ログ | `fetch_news.py` / `fetch_search_console.py` / `fetch_ga4.py` / `ingest_insight_reporter.py` / `ingest_oarai_project_os.py` / `ingest_obsidian.py` / `github_auth.py`、SQLite（`db.py` / `schema.sql`）、`jarvis_agent.log` | 証券API、SNS API、スクレイピング、MCP |
 | L3 Knowledge | 長期知識（Obsidian / Markdown / Git）・意思決定履歴 | `update_obsidian.py`（oarai-obsidian への書き込み）、`oarai_project_os.py`（Project OS への変更提案） | Obsidian 連携の拡大（MAP Phase 7） |
 | L4 Intelligence | 要約・検索・分析・ナレッジグラフ | `summarize.py`、`db.py`（`search_knowledge()` / `extract_keywords()`、nodes/edges グラフ）、`ask.py`（`answer()`）、`piano_analytics.py` | Knowledge Engine（RAG・意味検索・鮮度管理）、スキルライブラリ。本リポジトリの内部モジュールとして開発（MAP Phase 7、ADR-0010） |
-| L5 Presentation | 入出力 | `chat.py` / `ask.py`（CLI）、`talk.py` / `live_talk.py` / `speech_to_text.py` / `text_to_speech.py`（音声）、`generate_report.py`（Markdownレポート） | Web Summary / ACC（本リポジトリの内部モジュール、ADR-0010）、HTTP API（MAP Phase 5〜6） |
+| L5 Presentation | 入出力 | `chat.py` / `ask.py`（CLI）、`talk.py` / `live_talk.py` / `speech_to_text.py` / `text_to_speech.py`（音声）、`generate_report.py`（Markdownレポート） | Web Summary / ACC（本リポジトリの内部モジュール、ADR-0010。`acc/build.py` の静的なページと、開発オーケストレーターの操作画面 `acc/dev_console.py`（127.0.0.1 だけ、起動ごとのトークン、`../docs/dev-orchestrator-design.md` §16））、HTTP API（MAP Phase 5〜6） |
 
 方針: L1〜L4 を固定し、L5（入出力）だけを段階的に差し替える。
 

@@ -139,7 +139,25 @@ def improvement_section(improvement: dict | None) -> str:
             f'<table style="margin-top:12px"><tr><th>優先度</th><th>領域</th><th>候補と根拠</th><th>対応</th></tr>{rows}</table>')
 
 
-def build_html(registry: dict, snapshot: dict, improvement: dict | None = None) -> str:
+def dev_section(runs: list[dict] | None) -> str:
+    """開発オーケストレーターの最近の実行（読み取りだけ、生成した時点）。操作は acc/dev_console.py（T-1305）。"""
+    guide = ('<p class="muted">開始・進捗・停止は操作画面で行う（VS Code のターミナルで '
+             '<code>python -m acc.dev_console</code>、表示された 127.0.0.1 の URL を開く）。'
+             'この表はページを生成した時点のもの。</p>')
+    if not runs:
+        return guide + '<p class="muted">実行の記録はまだありません。</p>'
+    def pr(url):
+        return (f'<a href="{_e(url)}">{_e(url.rsplit("/", 1)[-1])}</a>'
+                if isinstance(url, str) and url.startswith("https://github.com/") else "")
+    rows = "".join(f'<tr><td>{_e(r["task_id"])}</td><td>{_e(r["status"])}</td><td>{_e(r["cycles"])}</td>'
+                   f'<td>{_e(r.get("reason") or "")}</td><td>{_e(r["started_at"])}</td><td>{pr(r.get("pr_url"))}</td></tr>'
+                   for r in runs[:10])
+    return guide + ("<table><tr><th>タスク</th><th>状態</th><th>レビューの回数</th><th>理由</th><th>開始</th><th>PR</th></tr>"
+                    + rows + "</table>")
+
+
+def build_html(registry: dict, snapshot: dict, improvement: dict | None = None,
+               dev_runs: list[dict] | None = None) -> str:
     report = evaluate(registry, snapshot)
     states = [j.state for j in report.judgements.values()]
     sev = {s: sum(1 for f in report.findings if f.severity == s) for s in SEVERITY_LABEL}
@@ -153,11 +171,12 @@ def build_html(registry: dict, snapshot: dict, improvement: dict | None = None) 
 <body>
 <header><h1>Jarvis Architecture Control Center</h1>
 <div class="muted">最終確認 {_e(report.checked_at)}（Discovery の実行時点）。このページは 1003 の <code>acc/build.py</code> が生成する。</div>
-<nav><a href="#improve">改善候補</a><a href="#problems">問題</a><a href="#projects">Project View</a><a href="#infra">Infrastructure View</a><a href="#layers">Layer View</a><a href="#diagram">構成図</a></nav>
+<nav><a href="#improve">改善候補</a><a href="#dev">開発オーケストレーター</a><a href="#problems">問題</a><a href="#projects">Project View</a><a href="#infra">Infrastructure View</a><a href="#layers">Layer View</a><a href="#diagram">構成図</a></nav>
 </header>
 <main>
 <div class="kpis">{"".join(f'<div class="kpi"><span class="muted">{_e(k)}</span><b>{v}</b></div>' for k, v in kpis)}</div>
 <section id="improve"><h2>改善候補と開発の再開</h2>{improvement_section(improvement)}</section>
+<section id="dev"><h2>開発オーケストレーター</h2>{dev_section(dev_runs)}</section>
 <section id="problems"><h2>問題（Guardian）</h2>{problems(report)}</section>
 <section id="projects"><h2>Project View</h2>{project_view(registry, report)}</section>
 <section id="infra"><h2>Infrastructure View</h2>{infrastructure_view(registry, report)}</section>
@@ -186,7 +205,12 @@ def main(argv=None) -> int:
     except (OSError, ValueError):
         improvement = None
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(build_html(registry, snapshot, improvement), encoding="utf-8")
+    try:
+        from acc import dev_console
+        dev_runs = dev_console.list_runs(10)
+    except OSError:
+        dev_runs = None
+    args.out.write_text(build_html(registry, snapshot, improvement, dev_runs), encoding="utf-8")
     print(f"書きました: {args.out}")
     return 0
 
