@@ -83,9 +83,24 @@ def test_high_search_score_counts_as_knowledge_question(index, monkeypatch):
     assert orc.route(text, orc.Context(), use_llm=False).skill == "general-chat"
 
 
-def test_registry_project_id_counts_as_knowledge_word(index):
-    assert orc.is_knowledge_question("ai-news はどうなってる？")
-    assert not orc.is_knowledge_question("jarvis、おはよう")   # 呼びかけは通常の会話
+@pytest.mark.parametrize("text", ["ai-news はどうなってる？", "trading の状況は？", "Realestate について",
+                                  "personal のまとめ", "physical-ai は？"])
+def test_registry_project_id_counts_as_knowledge_word(index, monkeypatch, text):
+    """ハイフンのない ID（trading・realestate・personal）も含め、Registry の ID はすべて判定に使う。"""
+    import registry
+    monkeypatch.setattr(registry, "projects", lambda: dict(config.FALLBACK_PROJECTS))
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [])   # 検索の点数では当てない
+    assert orc.is_knowledge_question(text)
+    assert orc.route(text, orc.Context(), use_llm=False).skill == "knowledge-answer"
+
+
+def test_project_id_is_matched_as_a_word(index, monkeypatch):
+    import registry
+    monkeypatch.setattr(registry, "projects", lambda: dict(config.FALLBACK_PROJECTS))
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [])
+    assert not orc.is_knowledge_question("jarvis、おはよう")      # 呼びかけは通常の会話
+    assert not orc.is_knowledge_question("JARVIS、元気？")
+    assert not orc.is_knowledge_question("personality って何？")  # 別の語の一部には当てない
 
 
 def test_without_general_chat_in_index_falls_back_to_knowledge_answer(index, tmp_path, monkeypatch):
@@ -180,6 +195,49 @@ def test_general_chat_does_not_fall_back_when_cancelled(no_search, monkeypatch):
     with pytest.raises(llm.LLMCancelled):
         orc._chat({"question": "やあ"}, orc.Context(stream=lambda t: None), "やあ")
     assert [c["provider"] for c in calls] == ["ollama"]
+
+
+def _fake_stream_partial(monkeypatch, failing):
+    """failing の provider は一部を送ってから LLMError を出す偽の complete_stream。"""
+    calls = []
+
+    def fake(prompt, on_text, provider=None, timeout=None, cancel=None):
+        calls.append(provider)
+        if provider == failing:
+            on_text("途中まで")
+            raise llm.LLMError("応答が途中で切れました")
+        on_text("別の答え")
+        return "別の答え"
+    monkeypatch.setattr(llm, "complete_stream", fake)
+    return calls
+
+
+def test_general_chat_does_not_switch_after_partial_output(no_search, monkeypatch):
+    """Ollama が一部を表示した後に失敗したら claude_warm に切り替えない（表示と最後の答えが混ざらない）。"""
+    calls = _fake_stream_partial(monkeypatch, "ollama")
+    shown = []
+    ctx = orc.Context(stream=shown.append)
+    with pytest.raises(llm.LLMError):
+        orc._chat({"question": "やあ"}, ctx, "やあ")
+    assert calls == ["ollama"] and shown == ["途中まで"] and ctx.shown == ""
+
+
+def test_handle_reports_error_after_partial_output(index, monkeypatch):
+    calls = _fake_stream_partial(monkeypatch, "ollama")
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [])
+    shown = []
+    ctx = orc.Context(stream=shown.append)
+    out = orc.handle("こんにちは", ctx, use_llm=False)
+    assert not out.ok and "別の答え" not in out.text and "別の答え" not in shown
+    assert calls == ["ollama"] and ctx.shown == ""
+
+
+def test_knowledge_answer_does_not_retry_after_partial_output(db_path, monkeypatch):
+    calls = _fake_stream_partial(monkeypatch, "claude_warm")
+    shown = []
+    with pytest.raises(llm.LLMError):
+        orc._answer({"question": "補助金は？"}, orc.Context(stream=shown.append), "補助金は？")
+    assert calls == ["claude_warm"] and shown == ["途中まで"]
 
 
 def test_general_chat_never_uses_paid_api(no_search, monkeypatch):

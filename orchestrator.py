@@ -182,19 +182,27 @@ PROJECT_WORDS = ("大洗", "民泊", "物件", "補助金", "ピアノ", "教室
                  "フラッタ")
 
 
-def _project_words() -> tuple[str, ...]:
-    """固定の語と、Registry のプロジェクトの ID（「ai-news」のようにハイフンを含むものだけ。「jarvis」は呼びかけと区別できない）。"""
+ASSISTANT_NAME = "jarvis"   # 呼びかけ（「JARVIS、おはよう」）と区別できないので、この ID だけは語に使わない
+
+
+def _project_ids() -> tuple[str, ...]:
+    """Registry のプロジェクトの ID（全件。ただし呼びかけと同じ「jarvis」は除く）。"""
     import registry
     try:
-        ids = tuple(pid for pid in registry.projects() if "-" in pid)
+        return tuple(pid for pid in registry.projects() if pid.lower() != ASSISTANT_NAME)
     except Exception:   # Registry を読めなくても振り分けは止めない
-        ids = ()
-    return PROJECT_WORDS + ids
+        return ()
+
+
+def _has_project_id(text: str) -> bool:
+    """英数字の語として ID を含むか（大文字・小文字は区別しない。「personality」は「personal」に当てない）。"""
+    lowered = text.lower()
+    return any(re.search(rf"(?<![a-z0-9_-]){re.escape(pid.lower())}(?![a-z0-9_-])", lowered) for pid in _project_ids())
 
 
 def is_knowledge_question(text: str) -> bool:
     """ナレッジの語・プロジェクトの語を含むか、検索の最上位の点数がしきい値以上なら True。迷えば False（通常の会話）。"""
-    if any(w in text for w in KNOWLEDGE_WORDS + _project_words()):
+    if any(w in text for w in KNOWLEDGE_WORDS + PROJECT_WORDS) or _has_project_id(text):
         return True
     import knowledge_engine as ke
     try:
@@ -236,19 +244,40 @@ CHAT_PROVIDER = "ollama"                 # 通常の会話（経路 A）
 CHAT_FALLBACK_PROVIDER = "claude_warm"   # Ollama が失敗したとき（有料の API には切り替えない）
 
 
-def _answer(inputs, ctx, text):
-    import knowledge_engine as ke
+class _SentTracker:
+    """ctx.stream に送ったかを覚える。答えの一部を表示・読み上げた後に失敗したら、別の LLM に切り替えない
+    （切り替えると、表示した途中の答えと最後の答えが混ざる）。"""
 
-    def ask(provider):
-        ctx.last_provider = provider
-        return ke.answer(inputs.get("question") or text, projects=_projects(inputs), on_text=ctx.stream,
-                         history=ctx.history, voice=ctx.voice, cancel=ctx.cancel, provider=provider)
+    def __init__(self, stream):
+        self.stream, self.sent = stream, False
+
+    def __call__(self, chunk: str) -> None:
+        if chunk:
+            self.sent = True
+        self.stream(chunk)
+
+
+def _with_fallback(run, ctx, first: str, second: str):
+    """first で run を呼び、LLMError（取り消しを除く）で、まだ何も送っていなければ second でもう一度だけ試す。"""
+    tracker = _SentTracker(ctx.stream) if ctx.stream is not None else None
     try:
-        answer, hits = ask(ANSWER_PROVIDER)
+        return run(first, tracker)
     except llm.LLMCancelled:
         raise
     except llm.LLMError:
-        answer, hits = ask(ANSWER_RETRY_PROVIDER)
+        if tracker is not None and tracker.sent:
+            raise
+        return run(second, ctx.stream)
+
+
+def _answer(inputs, ctx, text):
+    import knowledge_engine as ke
+
+    def ask(provider, stream):
+        ctx.last_provider = provider
+        return ke.answer(inputs.get("question") or text, projects=_projects(inputs), on_text=stream,
+                         history=ctx.history, voice=ctx.voice, cancel=ctx.cancel, provider=provider)
+    answer, hits = _with_fallback(ask, ctx, ANSWER_PROVIDER, ANSWER_RETRY_PROVIDER)
     if ctx.stream is not None:
         ctx.shown = answer        # 答えの本文は表示済み。出典だけが残り
     used = ke.cited(answer, hits)  # 出典は答えで使ったものだけ示す（LLM の知識で答えたときは出さない）
@@ -269,10 +298,10 @@ CHAT_PROMPT = """あなたは Owner の個人アシスタント「JARVIS」で�
 """
 
 
-def _chat_complete(prompt, ctx, provider):
+def _chat_complete(prompt, ctx, provider, stream):
     ctx.last_provider = provider
-    if ctx.stream is not None:
-        return llm.complete_stream(prompt, ctx.stream, provider=provider, cancel=ctx.cancel)
+    if stream is not None:
+        return llm.complete_stream(prompt, stream, provider=provider, cancel=ctx.cancel)
     return llm.complete(prompt, provider=provider)
 
 
@@ -281,12 +310,8 @@ def _chat(inputs, ctx, text):
     import knowledge_engine as ke
     prompt = CHAT_PROMPT.format(question=inputs.get("question") or text, history=ke.format_history(ctx.history),
                                 style=ke.VOICE_STYLE if ctx.voice else "")
-    try:
-        answer = _chat_complete(prompt, ctx, CHAT_PROVIDER)
-    except llm.LLMCancelled:
-        raise
-    except llm.LLMError:
-        answer = _chat_complete(prompt, ctx, CHAT_FALLBACK_PROVIDER)
+    answer = _with_fallback(lambda provider, stream: _chat_complete(prompt, ctx, provider, stream), ctx,
+                            CHAT_PROVIDER, CHAT_FALLBACK_PROVIDER)
     if ctx.stream is not None:
         ctx.shown = answer        # 答えは表示済み（出典はない）
     return answer.strip(), []
