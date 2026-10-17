@@ -65,10 +65,16 @@ def test_main_without_microphone(monkeypatch, capsys):
     assert voice_chat.main() == 1 and "マイクが見つかりません" in capsys.readouterr().out
 
 
-def test_voice_conversation_streams_speech_and_records(db_path, monkeypatch, capsys):
-    """声で質問 → 答えを表示しながら読み上げ、出典は読まない。記録とナレッジ化の材料は文字の対話と同じ。"""
+def _keys(*lines):
+    import queue
+    q = queue.Queue()
+    for line in lines:
+        q.put(line)
+    return q
+
+
+def _kb_with_answer(monkeypatch):
     import db
-    import voice_chat
     db.init_db()
     db.insert_node("Knowledge", category="minpaku", title="大洗の補助金", content="民泊の補助金の条件",
                    url="https://example.com/a")
@@ -79,21 +85,65 @@ def test_voice_conversation_streams_speech_and_records(db_path, monkeypatch, cap
             on_text(part)
         return "条件があります [1]。申請は来月です。"
     monkeypatch.setattr(llm, "complete_stream", fake_stream)
-    keys = iter(["", "", "q"])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(keys))
-    texts = iter(["民泊の補助金の条件は？", ""])
+
+
+def test_hands_free_conversation_streams_speech_and_records(db_path, monkeypatch, capsys):
+    """Enter なしで話す → 答えを表示しながら読み上げ、出典は読まない。雑音の決まり文句には答えず聞き続け、
+    「終了」で終わる。記録とナレッジ化の材料は文字の対話と同じ（ADR-0026）。"""
+    import db
+    import voice_chat
+    _kb_with_answer(monkeypatch)
+    listened = []
+
+    def listen():
+        listened.append(1)
+        return next(heard_audio)
+    texts = [t for t in ["民泊の補助金の条件は？", "ご視聴ありがとうございました", "終了"]]
+    heard_audio = iter([None] + [np.zeros(10, dtype=np.float32)] * 3)
+    it = iter(texts)
     sp, said = _speaker()
     with pytest.warns(UserWarning):
-        assert voice_chat.main(listen=lambda: np.zeros(10, dtype=np.float32),
-                               transcribe=lambda audio: next(texts), speaker=sp) == 0
+        assert voice_chat.main(listen=listen, transcribe=lambda audio: next(it), speaker=sp, keys=_keys()) == 0
     out = capsys.readouterr().out
+    assert "そのまま話しかけてください" in out and "Enter で話す" not in out
     assert "あなた（声）> 民泊の補助金の条件は？" in out and "https://example.com/a" in out
+    assert "ご視聴ありがとうございました" not in out and "聞き取れませんでした" not in out
+    assert len(listened) == 4                                              # 無音の間も聞き続ける
     assert "条件があります。" in said and "申請は来月です。" in said
     assert not any("example.com" in s for s in said)                       # 出典は読まない
-    assert "聞き取れませんでした" in out                                    # 2 回目は空
     tasks = db._fetchall("SELECT meta FROM nodes WHERE type = 'Task'")
     assert [json.loads(t["meta"])["skill"] for t in tasks] == ["knowledge-answer"]
     skills.reset_cache()
+
+
+def test_hands_free_quits_with_q_key(db_path, monkeypatch, capsys):
+    import voice_chat
+    sp, said = _speaker()
+    listened = []
+    assert voice_chat.main(listen=lambda: listened.append(1), transcribe=lambda a: "", speaker=sp,
+                           keys=_keys("q")) == 0
+    assert listened == [] and "終了します" in capsys.readouterr().out
+
+
+def test_push_to_talk_mode(db_path, monkeypatch, capsys):
+    """--push-to-talk: 従来どおり Enter を押してから話す。"""
+    import voice_chat
+    _kb_with_answer(monkeypatch)
+    texts = iter(["民泊の補助金の条件は？", ""])
+    sp, said = _speaker()
+    with pytest.warns(UserWarning):
+        assert voice_chat.main(listen=lambda: np.zeros(10, dtype=np.float32), transcribe=lambda a: next(texts),
+                               speaker=sp, push_to_talk=True, keys=_keys("", "", "q")) == 0
+    out = capsys.readouterr().out
+    assert "Enter で話す" in out and "あなた（声）> 民泊の補助金の条件は？" in out
+    assert "聞き取れませんでした" in out
+    skills.reset_cache()
+
+
+def test_noise_texts():
+    import voice_chat
+    assert voice_chat.is_noise("ご視聴ありがとうございました。") and voice_chat.is_noise("  ")
+    assert not voice_chat.is_noise("民泊の補助金の条件は？")
 
 
 def test_table_separator_is_not_spoken():

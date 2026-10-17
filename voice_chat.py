@@ -1,12 +1,16 @@
 """JARVIS と声で会話する CLI（選んで使うモード。文字の対話は chat.py。FR-014、../docs/spec.md §3.4.9）。
 
-Enter で話し始め、無音で区切る。音声は Mac の中で文字にし（faster-whisper）、録音は保存しない。
-答えは画面に逐次表示しながら文ごとに読み上げる（macOS の say）。Enter を押すと読み上げを止めて次を話せる。
+既定はハンズフリー: JARVIS が話し終えたら自動で聞き、話し始めと無音で区切る（ADR-0026。`--push-to-talk` で
+Enter を押してから話す従来の形）。JARVIS が話している間は聞かない。音声は Mac の中で文字にし（faster-whisper）、録音は保存しない。
+答えは画面に逐次表示しながら文ごとに読み上げる（macOS の say）。読み上げ中に Enter を押すと止める。
 書き込みや課金のあるスキルの確認は、キーボードの y だけで受け付ける。終了: q と Enter、または「終了」と話す。
 """
 
 import os
+import queue
 import sys
+import threading
+import time
 
 import orchestrator
 from ckc.models import Speaker as Who, Turn
@@ -32,8 +36,45 @@ def output_device() -> str | None:
         return None
 
 
-def main(listen=None, transcribe=None, speaker: Speaker | None = None) -> int:
-    """listen・transcribe・speaker はテストで差し替える。"""
+# 無音や雑音を Whisper が文字にしてしまう決まり文句（話していないのに返事をしない）
+NOISE_TEXTS = ("ご視聴ありがとうございました", "ご清聴ありがとうございました", "チャンネル登録", "おやすみなさい。",
+               "Thank you for watching", "字幕")
+
+
+def is_noise(text: str) -> bool:
+    t = text.strip(" 　。、.!！?？")
+    return not t or any(n.strip("。") in t for n in NOISE_TEXTS) and len(t) <= 20
+
+
+def keyboard() -> "queue.Queue[str]":
+    """キーボードの入力を別のスレッドで受ける（Enter で読み上げを止める・q で終了・書き込みの確認）。"""
+    lines: queue.Queue[str] = queue.Queue()
+
+    def read() -> None:
+        for line in sys.stdin:
+            lines.put(line.rstrip("\n"))
+        lines.put("q")   # 入力が閉じたら終了
+
+    threading.Thread(target=read, daemon=True).start()
+    return lines
+
+
+def _poll_keys(keys: "queue.Queue[str]", speaker: Speaker) -> bool:
+    """届いているキーを処理する。q なら True（終了）。それ以外の Enter は読み上げを止める。"""
+    while True:
+        try:
+            line = keys.get_nowait()
+        except queue.Empty:
+            return False
+        if line.strip().lower() == "q":
+            return True
+        speaker.stop()
+
+
+def main(listen=None, transcribe=None, speaker: Speaker | None = None, push_to_talk: bool = False,
+         keys: "queue.Queue[str] | None" = None) -> int:
+    """既定はハンズフリー（JARVIS が話し終えたら自動で聞く、ADR-0026）。push_to_talk で Enter を押してから話す。
+    listen・transcribe・speaker・keys はテストで差し替える。"""
     if listen is None:
         if not mic.has_input_device():
             print("マイクが見つかりません。ヘッドセットなどをつないでから起動してください（文字の対話は chat.py）。")
@@ -43,6 +84,7 @@ def main(listen=None, transcribe=None, speaker: Speaker | None = None) -> int:
         load_model()
         listen, transcribe = mic.record_utterance, transcribe_array
     speaker = speaker or Speaker(voice=VOICE, device=output_device())
+    keys = keys if keys is not None else keyboard()
     init_db()
 
     def stream(chunk: str) -> None:
@@ -55,29 +97,52 @@ def main(listen=None, transcribe=None, speaker: Speaker | None = None) -> int:
     def ask(prompt: str) -> str:
         speaker.stop()
         speaker.say("書き込みがあります。キーボードで確認してください。")
-        return input(prompt)
+        print(prompt, end="", flush=True)
+        return keys.get()
+
+    def finish_speaking() -> bool:
+        """読み上げが終わるまで待つ（その間は聞かない）。q なら True。"""
+        while speaker.speaking():
+            if _poll_keys(keys, speaker):
+                return True
+            time.sleep(0.05)
+        return _poll_keys(keys, speaker)
 
     state = {"started": False}
-    ctx = orchestrator.Context(stream=stream)
-    print("JARVIS と声で会話します。Enter を押してから話してください（q と Enter で終了）。")
+    ctx = orchestrator.Context(stream=stream, voice=True)
+    if push_to_talk:
+        print("JARVIS と声で会話します。Enter を押してから話してください（q と Enter で終了）。")
+    else:
+        print("JARVIS と声で会話します。そのまま話しかけてください。"
+              "（読み上げ中に Enter で止める／「終了」と話すか q と Enter で終了）")
     speaker.say("ジャービスです。どうぞ。")
+    prompt_shown = False
     while True:
         try:
-            key = input("\n[Enter で話す / q で終了] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
+            if push_to_talk:             # 従来の形: Enter で読み上げを止めて話す
+                print("\n[Enter で話す / q で終了] ", end="", flush=True)
+                if keys.get().strip().lower() == "q":
+                    break
+                speaker.stop()
+                print("（聞いています…）", flush=True)
+            elif finish_speaking():
+                break
+            elif not prompt_shown:
+                print("\n（聞いています…）", flush=True)
+                prompt_shown = True
+            audio = listen()
+            if audio is None:
+                if push_to_talk:
+                    print("聞き取れませんでした。")
+                continue            # ハンズフリーでは話し始めるまで聞き続ける
+            text = transcribe(audio).strip()
+        except KeyboardInterrupt:
             break
-        speaker.stop()                      # Enter で読み上げを止めて次を話す
-        if key == "q":
-            break
-        print("（聞いています…）", flush=True)
-        audio = listen()
-        if audio is None:
-            print("聞き取れませんでした。")
+        if is_noise(text):
+            if push_to_talk:
+                print("聞き取れませんでした。")
             continue
-        text = transcribe(audio).strip()
-        if not text:
-            print("聞き取れませんでした。")
-            continue
+        prompt_shown = False
         print(f"あなた（声）> {text}")
         if any(w in text for w in QUIT_WORDS) and len(text) <= 10:
             break
@@ -104,6 +169,7 @@ def main(listen=None, transcribe=None, speaker: Speaker | None = None) -> int:
             if outcome.ok and outcome.error is None:
                 ctx.history.append(Turn(Who.AI, outcome.text))
 
+    speaker.stop()
     speaker.say("終了します。")
     speaker.wait()
     speaker.close()
@@ -114,4 +180,4 @@ def main(listen=None, transcribe=None, speaker: Speaker | None = None) -> int:
 if __name__ == "__main__":
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
-    sys.exit(main())
+    sys.exit(main(push_to_talk="--push-to-talk" in sys.argv[1:]))
