@@ -57,6 +57,28 @@ def test_segment_includes_preroll():
     assert list(audio[::1600][:4]) == [30, 40, 50, 2000]
 
 
+def test_segment_preroll_from_measured_blocks():
+    """blocks の初めから話し始めても、前に録ったブロック（preroll）を直前 0.3 秒として含める。"""
+    measured = [np.full(1600, v, dtype=np.int16) for v in (10, 20, 30)]
+    audio = rec.segment(iter(_blocks([2000] * 5 + [0] * 8)), threshold=300, preroll=measured)
+    assert len(audio) == 1600 * (3 + 5 + 8)
+    assert list(audio[::1600][:4]) == [10, 20, 30, 2000]
+    audio = rec.segment(iter(_blocks([40] + [2000] * 3 + [0] * 8)), threshold=300, preroll=measured)
+    assert list(audio[::1600][:3]) == [20, 30, 40]                   # 直近の 3 ブロックだけ
+
+
+def test_record_utterance_uses_measured_blocks_as_preroll(monkeypatch):
+    """周囲の音の測定に使った 3 ブロックの直後に話し始めても、話し始めの前の 0.3 秒が落ちない。"""
+    mic = [np.full(1600, v, dtype=np.int16) for v in (100, 110, 120)] + _blocks([8000] * 5 + [0] * 8)
+
+    def fake_mic(samplerate, block_seconds):
+        yield from mic
+    monkeypatch.setattr(rec, "_blocks_from_microphone", fake_mic)
+    audio = rec.record_utterance()
+    assert len(audio) == 1600 * (3 + 5 + 8)
+    assert np.allclose(audio[::1600][:4] * 32768, [100, 110, 120, 8000])
+
+
 def test_segment_needs_two_loud_blocks_to_start():
     single = _blocks([0] * 3 + [2000] + [0] * 3 + [2000] * 5 + [0] * 8)
     audio = rec.segment(iter(single), threshold=300, silence_seconds=0.8)

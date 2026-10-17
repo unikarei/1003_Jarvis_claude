@@ -46,10 +46,12 @@ def segment(blocks: Iterable[np.ndarray], threshold: float, block_seconds: float
             silence_seconds: float | None = None, max_seconds: float = MAX_SECONDS,
             start_timeout: float = START_TIMEOUT_SECONDS, preroll_blocks: int = PREROLL_BLOCKS,
             start_blocks: int = START_BLOCKS, release_ratio: float = RELEASE_RATIO,
-            min_speech_seconds: float = MIN_SPEECH_SECONDS) -> np.ndarray | None:
+            min_speech_seconds: float = MIN_SPEECH_SECONDS,
+            preroll: Iterable[np.ndarray] = ()) -> np.ndarray | None:
     """音のブロックの並びから 1 回分の発話を切り出す。話し始めがない・短すぎるときは None。
     時間はブロックの数で数える（0.1 秒の足し算の誤差で区切りが遅れないように）。
-    silence_seconds を省くと環境変数 JARVIS_VOICE_SILENCE_SECONDS（既定 0.8 秒）。"""
+    silence_seconds を省くと環境変数 JARVIS_VOICE_SILENCE_SECONDS（既定 0.8 秒）。
+    preroll は blocks の前に録ったブロック（周囲の音の測定に使ったもの）で、プリロールの初めの中身にする。"""
     if silence_seconds is None:
         silence_seconds = _env_float("JARVIS_VOICE_SILENCE_SECONDS", SILENCE_SECONDS)
     limit_silent = max(1, round(silence_seconds / block_seconds))
@@ -58,7 +60,7 @@ def segment(blocks: Iterable[np.ndarray], threshold: float, block_seconds: float
     limit_short = round(min_speech_seconds / block_seconds)
     release = threshold * release_ratio
 
-    before: deque = deque(maxlen=max(0, preroll_blocks))   # 話し始めの前の直近のブロック
+    before: deque = deque(preroll, maxlen=max(0, preroll_blocks))   # 話し始めの前の直近のブロック
     pending: list[np.ndarray] = []                         # しきい値を超えて続いているブロック（話し始めの候補）
     voiced: list[np.ndarray] = []
     speech, silent, waited = 0, 0, 0                       # speech は話し始めからのブロック数
@@ -104,7 +106,7 @@ def record_utterance(samplerate: int = SAMPLE_RATE) -> np.ndarray | None:
     戻り値は faster-whisper にそのまま渡せる float32（-1〜1）。話し始めがなければ None。"""
     blocks = _blocks_from_microphone(samplerate, BLOCK_SECONDS)
     noise = [next(blocks) for _ in range(3)]
-    audio = segment(blocks, threshold_from(noise))
+    audio = segment(blocks, threshold_from(noise), preroll=noise)   # 測定の直後に話し始めても頭が落ちないように
     blocks.close()
     return None if audio is None else audio.astype(np.float32) / 32768.0
 
