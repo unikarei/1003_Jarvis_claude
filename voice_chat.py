@@ -92,26 +92,33 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
         """発言 turn 専用の逐次表示。番号は呼び出しの間ずっと固定し、読み上げにも同じ番号で渡す
         （割り込みの後に次の発言が始まっても、古い生成の文が新しい発言として読まれない）。"""
         def stream(chunk: str) -> None:
-            if turn != speaker.turn:
-                raise Cancelled()             # 割り込まれた。claude -p は llm 側で止まる
-            if not state["started"]:
-                state["started"] = True
-                state["status"] = "SPEAKING"
-                print("\nJARVIS > ", end="", flush=True)
-            print(chunk, end="", flush=True)
-            speaker.feed(chunk, turn=turn)
+            with speaker._lock:               # 番号の確認・表示・読み上げへの投入を、割り込み（new_turn）と同期
+                if turn != speaker.turn:
+                    raise Cancelled()         # 割り込まれた。claude -p は llm 側で止まる
+                if not state["started"]:
+                    state["started"] = True
+                    state["status"] = "SPEAKING"
+                    print("\nJARVIS > ", end="", flush=True)
+                print(chunk, end="", flush=True)
+                speaker.feed(chunk, turn=turn)
         return stream
 
-    def ask(prompt: str) -> str:
-        state["asking"] = True
-        session.disarm()                      # 確認を待つ間は割り込みを受けない
-        speaker.stop()
-        speaker.say("書き込みがあります。キーボードで確認してください。")
-        print(prompt, end="", flush=True)
-        try:
-            return keys.get()
-        finally:
-            state["asking"] = False
+    def ask_for(turn: int):
+        """発言 turn 専用の確認。割り込まれた（番号が進んだ）発言の確認は、何もせず「実行しない」にする。"""
+        def ask(prompt: str) -> str:
+            with speaker._lock:
+                if turn != speaker.turn:
+                    return "n"
+                state["asking"] = True
+                session.disarm()              # 確認を待つ間は割り込みを受けない
+                speaker.stop()
+                speaker.say("書き込みがあります。キーボードで確認してください。", turn=turn)
+                print(prompt, end="", flush=True)
+            try:
+                return keys.get()
+            finally:
+                state["asking"] = False
+        return ask
 
     ctx = orchestrator.Context(voice=True)
     print("JARVIS と声で会話します。そのまま話しかけてください。JARVIS が話している途中でも、話し始めれば止まります。"
@@ -146,8 +153,8 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
         ctx.stream = stream_for(turn)                       # この発言の生成だけが使う（呼び出しの時に固定される）
         ctx.cancel = lambda t=turn: t != speaker.turn
         result: dict = {}
-        worker = threading.Thread(target=lambda: result.update(outcome=orchestrator.handle(text, ctx, ask=ask)),
-                                  daemon=True)
+        worker = threading.Thread(target=lambda a=ask_for(turn), c=ctx: result.update(
+            outcome=orchestrator.handle(text, c, ask=a)), daemon=True)
         session.arm()
         worker.start()
         finished, interrupted = False, False
@@ -203,6 +210,18 @@ def _finish_answer(outcome, state: dict, ctx, speaker, turn: int | None = None) 
     """答えの残り（出典など）を表示し、逐次表示しなかった答えは短い要約を読む。turn（その発言の番号）を渡すと、
     割り込みで番号が進んでいたら読まない。"""
     extra = {"turn": turn} if turn is not None else {}
+    with speaker._lock if hasattr(speaker, "_lock") else _nullcontext():   # 割り込みと同期して表示・投入する
+        if turn is not None and turn != getattr(speaker, "turn", turn):
+            return                            # 割り込まれた発言の残りは表示も読み上げもしない
+        _finish_answer_locked(outcome, state, ctx, speaker, extra)
+
+
+def _nullcontext():
+    import contextlib
+    return contextlib.nullcontext()
+
+
+def _finish_answer_locked(outcome, state: dict, ctx, speaker, extra: dict) -> None:
     if state["started"] and ctx.shown and outcome.text.startswith(ctx.shown):
         speaker.flush(**extra)
         rest = outcome.text[len(ctx.shown):].strip()

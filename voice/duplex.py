@@ -213,6 +213,8 @@ class DuplexSpeaker(Speaker):
         self._busy = False
         self._buffers: dict[int, tuple[str, bool]] = {}   # 発言ごとの区切りの途中の文字とコードの区間
         super().__init__(voice=voice, runner=lambda cmd: None)
+        # 番号の確認から表示・投入までを 1 つの区間にできるよう、入れ子にできるロックにする（会話の側も使う）
+        self._lock = threading.RLock()
 
     def _loop(self) -> None:
         while True:

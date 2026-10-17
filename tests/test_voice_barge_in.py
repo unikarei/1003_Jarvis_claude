@@ -531,3 +531,45 @@ def test_feed_and_new_turn_from_two_threads_do_not_mix():
     assert {s for turn, s in player.played if turn == new} == {"新しい文。"}
     assert all(s == "古い文。" for turn, s in player.played if turn == old)
     sp.close()
+
+
+def test_confirmation_from_an_interrupted_turn_is_declined_silently(kb, monkeypatch):
+    """割り込まれた発言の処理が後から確認（ask）を呼んでも、新しい発言を止めず「実行しない」になる（5 回目の指摘 1）。"""
+    import orchestrator
+    import voice_chat
+    asked = {}
+    session = FakeSession(["書き込みの依頼", "次の質問"], barge_on=[])
+    original_arm = session.arm
+    gate = threading.Event()
+
+    def fake_handle(text, ctx, ask=None):
+        if text == "書き込みの依頼":
+            gate.wait(2)                                   # 割り込みの後に確認を呼ぶ
+            asked["answer"] = ask("実行しますか？ [y/N] > ")
+            return orchestrator.Outcome("knowledge-capture", "rule", {}, "実行しませんでした。", True, 0, [], "declined")
+        return orchestrator.Outcome("knowledge-audit", "rule", {}, "Knowledge 1 件", True, 0, [], None)
+    monkeypatch.setattr(orchestrator, "handle", fake_handle)
+
+    def arm_then_barge():
+        original_arm()
+        if len(session.listened) == 1:
+            def barge():
+                session.speaker.new_turn(); session.barged.set()
+                time.sleep(0.05); gate.set()
+            threading.Timer(0.05, barge).start()
+    session.arm = arm_then_barge
+    assert _run(session) == 0
+    assert asked["answer"] == "n"
+    assert "書き込みがあります。キーボードで確認してください。" not in [s for _, s in session.player.played]
+
+
+def test_non_streaming_provider_honours_cancel(monkeypatch):
+    """逐次出力のないプロバイダーでも、取り消されていれば結果を渡さない（5 回目の指摘 2）。"""
+    got = []
+    monkeypatch.setitem(llm.PROVIDERS, "fake", lambda prompt, timeout=None: "全文")
+    with pytest.raises(llm.LLMCancelled):
+        llm.complete_stream("p", got.append, provider="fake", cancel=lambda: True)
+    flag = iter([False, True])
+    with pytest.raises(llm.LLMCancelled):
+        llm.complete_stream("p", got.append, provider="fake", cancel=lambda: next(flag))
+    assert got == []

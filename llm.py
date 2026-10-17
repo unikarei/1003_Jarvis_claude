@@ -206,6 +206,11 @@ def complete_stream(prompt: str, on_text, provider: str | None = None, timeout: 
     name = provider or LLM_PROVIDER
     if name == "claude_cli" and PROVIDERS.get(name) is _complete_claude_cli:
         return _stream_claude_cli(prompt, on_text, timeout, cancel)
+    # 逐次出力のないプロバイダーは、生成の途中では取り消せない（前と後で確かめ、取り消されていれば結果を渡さない）
+    if cancel is not None and cancel():
+        raise LLMCancelled("取り消されました")
     text = complete(prompt, provider=provider, timeout=timeout)
+    if cancel is not None and cancel():
+        raise LLMCancelled("取り消されました")
     on_text(text)
     return text
