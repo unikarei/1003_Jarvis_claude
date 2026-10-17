@@ -320,7 +320,14 @@ PAGE = """<!doctype html>
 * { box-sizing:border-box; }
 body { margin:0; font-family:-apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; background:var(--bg); color:var(--fg); }
 header { padding:16px 24px; border-bottom:1px solid var(--line); }
-header h1 { margin:0; font-size:19px; }
+header h1 { margin:0; font-size:19px; display:flex; align-items:center; gap:10px; }
+#help-open { width:28px; height:28px; padding:0; border-radius:50%; font-weight:bold; }
+dialog { max-width:760px; width:calc(100% - 32px); max-height:85vh; overflow:auto; border:1px solid var(--line);
+         border-radius:12px; background:var(--card); color:var(--fg); padding:16px 20px; }
+dialog::backdrop { background:rgba(0,0,0,.45); }
+dialog h2 { margin-top:0; } dialog h3 { font-size:15px; margin:18px 0 6px; }
+dialog p, dialog li, dialog td, dialog th { font-size:14px; line-height:1.6; }
+.dialog-head { display:flex; justify-content:space-between; align-items:center; position:sticky; top:-16px; background:var(--card); padding-top:4px; }
 main { padding:16px 24px 48px; max-width:1100px; margin:0 auto; }
 section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:16px; }
 h2 { font-size:16px; margin:0 0 10px; }
@@ -339,8 +346,55 @@ pre { background:var(--bg); border:1px solid var(--line); border-radius:6px; pad
 #msg { min-height:1.4em; }
 @media (max-width:600px) { main, header { padding-left:16px; padding-right:16px; } }
 </style></head><body>
-<header><h1>開発オーケストレーター</h1>
+<header><h1>開発オーケストレーター <button id="help-open" title="使い方" aria-label="使い方を表示">?</button></h1>
 <div class="muted">Claude Code が実装し、Codex が読み取り専用でレビューする（最大 3 回）。main へのマージは Owner が GitHub で行う。</div></header>
+<dialog id="help" aria-labelledby="help-title">
+<div class="dialog-head"><h2 id="help-title">使い方</h2><button id="help-close" aria-label="閉じる">閉じる</button></div>
+<p>指示書を選んで開始し、終わったら PR を見てマージを判断する画面です。指示書を書くところだけは、画面の外で行います。</p>
+<h3>1. 指示書を書く（画面の外）</h3>
+<p>統合ワークスペースの <code>docs/codex/</code> に Markdown のファイルを作り、先頭に次の 5 行を書きます。</p>
+<pre>---
+task_id: T-1400
+repo: 1003_Jarvis_claude
+base: main
+setup: uv venv -q -p 3.13 .venv &amp;&amp; uv pip install -q -p .venv/bin/python -r requirements.txt -r requirements-dev.txt
+test: .venv/bin/python -m pytest tests -q
+---
+# T-1400 （やりたいことの題名）
+
+## 目的
+## 仕様（何をどう変えるか。できるだけ具体的に）
+## テスト（何を確かめるテストを書くか）
+## 制約（変更してよいファイル、変えてはいけないこと）</pre>
+<p>見本は <code>docs/codex/T-1304_knowledge_audit_json.md</code>。Codex は「仕様と制約を満たしているか」でレビューするため、具体的に書くほど判定の精度が上がります。Claude Code に「〜の指示書を作って」と頼むこともできます。</p>
+<h3>2. 指示書をコミットする</h3>
+<p>指示書の <code>setup</code>・<code>test</code> はシェルで実行されるため、画面に出るのは<strong>コミット済みで、その後に変更していない</strong>指示書だけです。</p>
+<h3>3. 画面で開始する</h3>
+<p>指示書を選ぶ → 必要なら「PASS なら PR を作る」にチェック → 「開始」→ 確認で OK。Claude・Codex の利用枠を使います。05:30〜07:30 は開始できません（理由が出ます）。</p>
+<h3>4. 進捗を見る</h3>
+<ul>
+<li>一覧は 5 秒ごとに更新されます。</li>
+<li><strong>段階</strong>: claude（実装中）→ test → codex（レビュー中）→ finished。</li>
+<li><strong>回（指摘の数）</strong>: 何回目のレビューか、各回の指摘が何件か。</li>
+<li>タスク名をクリックすると、各回の Codex の指摘・テストのログ・差分の統計が見られます。</li>
+<li>途中でやめるときは「実行中の run を停止」。Claude・Codex も止まり、記録は STOPPED で閉じます。</li>
+</ul>
+<h3>5. 結果を見て判断する</h3>
+<table>
+<tr><th>状態</th><th>意味</th><th>次にすること</th></tr>
+<tr><td><span class="st PASS">PASS</span></td><td>レビューに合格</td><td>PR のリンクから差分を確認し、問題なければ GitHub でマージ</td></tr>
+<tr><td><span class="st CHANGES_REQUESTED">CHANGES_REQUESTED</span></td><td>3 回直しても合格しなかった</td><td>詳細の指摘を読み、指示書を直して新しい ID で開始し直す</td></tr>
+<tr><td><span class="st BLOCKED">BLOCKED</span></td><td>利用枠の上限・認証・エラーなどで停止</td><td>詳細の「理由」を確認する</td></tr>
+<tr><td><span class="st STOPPED">STOPPED</span></td><td>自分で止めた</td><td>—</td></tr>
+</table>
+<p>マージは自動では行われません。マージ後の本番への反映は Claude Code に依頼します。</p>
+<h3>注意</h3>
+<ul>
+<li><strong>同じ ID は使い回せません</strong>。一度実行した ID で再び開始すると、前回の作業フォルダが残っているため BLOCKED になります。やり直すときは ID を変えます（例: T-1400 → T-1400b）。</li>
+<li>同時に動かせるのは <strong>1 件だけ</strong>です。</li>
+<li>ブラウザやターミナルを閉じても実行中の run は止まりません。止めるときは画面の「停止」を使います。</li>
+</ul>
+</dialog>
 <main>
 <section><h2>開始</h2>
 <select id="task"></select> <label><input type="checkbox" id="pr"> PASS なら PR を作る（マージはしない）</label>
@@ -402,6 +456,10 @@ document.getElementById("stop").onclick = async () => {
   const [, d] = await api("/api/stop", {method: "POST", headers: H, body: "{}"});
   document.getElementById("msg").textContent = d.message || d.error; loadRuns();
 };
+const help = document.getElementById("help");
+document.getElementById("help-open").onclick = () => help.showModal();
+document.getElementById("help-close").onclick = () => help.close();
+help.addEventListener("click", e => { if (e.target === help) help.close(); });   // 外側をクリックで閉じる
 loadTasks(); loadRuns(); setInterval(loadRuns, 5000);
 </script></body></html>
 """

@@ -235,3 +235,12 @@ def test_buttons_show_disabled_state(server):
     assert "button:disabled" in page
     assert 'getElementById("stop").disabled = !d.running' in page
     assert 'getElementById("start").disabled = d.running' in page
+
+
+def test_help_dialog(server):
+    _, page, _ = request(server, "GET", "/")
+    assert 'id="help-open"' in page and '<dialog id="help"' in page
+    for text in ("1. 指示書を書く", "2. 指示書をコミットする", "3. 画面で開始する", "4. 進捗を見る",
+                 "5. 結果を見て判断する", "同じ ID は使い回せません"):
+        assert text in page, text
+    assert "help.showModal()" in page
