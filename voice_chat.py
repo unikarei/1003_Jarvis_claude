@@ -106,11 +106,13 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
     def ask_for(turn: int):
         """発言 turn 専用の確認。割り込まれた（番号が進んだ）発言の確認は、何もせず「実行しない」にする。"""
         def ask(prompt: str) -> str:
+            # ロックの順番は「割り込みの判定 → 読み上げ」（マイクの側と同じ）。読み上げのロックを持ったまま
+            # 割り込みの判定のロックを取らない（取り合いで止まらないように）
+            session.disarm()                  # 確認を待つ間は割り込みを受けない
             with speaker._lock:
                 if turn != speaker.turn:
                     return "n"
                 state["asking"] = True
-                session.disarm()              # 確認を待つ間は割り込みを受けない
                 speaker.stop()
                 speaker.say("書き込みがあります。キーボードで確認してください。", turn=turn)
                 print(prompt, end="", flush=True)

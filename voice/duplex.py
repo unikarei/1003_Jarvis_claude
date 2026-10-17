@@ -212,6 +212,7 @@ class DuplexSpeaker(Speaker):
         self._cancel = threading.Event()
         self._busy = False
         self._buffers: dict[int, tuple[str, bool]] = {}   # 発言ごとの区切りの途中の文字とコードの区間
+        self._pending = 0                                  # キューに入れてから、合成・再生に渡し終えるまでの文の数
         super().__init__(voice=voice, runner=lambda cmd: None)
         # 番号の確認から表示・投入までを 1 つの区間にできるよう、入れ子にできるロックにする（会話の側も使う）
         self._lock = threading.RLock()
@@ -234,6 +235,7 @@ class DuplexSpeaker(Speaker):
             finally:
                 with self._lock:
                     self._busy = False
+                    self._pending = max(0, self._pending - 1)
                 self._queue.task_done()
 
     # 番号の確認・文の区切りの途中の文字（発言ごと）・キューへの投入は、すべて new_turn と同じロックの中で行う。
@@ -242,6 +244,7 @@ class DuplexSpeaker(Speaker):
     def _put(self, turn: int, text: str) -> None:
         text = speakable(text)
         if text:
+            self._pending += 1                    # ロックの中で数える（取り出してから作業中になるまでの隙間をなくす）
             self._queue.put((turn, text))
 
     def say(self, text: str, turn: int | None = None) -> None:
@@ -277,33 +280,35 @@ class DuplexSpeaker(Speaker):
                 self._put(turn, buffer)
 
     def new_turn(self) -> int:
-        """新しい発言を始める（古い発言の合成・未再生の音・区切りの途中の文字を捨てる）。"""
+        """新しい発言を始める（古い発言の合成・未再生の音・区切りの途中の文字を捨てる）。
+        番号の更新から再生の停止までを 1 つのロックの区間で行い、同時に呼ばれても番号が戻らない。"""
         with self._lock:
             self.turn += 1
             turn = self.turn
             self._buffers.clear()
-        if hasattr(self.player, "set_turn"):
-            self.player.set_turn(turn)            # 再生の側でも古い番号の音を受け付けない
-        self.stop()
+            if hasattr(self.player, "set_turn"):
+                self.player.set_turn(turn)        # 再生の側でも古い番号の音を受け付けない
+            self.stop()
         return turn
 
     def stop(self) -> None:
+        import queue as _queue
         with self._lock:
             self._buffers.clear()
             self._cancel.set()
-        import queue as _queue
-        try:
-            while True:
-                self._queue.get_nowait()
-                self._queue.task_done()
-        except _queue.Empty:
-            pass
+            try:
+                while True:
+                    self._queue.get_nowait()
+                    self._queue.task_done()
+                    self._pending = max(0, self._pending - 1)
+            except _queue.Empty:
+                pass
         self.player.stop()
 
     def speaking(self) -> bool:
         with self._lock:
-            busy = self._busy
-        return busy or not self._queue.empty() or self.player.speaking()
+            busy = self._busy or self._pending > 0
+        return busy or self.player.speaking()
 
     def wait(self) -> None:
         while self.speaking():
@@ -334,6 +339,8 @@ class Session:
         self.gate: EchoGate | None = None
         self.delay = 0.0
         self.armed = False
+        self._arm_lock = threading.Lock()
+        self._arm_turn: int | None = None          # arm したときの発言の番号（割り込みはこの発言だけを止める）
         self.barged = threading.Event()
         self.barge_index: int | None = None
         self.stop_latency: list[float] = []   # 検出から再生の停止の指示までの時間（記録用）
@@ -364,9 +371,13 @@ class Session:
         if self.armed and self.gate is not None:
             ref = self.player.level(now - self.delay - 0.04, now - self.delay + 0.04)
             if self.gate.update(level, ref):
-                self.armed = False
-                # まず止める（目標 200 ms 以内）。番号も進め、検出の後に届く古い発言の文・生成をすぐ捨てさせる
-                self.speaker.new_turn()
+                with self._arm_lock:              # disarm・次の arm と同期し、arm したときの発言だけを止める
+                    target = self._arm_turn
+                    if not self.armed or target != getattr(self.speaker, "turn", target):
+                        return
+                    self.armed = False
+                    # まず止める（目標 200 ms 以内）。番号も進め、検出の後に届く古い発言の文・生成をすぐ捨てさせる
+                    self.speaker.new_turn()
                 stopped = time.monotonic()
                 self.stop_latency.append(stopped - now)
                 with self._cond:
@@ -410,14 +421,17 @@ class Session:
     # 割り込み ---------------------------------------------------------
 
     def arm(self) -> None:
-        """考え中・読み上げ中に割り込みを受け付ける。"""
-        if self.gate is not None:
-            self.gate.reset()
-        self.barged.clear()
-        self.armed = True
+        """考え中・読み上げ中に割り込みを受け付ける（今の発言の番号に対してだけ）。"""
+        with self._arm_lock:
+            if self.gate is not None:
+                self.gate.reset()
+            self.barged.clear()
+            self._arm_turn = getattr(self.speaker, "turn", None)
+            self.armed = True
 
     def disarm(self) -> None:
-        self.armed = False
+        with self._arm_lock:
+            self.armed = False
 
     # 録音 -------------------------------------------------------------
 
@@ -441,7 +455,17 @@ class Session:
         threshold = max(rec.MIN_THRESHOLD, noise * rec.THRESHOLD_FACTOR)
         with self._cond:
             barge = from_barge_in and self.barge_index is not None
-            start = self.barge_index if barge else max(self.base, self.base + len(self.frames) - 15)
+            if barge:
+                start = self.barge_index
+            else:
+                # 普通の聞き取りは、JARVIS の声がマイクに届き終わった後から（直前 0.3 秒に自分の声を含めない）
+                quiet = getattr(self.player, "_last_sound", 0.0) + getattr(self.player, "output_latency", 0.0) \
+                    + self.delay
+                start = max(self.base, self.base + len(self.frames) - 15)
+                for i in range(len(self.frames) - 1, -1, -1):
+                    if self.frames[i][0] < quiet:
+                        start = max(start, self.base + i + 1)
+                        break
             self.barge_index = None
         # 割り込みの後は、判定がすでに人の声と確かめているので、短い相づち（「うん」「はい」）も録る
         audio = rec.segment(self._blocks(start), threshold, preroll_blocks=3,

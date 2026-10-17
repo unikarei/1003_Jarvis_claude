@@ -163,12 +163,14 @@ def test_speaker_stop_cancels_running_synthesis():
 class StubSpeaker:
     def __init__(self):
         self.stops = 0
+        self.turn = 0
     def new_turn(self): self.stops += 1
 
 
 class LevelPlayer(FakePlayer):
     def __init__(self, ref=0.0):
         super().__init__(); self.ref = ref
+        self._last_sound, self.output_latency = 0.0, 0.0
     def level(self, a, b): return self.ref
 
 
@@ -573,3 +575,73 @@ def test_non_streaming_provider_honours_cancel(monkeypatch):
     with pytest.raises(llm.LLMCancelled):
         llm.complete_stream("p", got.append, provider="fake", cancel=lambda: next(flag))
     assert got == []
+
+
+def test_speaking_covers_the_gap_before_synthesis_starts():
+    """文をキューに入れた直後から、合成・再生に渡し終えるまで「読み上げ中」（6 回目の指摘 1）。"""
+    release = threading.Event()
+    sp = duplex.DuplexSpeaker(FakePlayer(), synth=lambda s, c: release.wait(2) and np.zeros(10, dtype=np.float32))
+    sp.say("一文。")
+    assert sp.speaking()                                    # まだ合成が始まっていなくても
+    release.set()
+    sp.wait()
+    assert not sp.speaking()
+    sp.close()
+
+
+def test_concurrent_new_turns_keep_player_in_sync():
+    """マイクの割り込みと会話の両方から同時に new_turn しても、再生の側の番号が戻らない（6 回目の指摘 2）。"""
+    p, _ = _player()
+    sp = duplex.DuplexSpeaker(p, synth=lambda s, c: np.zeros(10, dtype=np.float32))
+    threads = [threading.Thread(target=lambda: [sp.new_turn() for _ in range(200)]) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert p.turn == sp.turn == 800
+    sp.close()
+
+
+def test_barge_in_is_bound_to_the_armed_turn():
+    """disarm の後や、arm した発言が終わって次の発言になった後には、割り込みを確定しない（6 回目の指摘 3）。"""
+    s, speaker = _session()
+    speaker.turn = 1
+    s.arm()
+    for _ in range(7):
+        s.push(_frame(5000))
+    s.disarm()
+    s.push(_frame(5000))
+    assert speaker.stops == 0 and not s.barged.is_set()
+    s.arm()
+    for _ in range(7):
+        s.push(_frame(5000))
+    speaker.turn = 2                                        # arm したまま、次の発言になった
+    s.push(_frame(5000))
+    assert speaker.stops == 0 and not s.barged.is_set()
+
+
+def test_normal_listening_starts_after_own_voice_ends():
+    """普通の聞き取りは、JARVIS の声がマイクに届き終わった後から録る（直前の自分の声を含めない、6 回目の指摘 4）。"""
+    s, _ = _session()
+    s.player._last_sound = 100.0
+    s.player.output_latency = 0.05
+    t = [99.0]
+
+    def push(level, n):
+        for _ in range(n):
+            s.push(_frame(level), now=t[0]); t[0] += 0.02
+    push(4000, 52)                                          # 読み上げの終わり（100.05）までの自分の声
+    push(270, 5)                                            # 聞き始める時点の直前 0.3 秒に、自分の声の終わりが入る
+    result = {}
+    th = threading.Thread(target=lambda: result.update(audio=s.listen()), daemon=True)
+    th.start()
+    time.sleep(0.05)
+    push(270, 10)
+    push(2000, 30)                                          # Owner の発話
+    push(270, 60)
+    th.join(3)
+    assert not th.is_alive()
+    audio = result["audio"]
+    assert audio is not None
+    assert int((np.abs(audio * 32768) > 3000).sum()) == 0   # 自分の声は入らない
+    assert int((np.abs(audio * 32768) > 1500).sum()) >= 30 * duplex.FRAME
