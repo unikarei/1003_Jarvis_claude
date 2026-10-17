@@ -100,7 +100,8 @@ class Player:
         self._queue: deque = deque()            # (turn, sentence, audio float32)
         self._current: list | None = None       # [turn, sentence, audio, position]
         self.ref: deque = deque(maxlen=3000)    # (時刻, 再生した音量 int16 換算)
-        self.played: list[tuple[int, str]] = [] # 最後まで再生した文（聞いた文として履歴に残す）
+        self.played: list[tuple[int, str, float]] = []   # 最後まで再生した文と、その時刻（聞いた文として履歴に残す）
+        self.output_latency = 0.0
         if stream_factory is None:
             import sounddevice as sd
             stream_factory = lambda cb: sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",  # noqa: E731
@@ -125,7 +126,7 @@ class Player:
                 filled += n
                 self._current[3] = pos + n
                 if pos + n >= len(audio):
-                    self.played.append((turn, sentence))
+                    self.played.append((turn, sentence, time.monotonic()))
                     self._current = None
             self.ref.append((time.monotonic(), float(np.sqrt(np.mean((out * 32768.0) ** 2)))))
         outdata[:, 0] = out
@@ -135,10 +136,13 @@ class Player:
             self._queue.append((turn, sentence, audio.astype(np.float32)))
 
     def stop(self) -> None:
-        """未再生の音を捨てる。再生中の文も途中で止める（その文は聞いた文にしない）。"""
+        """未再生の音を捨てる。再生中の文も途中で止める（その文は聞いた文にしない）。出力の遅れの間に
+        渡し終えた文は、まだスピーカーから出きっていないため、聞いた文から除く。"""
         with self._lock:
             self._queue.clear()
             self._current = None
+            heard_before = time.monotonic() - self.output_latency
+            self.played = [p for p in self.played if p[2] <= heard_before]
 
     def speaking(self) -> bool:
         with self._lock:
@@ -152,7 +156,7 @@ class Player:
 
     def heard(self, turn: int) -> list[str]:
         with self._lock:
-            return [s for t, s in self.played if t == turn]
+            return [s for t, s, _ in self.played if t == turn]
 
     def close(self) -> None:
         self.stop()
@@ -202,9 +206,9 @@ class DuplexSpeaker(Speaker):
                 return
             turn, sentence = item
             try:
-                if turn != self.turn:
-                    continue
-                with self._lock:
+                with self._lock:                      # 番号の確認と取り消しの用意を、new_turn と同じロックで
+                    if turn != self.turn:
+                        continue
                     self._busy = True
                     self._cancel = cancel = threading.Event()
                 audio = self._synth(sentence, cancel)
@@ -222,13 +226,16 @@ class DuplexSpeaker(Speaker):
 
     def new_turn(self) -> int:
         """新しい発言を始める（古い発言の合成・未再生の音を捨てる）。"""
-        self.turn += 1
+        with self._lock:
+            self.turn += 1
+            turn = self.turn
         self.stop()
-        return self.turn
+        return turn
 
     def stop(self) -> None:
         self._buffer, self._in_code = "", False
-        self._cancel.set()
+        with self._lock:
+            self._cancel.set()
         import queue as _queue
         try:
             while True:
@@ -268,6 +275,7 @@ class Session:
         self.player, self.speaker = player, speaker
         self._cond = threading.Condition()
         self.frames: list[tuple[float, np.ndarray, float]] = []   # (時刻, 20 ms の音, 音量)
+        self.base = 0                                              # frames[0] の通し番号（古い音を捨てた数）
         self.gate: EchoGate | None = None
         self.delay = 0.0
         self.armed = False
@@ -292,12 +300,11 @@ class Session:
         level = frame_rms(frame)
         with self._cond:
             self.frames.append((now, frame, level))
-            if len(self.frames) > 50 * 120:          # 2 分を超えたら古いものを捨てる
+            if len(self.frames) > 50 * 120:          # 2 分を超えたら古いものを捨てる（通し番号は変えない）
                 drop = len(self.frames) - 50 * 60
                 del self.frames[:drop]
-                if self.barge_index is not None:
-                    self.barge_index = max(0, self.barge_index - drop)
-            index = len(self.frames) - 1
+                self.base += drop
+            index = self.base + len(self.frames) - 1  # 通し番号
             self._cond.notify_all()
         if self.armed and self.gate is not None:
             ref = self.player.level(now - self.delay - 0.04, now - self.delay + 0.04)
@@ -308,8 +315,8 @@ class Session:
                 stopped = time.monotonic()
                 self.stop_latency.append(stopped - now)
                 with self._cond:
-                    self.barge_index = max(0, index - self.gate.confirm - self.PREROLL_FRAMES)
-                    onset = self.frames[max(0, index - self.gate.confirm + 1)][0]
+                    self.barge_index = max(self.base, index - self.gate.confirm - self.PREROLL_FRAMES)
+                    onset = self.frames[max(0, index - self.gate.confirm + 1 - self.base)][0]
                 out_ms = round(getattr(self.player, "output_latency", 0.0) * 1000)
                 self.events.append({"detect_ms": round((now - onset) * 1000 + FRAME_SECONDS * 1000),
                                     "stop_call_ms": round((stopped - now) * 1000, 1), "output_ms": out_ms})
@@ -360,13 +367,16 @@ class Session:
     # 録音 -------------------------------------------------------------
 
     def _blocks(self, start: int):
-        """start 以降の音を 0.1 秒のブロックで返す（新しい音が来るまで待つ）。"""
+        """通し番号 start 以降の音を 0.1 秒のブロックで返す（新しい音が来るまで待つ）。"""
         index = start
         while True:
             with self._cond:
-                while len(self.frames) < index + 5:
+                index = max(index, self.base)         # 捨てられた分は飛ばす
+                while self.base + len(self.frames) < index + 5:
                     self._cond.wait(timeout=1.0)
-                chunk = [f for _, f, _ in self.frames[index:index + 5]]
+                    index = max(index, self.base)
+                rel = index - self.base
+                chunk = [f for _, f, _ in self.frames[rel:rel + 5]]
             index += 5
             yield np.concatenate(chunk)
 
@@ -375,12 +385,12 @@ class Session:
         noise = self.gate.noise if self.gate is not None else self.noise_floor()
         threshold = max(rec.MIN_THRESHOLD, noise * rec.THRESHOLD_FACTOR)
         with self._cond:
-            if from_barge_in and self.barge_index is not None:
-                start = self.barge_index
-            else:
-                start = max(0, len(self.frames) - 15)
+            barge = from_barge_in and self.barge_index is not None
+            start = self.barge_index if barge else max(self.base, self.base + len(self.frames) - 15)
             self.barge_index = None
-        audio = rec.segment(self._blocks(start), threshold, preroll_blocks=3)
+        # 割り込みの後は、判定がすでに人の声と確かめているので、短い相づち（「うん」「はい」）も録る
+        audio = rec.segment(self._blocks(start), threshold, preroll_blocks=3,
+                            min_speech_seconds=0.1 if barge else rec.MIN_SPEECH_SECONDS)
         return None if audio is None else audio.astype(np.float32) / 32768.0
 
     def close(self) -> None:

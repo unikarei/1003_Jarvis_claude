@@ -307,7 +307,7 @@ def cited(text: str, hits: list) -> set[int]:
 
 
 def answer(question: str, projects: list[str] | None = None, limit: int = 8,
-           on_text=None, history=None, voice: bool = False) -> tuple[str, list[Hit]]:
+           on_text=None, history=None, voice: bool = False, cancel=None) -> tuple[str, list[Hit]]:
     """蓄積した知識を根拠に答え、なければ LLM 自身の知識で答える（ADR-0026）。
     on_text を渡すと、答えを生成しながら差分を渡す（逐次表示、T-1212）。返す hits は検索結果の全件
     （番号は答えの [n] と対応する。表示する出典は cited() で絞る）。"""
@@ -318,5 +318,6 @@ def answer(question: str, projects: list[str] | None = None, limit: int = 8,
     prompt = ANSWER_PROMPT.format(question=question, context=context, history=format_history(history),
                                   style=VOICE_STYLE if voice else "")
     if on_text is not None:
-        return llm.complete_stream(prompt, on_text), hits
+        extra = {"cancel": cancel} if cancel is not None else {}   # 取り消しのない呼び出しは従来どおり
+        return llm.complete_stream(prompt, on_text, **extra), hits
     return llm.complete(prompt), hits

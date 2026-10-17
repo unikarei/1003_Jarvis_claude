@@ -151,3 +151,30 @@ def test_claude_cli_never_gets_api_keys(monkeypatch):
     with pytest.raises(fresh.LLMError):
         fresh._stream_claude_cli("本文", lambda t: None)
     assert "ANTHROPIC_API_KEY" not in seen["env"] and seen["env"]["JARVIS_KEEP_ME"] == "1"
+
+
+def test_stream_stops_claude_when_cancelled(monkeypatch):
+    """取り消し（声の割り込み、ADR-0028）があれば、最初の文字が出る前でも claude -p を止める。"""
+    import importlib.util
+    import time as _time
+    spec = importlib.util.spec_from_file_location("llm_fresh2", llm.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    r, w = __import__("os").pipe()
+    state = {"killed": False}
+
+    class SilentProc:                                   # 何も出力しない claude -p
+        def __init__(self, cmd, **kwargs):
+            self.stdin = open(__import__("os").devnull, "w")
+            self.stdout = __import__("os").fdopen(r, "r")
+            self.stderr = None
+            self.returncode = None
+        def poll(self): return None if not state["killed"] else -9
+        def kill(self): state["killed"] = True
+        def wait(self): return -9
+    monkeypatch.setattr(fresh.subprocess, "Popen", SilentProc)
+    started = _time.monotonic()
+    with pytest.raises(fresh.LLMCancelled):
+        fresh._stream_claude_cli("本文", lambda t: None, timeout=30, cancel=lambda: _time.monotonic() - started > 0.2)
+    assert state["killed"] and _time.monotonic() - started < 1.0
+    __import__("os").close(w)

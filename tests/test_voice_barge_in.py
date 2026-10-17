@@ -264,14 +264,18 @@ def _llm(monkeypatch, answers, delays=None, cancelled=None):
     import voice_chat
     calls = []
 
-    def fake_stream(prompt, on_text, provider=None, timeout=None):
+    def fake_stream(prompt, on_text, provider=None, timeout=None, cancel=None):
         parts = answers[min(len(calls), len(answers) - 1)]
         calls.append(prompt)
         try:
             for part in parts:
-                time.sleep((delays or {}).get(part, 0.01))
+                end = time.monotonic() + (delays or {}).get(part, 0.01)
+                while time.monotonic() < end:          # 本物と同じく 0.1 秒以内ごとに取り消しを確かめる
+                    if cancel is not None and cancel():
+                        raise llm.LLMCancelled("取り消されました")
+                    time.sleep(0.01)
                 on_text(part)
-        except voice_chat.Cancelled:
+        except (voice_chat.Cancelled, llm.LLMCancelled):
             if cancelled is not None:
                 cancelled.append(parts)
             raise
@@ -353,3 +357,77 @@ def test_barge_in_can_be_disabled(monkeypatch):
     assert duplex.barge_in_enabled() is False
     monkeypatch.delenv("JARVIS_VOICE_BARGE_IN")
     assert duplex.barge_in_enabled() is True
+
+
+# ---------------------------------------------------------------- Codex の指摘への確認
+
+def test_listen_keeps_working_after_old_audio_is_dropped():
+    """2 分を超えて古い音を捨てても、読み取り位置がずれて待ち続けない（指摘 1）。"""
+    s, _ = _session()
+    for _ in range(50 * 120 + 10):
+        s.push(_frame(270))
+    assert s.base > 0
+    result = {}
+
+    def run():
+        result["audio"] = s.listen()
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    time.sleep(0.05)
+    for _ in range(30):
+        s.push(_frame(3000))
+    for _ in range(60):
+        s.push(_frame(270))
+    t.join(3)
+    assert not t.is_alive() and result["audio"] is not None
+
+
+def test_heard_excludes_sentences_still_in_the_output_delay():
+    """出力の遅れの間に渡し終えた文は、割り込みで止めたら聞いた文にしない（指摘 3）。"""
+    p, s = _player()
+    p.output_latency = 0.5
+    p.enqueue(1, "一文目。", np.full(300, 0.1, dtype=np.float32))
+    s.pump()
+    assert p.heard(1) == ["一文目。"]
+    p.stop()                                              # まだスピーカーから出きっていない
+    assert p.heard(1) == []
+    p.output_latency = 0.0
+    p.enqueue(2, "二文目。", np.full(300, 0.1, dtype=np.float32))
+    s.pump()
+    time.sleep(0.01)
+    p.stop()
+    assert p.heard(2) == ["二文目。"]
+
+
+def test_short_backchannel_after_barge_in_is_recorded():
+    """「うん」（約 0.24 秒）で割り込んだら、その相づちも録って質問として扱う（指摘 4、受け入れ D）。"""
+    s, speaker = _session(ref=0.0)
+    for _ in range(20):
+        s.push(_frame(270))
+    s.arm()
+    for _ in range(12):
+        s.push(_frame(1500))
+    assert s.barged.is_set()
+    for _ in range(60):
+        s.push(_frame(270))
+    audio = s.listen(from_barge_in=True)
+    assert audio is not None and int((np.abs(audio * 32768) > 1000).sum()) >= 12 * duplex.FRAME
+
+
+def test_E2_barge_in_before_the_first_character_stops_generation(kb, monkeypatch):
+    """最初の文字が出る前（考え中）の割り込みでも、取り消しの確認で生成を止める（指摘 2）。"""
+    cancelled = []
+    session = FakeSession(["質問一", "質問二"])
+    original_arm = session.arm
+
+    def arm_then_barge():
+        original_arm()
+        if len(session.listened) == 1:
+            threading.Timer(0.05, lambda: (session.speaker.new_turn(), session.barged.set())).start()
+    session.arm = arm_then_barge
+    _llm(monkeypatch, [["とても遅い答え。"], ["二の答え。"]], delays={"とても遅い答え。": 5.0}, cancelled=cancelled)
+    started = time.monotonic()
+    assert _run(session) == 0
+    assert time.monotonic() - started < 3                  # 5 秒の生成を待たずに次へ
+    assert cancelled == [["とても遅い答え。"]]
+    assert "二の答え。" in [s for _, s in session.player.played]

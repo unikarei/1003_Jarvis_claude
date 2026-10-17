@@ -109,7 +109,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
         finally:
             state["asking"] = False
 
-    ctx = orchestrator.Context(stream=stream, voice=True)
+    ctx = orchestrator.Context(stream=stream, voice=True, cancel=lambda: state["turn"] != speaker.turn)
     print("JARVIS と声で会話します。そのまま話しかけてください。JARVIS が話している途中でも、話し始めれば止まります。"
           "（「終了」と話すか q と Enter で終了）")
     info = session.calibrate("ジャービスです。どうぞ。")
@@ -170,7 +170,10 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
             timing = (f"、話し始めから停止まで約 {ev['detect_ms'] + ev['stop_call_ms'] + ev['output_ms']:.0f} ms"
                       f"（検出 {ev['detect_ms']}・停止の指示 {ev['stop_call_ms']}・出力 {ev['output_ms']}）") if ev else ""
             print(f"\n（割り込み: 読み上げを止めました{timing}）")
-            worker.join(timeout=5)
+            worker.join(timeout=10)            # 生成は取り消しの確認（0.1 秒ごと）で止まる
+            if worker.is_alive():              # 止まらない処理（逐次表示のないスキル）は、文脈を分けて切り離す
+                print("[前の処理は裏で終わるまで続きます。結果は使いません]")
+                ctx = orchestrator.Context(stream=stream, voice=True, cancel=ctx.cancel, history=list(ctx.history))
             if "outcome" in result:
                 _record(text, result["outcome"])
             ctx.history.append(Turn(Who.OWNER, text))
