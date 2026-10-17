@@ -78,6 +78,24 @@ def allowed_tasks() -> dict[str, dict]:
     return tasks
 
 
+def completed_task_ids() -> set[str]:
+    """一度でも PASS した task_id（完了済み）。開始のリストから外し、開始も断る。"""
+    done = set()
+    for f in runs_dir().glob("*/*/state.json"):
+        s = _read_json(f)
+        if isinstance(s, dict) and s.get("status") == "PASS" and s.get("task_id"):
+            done.add(s["task_id"])
+    return done
+
+
+def startable_tasks() -> tuple[dict[str, dict], list[dict]]:
+    """（開始できる指示書, 完了済みで外した指示書）。"""
+    done = completed_task_ids()
+    tasks = allowed_tasks()
+    return ({k: t for k, t in tasks.items() if t["task_id"] not in done},
+            [t for t in tasks.values() if t["task_id"] in done])
+
+
 def _pid_alive(pid) -> bool:
     try:
         os.kill(int(pid), 0)
@@ -195,7 +213,9 @@ class Controller:
             return False
 
     def start(self, name: str, pr: bool) -> tuple[int, dict]:
-        tasks = allowed_tasks()
+        tasks, done = startable_tasks()
+        if any(t["name"] == name for t in done):
+            return 400, {"error": "完了済み（PASS 済み）の指示書です。やり直すときは新しい task_id の指示書を作ってください"}
         if name not in tasks:
             return 400, {"error": "開始できる指示書ではありません（docs/codex/ の、コミット済みで未変更のものだけ）"}
         with self._lock:
@@ -313,7 +333,8 @@ def make_handler(token: str, port: int, controller: Controller):
             if url.path == "/api/worktrees":
                 return self._json(*controller.worktrees("refresh" in parse_qs(url.query)))
             if url.path == "/api/tasks":
-                return self._json(200, {"tasks": list(allowed_tasks().values())})
+                tasks, done = startable_tasks()
+                return self._json(200, {"tasks": list(tasks.values()), "completed": done})
             if url.path == "/api/runs":
                 return self._json(200, {"runs": list_runs(), "running": controller.running()})
             m = re.fullmatch(r"/api/runs/([^/]+)/([^/]+)", url.path)
@@ -426,6 +447,7 @@ test: .venv/bin/python -m pytest tests -q
 ## 制約（変更してよいファイル、変えてはいけないこと）</pre>
 <p>見本は <code>docs/codex/T-1304_knowledge_audit_json.md</code>。Codex は「仕様と制約を満たしているか」でレビューするため、具体的に書くほど判定の精度が上がります。Claude Code に「〜の指示書を作って」と頼むこともできます。</p>
 <h3>2. 指示書をコミットする</h3>
+<p>一度 PASS した指示書（完了済み）は開始のリストに出ません。やり直すときは新しい task_id の指示書を作ります。</p>
 <p>指示書の <code>setup</code>・<code>test</code> はシェルで実行されるため、画面に出るのは<strong>コミット済みで、その後に変更していない</strong>指示書だけです。</p>
 <h3>3. 画面で開始する</h3>
 <p>指示書を選ぶ → 必要なら「PASS なら PR を作る」にチェック → 「開始」→ 確認で OK。Claude・Codex の利用枠を使います。05:30〜07:30 は開始できません（理由が出ます）。</p>
@@ -459,6 +481,7 @@ test: .venv/bin/python -m pytest tests -q
 <section><h2>開始</h2>
 <select id="task"></select> <label><input type="checkbox" id="pr"> PASS なら PR を作る（マージはしない）</label>
 <button id="start">開始</button> <button id="stop" class="danger">実行中の run を停止</button>
+<div id="done" class="muted"></div>
 <div id="msg" class="muted"></div></section>
 <section><h2>実行の一覧</h2><table><thead><tr><th>タスク</th><th>状態</th><th>段階</th><th>回（指摘の数）</th><th>開始</th><th>PR</th><th>作業フォルダ</th></tr></thead>
 <tbody id="runs"></tbody></table>
@@ -488,7 +511,10 @@ async function loadWorktrees(refresh) {
 }
 async function loadTasks() {
   const [, d] = await api("/api/tasks");
-  document.getElementById("task").innerHTML = d.tasks.map(t => `<option value="${esc(t.name)}">${esc(t.task_id)}（${esc(t.repo)}）${esc(t.name)}</option>`).join("");
+  document.getElementById("task").innerHTML = d.tasks.map(t => `<option value="${esc(t.name)}">${esc(t.task_id)}（${esc(t.repo)}）${esc(t.name)}</option>`).join("") ||
+    '<option value="">開始できる指示書はありません（新しい指示書を docs/codex/ にコミットする）</option>';
+  document.getElementById("done").textContent = d.completed.length ?
+    `完了済み（PASS 済み）で外した指示書: ${d.completed.length} 件（${d.completed.map(t => t.task_id).join("、")}）` : "";
 }
 async function loadRuns() {
   const [code, d] = await api("/api/runs");

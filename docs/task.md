@@ -200,7 +200,7 @@
 ## Architecture Control Center（ACC、MAP Phase 6、静的版）
 
 - [x] `acc/build.py`: Registry と Discovery の結果から、問題・Project View・Infrastructure View・Layer View・全体構成図を1つの HTML に（`python -m acc.build`、既定の出力は `reports/acc/index.html`）
-- [x] 開発オーケストレーターの操作画面（`../docs/tasks.md` T-1305、`../docs/dev-orchestrator-design.md` §16）: `python -m acc.dev_console` を VS Code のターミナルで起動（常駐しない）。指示書を選んで開始・進捗・ログとテスト結果・指摘と修正の回数・停止・状態・PR のリンク。オーケストレーターは決まった引数の CLI で呼ぶだけ。127.0.0.1 に固定、起動ごとのトークン（Cookie）、Host・CSRF の確認、指示書は `docs/codex/` のコミット済みで未変更のものだけ、ログは秘密情報を伏せる。静的なページにも最近の実行（読み取りだけ）を出す。マージ後の「作業フォルダを削除」（判定と削除はオーケストレーターの `worktrees`・`cleanup`、§16.5）と使い方のヘルプ（?）。後片付けしたタスクの run は一覧から外し「履歴（後片付け済み）」に出す（記録は消さない）
+- [x] 開発オーケストレーターの操作画面（`../docs/tasks.md` T-1305、`../docs/dev-orchestrator-design.md` §16）: `python -m acc.dev_console` を VS Code のターミナルで起動（常駐しない）。指示書を選んで開始・進捗・ログとテスト結果・指摘と修正の回数・停止・状態・PR のリンク。オーケストレーターは決まった引数の CLI で呼ぶだけ。127.0.0.1 に固定、起動ごとのトークン（Cookie）、Host・CSRF の確認、指示書は `docs/codex/` のコミット済みで未変更のものだけ、ログは秘密情報を伏せる。静的なページにも最近の実行（読み取りだけ）を出す。マージ後の「作業フォルダを削除」（判定と削除はオーケストレーターの `worktrees`・`cleanup`、§16.5）と使い方のヘルプ（?）。後片付けしたタスクの run は一覧から外し「履歴（後片付け済み）」に出す（記録は消さない）。一度 PASS した指示書（完了済み）は開始のリストから外し、開始も断る
 - [ ] Tailscale 経由での配信（ネットワークへの公開のため Owner の承認待ち）
 - [ ] React / React Flow の対話型画面（npm の依存の追加のため Owner の承認待ち）
 - [x] ACC の自動更新（`../docs/tasks.md` T-704、2026-10-15 Owner 事前承認（AGENTS.md §2.1 適用））: `discover.py --acc` で Discovery の結果を書いた後・コミットの前に `acc.build` を実行。ACC の失敗ではコミットを止めず、終了コードを 0 以外にする（`--notify` で通知）。登録済みの plist に `--acc` を追加（本番への反映は main へのマージ後）

@@ -311,3 +311,20 @@ def test_cleaned_up_runs_move_to_history(ws):
 def test_page_has_history_section(server):
     _, page, _ = request(server, "GET", "/")
     assert "履歴（後片付け済み）" in page and 'id="history"' in page
+
+
+def test_completed_tasks_are_hidden_and_refused(ws, server):
+    d = ws / ".orchestrator" / "runs" / "T-1" / "20261017T090000"
+    d.mkdir(parents=True)
+    (d / "state.json").write_text(json.dumps({"task_id": "T-1", "status": "PASS", "cycles": []}))
+    code, data, _ = request(server, "GET", "/api/tasks")
+    assert code == 200 and data["tasks"] == [] and [t["task_id"] for t in data["completed"]] == ["T-1"]
+    code, data, _ = request(server, "POST", "/api/start", {"task": "T-1_ok.md"})
+    assert code == 400 and "完了済み" in data["error"]
+
+
+def test_not_passed_tasks_stay_startable(ws, server):
+    d = ws / ".orchestrator" / "runs" / "T-1" / "20261017T090000"
+    d.mkdir(parents=True)
+    (d / "state.json").write_text(json.dumps({"task_id": "T-1", "status": "CHANGES_REQUESTED", "cycles": []}))
+    assert [t["task_id"] for t in request(server, "GET", "/api/tasks")[1]["tasks"]] == ["T-1"]
