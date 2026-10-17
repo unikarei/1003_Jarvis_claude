@@ -122,3 +122,32 @@ def test_complete_passes_timeout_only_when_given(monkeypatch):
     assert llm.complete("p", provider="fake") == "ok"
     assert llm.complete("p", provider="fake", timeout=60) == "ok"
     assert seen == [None, 60]
+
+
+def test_claude_cli_never_gets_api_keys(monkeypatch):
+    """.env の ANTHROPIC_API_KEY が見えると claude -p は API の従量課金で動くため、子プロセスに渡さない（ADR-0020）。"""
+    for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
+        monkeypatch.setenv(key, "x")
+    monkeypatch.setenv("JARVIS_KEEP_ME", "1")
+    captured = {}
+    monkeypatch.setattr(llm.subprocess, "run", _fake_run(_envelope("結果"), captured=captured))
+    llm.complete("本文", provider="claude_cli")
+    env = captured["env"]
+    assert not {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"} & set(env)
+    assert env["JARVIS_KEEP_ME"] == "1"
+
+    # 逐次表示の経路（conftest が差し替えているため、モジュールを別に読み込んで確かめる）
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("llm_fresh", llm.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            seen.update(kwargs)
+            raise FileNotFoundError
+    monkeypatch.setattr(fresh.subprocess, "Popen", FakePopen)
+    with pytest.raises(fresh.LLMError):
+        fresh._stream_claude_cli("本文", lambda t: None)
+    assert "ANTHROPIC_API_KEY" not in seen["env"] and seen["env"]["JARVIS_KEEP_ME"] == "1"
