@@ -287,7 +287,8 @@ class DuplexSpeaker(Speaker):
                             break
                         self._put(turn, head)
                     self._put(turn, part)
-            while not in_code:
+            # コードの区間の始まり（```）かもしれない行は区切らない（改行まで待って区間を判定する）
+            while not in_code and not buffer.lstrip().startswith("`"):
                 head, buffer = tts.split_long(buffer)   # 句点まで長い文は、読点の切れ目で先に読み始める（繰り返し）
                 if not head:
                     break

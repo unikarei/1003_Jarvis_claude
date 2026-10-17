@@ -304,10 +304,11 @@ def split_long(text: str) -> tuple[str, str]:
     if len(text) <= LONG_SENTENCE:
         return "", text
     # 読点の直後だけで切る。半角・全角のカンマは数字（1,000・１，０００）の間なら使わない
-    commas = [m.end() for m in re.finditer(r"、|(?<![0-9０-９])，|，(?![0-9０-９])", text)
-              if m.end() >= MIN_PHRASE]
-    if not commas:
+    found = [m.end() for m in re.finditer(r"、|(?<![0-9０-９])，|，(?![0-9０-９])", text) if m.end() < len(text)]
+    if not found:
         return "", text
-    within = [c for c in commas if c <= LONG_SENTENCE]
-    cut = within[-1] if within else commas[0]                # 60 字までに読点がなければ、最初の読点で
+    preferred = [c for c in found if MIN_PHRASE <= c <= LONG_SENTENCE]
+    later = [c for c in found if c > LONG_SENTENCE]
+    # 12〜60 字の読点（最後のもの）→ 60 字より後の最初の読点 → 短い前半句の読点、の順に選ぶ
+    cut = preferred[-1] if preferred else (later[0] if later else found[-1])
     return text[:cut], text[cut:]

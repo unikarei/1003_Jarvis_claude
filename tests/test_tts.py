@@ -344,3 +344,28 @@ def test_http_synthesis_can_be_cancelled_mid_request():
         assert _time.monotonic() - started < 1.0
     finally:
         srv.shutdown(); srv.server_close()
+
+
+
+def test_short_first_phrase_still_splits_long_sentence():
+    """唯一の読点が先頭の近くでも、長い文は区切る（4 回目の指摘 2）。"""
+    text = "はい、" + "あ" * 70
+    assert tts.split_long(text) == ("はい、", "あ" * 70)
+
+
+def test_code_fence_line_with_commas_is_not_spoken():
+    """改行の前の長いコードの行（読点あり）を読まず、閉じた後の文は読む（4 回目の指摘 1）。"""
+    played = []
+
+    class P:
+        def enqueue(self, turn, s, a): played.append(s)
+        def stop(self): pass
+        def speaking(self): return False
+        def heard(self, t): return []
+        def close(self): pass
+    sp = duplex.DuplexSpeaker(P(), synth=lambda s, c: np.zeros(10, dtype=np.float32))
+    sp.feed("```python print('あ' * 70, 'い、う、え、お') " + "x" * 50)
+    sp.feed("\nprint(1)\n```\n終わりの文。")
+    sp.wait()
+    assert played == ["終わりの文。"]
+    sp.close()
