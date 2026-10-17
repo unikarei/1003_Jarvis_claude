@@ -279,6 +279,7 @@
 - [x] T-1214 `voice_chat.py`（orchestrator・逐次表示・読み上げ・キーボードでの確認・記録・ナレッジ化の材料）、`speech_to_text.transcribe_array`（認識のヒントの語）、faster-whisper の small モデルのダウンロード
 - [ ] T-1215 受け入れ（Owner の声で）
 - [x] T-1404 録音の改善（ADR-0027、`../docs/testing.md` §11）: `voice/record.py` に話し始めの直前 0.3 秒のプリロール、しきい値を周囲の音の中央値 × 2.0（`JARVIS_VOICE_THRESHOLD_FACTOR`、下限 300）、2 ブロック続いたら話し始め、途中の間はしきい値の 0.7 倍未満だけを無音と数える、無音の長さ `JARVIS_VOICE_SILENCE_SECONDS`（既定 0.8 秒）、0.3 秒未満の発話は捨てる。`speech_to_text.transcribe_array` はヒントの語を `hotwords` で渡す（語を 5 つ追加）
+- [x] T-1402 LLM の使い分けの土台（ADR-0027、`../docs/testing.md` §11）: `llm.py` に `ollama`（`JARVIS_OLLAMA_URL`・`JARVIS_CHAT_MODEL`・`JARVIS_OLLAMA_TIMEOUT`、`/api/chat` を `think: false`・`keep_alive: 30m` で、逐次・取り消し、`warm_up_ollama()`・`ollama_available()`）と `claude_warm`（`--input-format stream-json` の claude -p を 1 つ前もって起動し、1 回の答えに 1 プロセス、`warm_up_claude()`・atexit で停止）。失敗は `LLMError` で別のプロバイダーに切り替えない。既定と呼び出し側は変えない（振り分けは T-1403）。実機での速さの計測は PR の後
 
 ## Project OS API の再開（`../docs/tasks.md` T-1216・`../docs/project-os-api-restart-plan.md` 案 A、2026-10-16 Owner 承認）
 
