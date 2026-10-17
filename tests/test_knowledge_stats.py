@@ -118,6 +118,21 @@ def test_stats_does_not_write(knowledge, temp_registry):
     assert (config.DB_PATH.read_bytes(), temp_registry.read_bytes()) == before
 
 
+def test_stats_missing_db_not_created(tmp_path, monkeypatch, temp_registry, capsys):
+    missing = tmp_path / "none" / "jarvis.db"
+    monkeypatch.setattr(config, "DB_PATH", missing)
+    monkeypatch.setattr(db, "DB_PATH", missing)
+    with pytest.raises(sqlite3.OperationalError):
+        ke.stats()
+    assert knowledge_cli.main(["stats"]) == 1
+    assert capsys.readouterr().err.startswith("エラー: ")
+    assert not missing.exists()
+    missing.parent.mkdir()
+    with pytest.raises(sqlite3.OperationalError):
+        ke.stats()
+    assert not missing.exists()
+
+
 # ---------------------------------------------------------------- CLI
 
 def test_cli_json(knowledge, capsys):

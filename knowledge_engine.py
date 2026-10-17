@@ -16,10 +16,13 @@ import json
 import math
 import os
 import re
+import sqlite3
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 
+import db
 import llm
 import registry
 from db import _fetchall, extract_keywords, get_node
@@ -223,12 +226,22 @@ def _iso(value: str | None) -> str | None:
         return value
 
 
+def _fetchall_readonly(query: str) -> list[sqlite3.Row]:
+    """読み取り専用（mode=ro）で DB を開いて読む。DB がなければファイルを作らず sqlite3.OperationalError。"""
+    conn = sqlite3.connect(Path(db.DB_PATH).resolve().as_uri() + "?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(query).fetchall()
+    finally:
+        conn.close()
+
+
 def stats(now: datetime | None = None) -> dict:
     """データソース別・分野別の Knowledge の件数（読み取りだけ）。件数は jarvis.db の Knowledge の数。"""
     data = registry.load()
     resources = (data or {}).get("resources") or {}
     prefixes = _source_prefixes(resources)
-    rows = _fetchall(
+    rows = _fetchall_readonly(
         "SELECT k.id, k.category, k.created_at, k.url AS k_url, "
         "(SELECT s.url FROM edges e JOIN nodes s ON s.id = e.dst_id "
         " WHERE e.src_id = k.id AND e.type = 'derived_from' ORDER BY s.created_at LIMIT 1) AS s_url, "
