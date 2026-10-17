@@ -70,6 +70,8 @@ CHAT_MODEL = os.environ.get("JARVIS_CHAT_MODEL", "gemma4:12b")
 OLLAMA_TIMEOUT_SECONDS = int(os.environ.get("JARVIS_OLLAMA_TIMEOUT", "120"))
 # 会話の振り分けに LLM を使うか（FR-014、T-1212）。claude -p の起動に約 3 秒かかるため既定は使わない
 ROUTE_WITH_LLM = os.environ.get("JARVIS_ROUTE_WITH_LLM", "0") == "1"
+# ナレッジの質問とみなす検索の点数（BM25 の最上位）。これ未満で語にも当たらなければ通常の会話（ADR-0027、T-1403）
+KNOWLEDGE_SCORE_THRESHOLD = float(os.environ.get("JARVIS_KNOWLEDGE_SCORE_THRESHOLD", "8.0"))
 
 # ①ピアノ教室: アクセス分析用（Search Console / GA4、サービスアカウント認証）
 GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
