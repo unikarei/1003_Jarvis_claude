@@ -228,3 +228,10 @@ def test_main_refuses_without_orchestrator(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("JARVIS_WORKSPACE", str(tmp_path))
     assert dev_console.main(["--port", "0"]) == 1
     assert "オーケストレーターがありません" in capsys.readouterr().err
+
+
+def test_buttons_show_disabled_state(server):
+    _, page, _ = request(server, "GET", "/")
+    assert "button:disabled" in page
+    assert 'getElementById("stop").disabled = !d.running' in page
+    assert 'getElementById("start").disabled = d.running' in page
