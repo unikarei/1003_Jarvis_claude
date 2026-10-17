@@ -111,10 +111,39 @@ def run_summary(d: Path) -> dict | None:
             "updated_at": s.get("updated_at")}
 
 
-def list_runs(limit: int = 30) -> list[dict]:
+def cleanup_times(dirs: list[Path]) -> dict[str, str]:
+    """タスクごとの最後の後片付け（events.jsonl の stage=cleanup）の時刻。"""
+    times: dict[str, str] = {}
+    for d in dirs:
+        try:
+            lines = (d / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if '"cleanup"' not in line:
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("stage") == "cleanup" and e.get("at"):
+                task = d.parent.name
+                times[task] = max(times.get(task, ""), e["at"])
+    return times
+
+
+def list_runs(limit: int = 100) -> list[dict]:
+    """新しい順。後片付けより前に始まった run は archived（一覧から外し、履歴に出す。記録は消さない）。"""
     base = runs_dir()
     dirs = sorted((d for d in base.glob("*/*") if (d / "state.json").exists()), key=lambda d: d.name, reverse=True)
-    return [r for r in (run_summary(d) for d in dirs[:limit]) if r]
+    cleaned = cleanup_times(dirs)
+    runs = []
+    for r in (run_summary(d) for d in dirs[:limit]):
+        if r:
+            at = cleaned.get(r["task_id"])
+            r["archived"] = bool(at and (r.get("started_at") or "") < at and r["status"] != "running")
+            runs.append(r)
+    return runs
 
 
 def _tail(path: Path, n: int = LOG_TAIL) -> str | None:
@@ -418,7 +447,7 @@ test: .venv/bin/python -m pytest tests -q
 </table>
 <p>マージは自動では行われません。マージ後の本番への反映は Claude Code に依頼します。</p>
 <h3>6. 後片付け（マージの後）</h3>
-<p>PR を GitHub でマージしたら、一覧の「作業フォルダを削除」を押します。押せるのは、作業ブランチが main にマージ済みで、作業フォルダに未コミットの変更がなく、実行中でないときだけです（押せない理由はボタンの下に出ます）。マージの判定は 60 秒ごとに更新されます。消えるのは作業フォルダとローカルの作業ブランチで、実行の記録・GitHub のブランチと PR は残ります。</p>
+<p>PR を GitHub でマージしたら、一覧の「作業フォルダを削除」を押します。押せるのは、作業ブランチが main にマージ済みで、作業フォルダに未コミットの変更がなく、実行中でないときだけです（押せない理由はボタンの下に出ます）。マージの判定は 60 秒ごとに更新されます。消えるのは作業フォルダとローカルの作業ブランチで、実行の記録・GitHub のブランチと PR は残ります。後片付けしたタスクの run は一覧から外れ、下の「履歴（後片付け済み）」に移ります（同じ ID で新しく開始した run は一覧に出ます）。</p>
 <h3>注意</h3>
 <ul>
 <li><strong>同じ ID は使い回せません</strong>。一度実行した ID で再び開始すると、前回の作業フォルダが残っているため BLOCKED になります。やり直すときは ID を変えます（例: T-1400 → T-1400b）。</li>
@@ -432,7 +461,11 @@ test: .venv/bin/python -m pytest tests -q
 <button id="start">開始</button> <button id="stop" class="danger">実行中の run を停止</button>
 <div id="msg" class="muted"></div></section>
 <section><h2>実行の一覧</h2><table><thead><tr><th>タスク</th><th>状態</th><th>段階</th><th>回（指摘の数）</th><th>開始</th><th>PR</th><th>作業フォルダ</th></tr></thead>
-<tbody id="runs"></tbody></table></section>
+<tbody id="runs"></tbody></table>
+<details id="history-box"><summary>履歴（後片付け済み） <span id="history-count">0</span> 件</summary>
+<p class="muted">作業フォルダを削除したタスクの run。実行の記録は残っており、クリックで詳細を見られる。</p>
+<table><thead><tr><th>タスク</th><th>状態</th><th>段階</th><th>回（指摘の数）</th><th>開始</th><th>PR</th></tr></thead>
+<tbody id="history"></tbody></table></details></section>
 <section id="detail" hidden><h2 id="dtitle"></h2><div id="dbody"></div></section>
 </main>
 <script>
@@ -460,10 +493,15 @@ async function loadTasks() {
 async function loadRuns() {
   const [code, d] = await api("/api/runs");
   if (code !== 200) { document.getElementById("msg").textContent = d.error; return; }
-  document.getElementById("runs").innerHTML = d.runs.map(r => `<tr data-k="${esc(r.task_id)}/${esc(r.run)}" class="${selected === r.task_id + "/" + r.run ? "sel" : ""}">
+  const row = (r, wt) => `<tr data-k="${esc(r.task_id)}/${esc(r.run)}" class="${selected === r.task_id + "/" + r.run ? "sel" : ""}">
     <td><a href="#" data-k="${esc(r.task_id)}/${esc(r.run)}">${esc(r.task_id)}</a><div class="muted">${esc(r.run)}</div></td>
     <td>${badge(r.status)}${r.reason ? `<div class="muted">${esc(r.reason)}</div>` : ""}</td><td>${esc(r.stage)}</td>
-    <td>${esc(r.cycles)} / ${esc(r.max_cycles)}（${esc(r.findings.join("・"))}）</td><td>${esc(r.started_at)}</td><td>${link(r.pr_url)}</td><td>${wtCell(r)}</td></tr>`).join("");
+    <td>${esc(r.cycles)} / ${esc(r.max_cycles)}（${esc(r.findings.join("・"))}）</td><td>${esc(r.started_at)}</td><td>${link(r.pr_url)}</td>${wt ? `<td>${wtCell(r)}</td>` : ""}</tr>`;
+  const active = d.runs.filter(r => !r.archived), archived = d.runs.filter(r => r.archived);
+  document.getElementById("runs").innerHTML = active.map(r => row(r, true)).join("") ||
+    '<tr><td colspan="7" class="muted">実行中・後片付け前の run はありません。</td></tr>';
+  document.getElementById("history").innerHTML = archived.map(r => row(r, false)).join("");
+  document.getElementById("history-count").textContent = archived.length;
   document.getElementById("stop").disabled = !d.running;
   document.getElementById("start").disabled = d.running;
   if (selected) loadDetail(selected);
@@ -482,6 +520,9 @@ async function loadDetail(k) {
     <details><summary>テストのログ（末尾）</summary><pre>${esc(c.test_log)}</pre></details>`).join("") +
     `<details><summary>進捗の記録（events）</summary><pre>${esc(d.events.join("\\n"))}</pre></details>`;
 }
+document.getElementById("history").addEventListener("click", e => {
+  const k = e.target.closest("[data-k]")?.dataset.k; if (!k) return; e.preventDefault(); selected = k; loadRuns();
+});
 document.getElementById("runs").addEventListener("click", async e => {
   const b = e.target.closest("button.cleanup");
   if (b) {

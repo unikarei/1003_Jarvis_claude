@@ -66,3 +66,11 @@ def test_dev_section_lists_runs_and_escapes():
 
 def test_dev_section_without_runs():
     assert "実行の記録はまだありません" in build.build_html(_registry(), _snapshot())
+
+
+def test_dev_section_hides_archived_runs():
+    runs = [{"task_id": "T-1304", "status": "PASS", "cycles": 1, "started_at": "t", "archived": True},
+            {"task_id": "T-1400", "status": "running", "cycles": 0, "started_at": "t", "archived": False}]
+    page = build.build_html(_registry(), _snapshot(), dev_runs=runs)
+    section = page.split('id="dev"')[1].split("</section>")[0]
+    assert "T-1400" in section and "T-1304" not in section and "後片付け済みの run 1 件" in section
