@@ -421,3 +421,25 @@ def test_settings_page_rejects_bad_content_length(server):
         assert c.getresponse().status == 400, value
         c.close()
     assert req(server, "POST", "/api/settings", [1, 2])[0] == 400
+
+
+
+def test_settings_with_non_string_engine_fall_back(settings_path):
+    """engine が配列・オブジェクトでも起動できるように既定に戻す（7 回目の指摘 1）。"""
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    for value in ([1], {"a": 1}, 3):
+        settings_path.write_text(json.dumps({"engine": value}))
+        assert tts.load_settings() == tts.VoiceSettings()
+
+
+def test_odd_speakers_response_is_handled(fake_voicevox, monkeypatch):
+    """/speakers の応答の形が違っても例外にせず、話者なし（使えない）とする（7 回目の指摘 2）。"""
+    engine, _ = fake_voicevox
+    monkeypatch.setattr(engine, "_get", lambda path, timeout=10: {"not": "a list"} if path == "/speakers" else "0.1")
+    assert engine.speakers() == []
+    monkeypatch.setattr(engine, "_get", lambda path, timeout=10: [1, {"name": "x", "styles": "bad"}] if path == "/speakers" else "0.1")
+    assert engine.speakers() == []
+    from acc import voice_settings
+    monkeypatch.setitem(tts.ENGINES, "voicevox", engine)
+    info = {e["name"]: e for e in voice_settings.engines_info()}["voicevox"]
+    assert not info["available"] and "話者の一覧を読めません" in info["reason"]

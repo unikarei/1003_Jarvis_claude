@@ -43,8 +43,11 @@ def engines_info() -> list[dict]:
     out = []
     for e in tts.ENGINES.values():
         ok, reason = e.available()
+        speakers = e.speakers() if ok else []
+        if ok and not speakers:                   # 起動していても話者を読めなければ選べない
+            ok, reason = False, f"{e.label} の話者の一覧を読めません"
         out.append({"name": e.name, "label": e.label, "local": e.local, "paid": e.paid, "note": e.note,
-                    "available": ok, "reason": reason, "speakers": e.speakers() if ok else []})
+                    "available": ok, "reason": reason, "speakers": speakers})
     return out
 
 

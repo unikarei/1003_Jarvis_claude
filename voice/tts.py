@@ -56,6 +56,8 @@ def load_settings(path: Path | None = None) -> VoiceSettings:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         known = {k: v for k, v in data.items() if k in VoiceSettings.__dataclass_fields__}
+        if not isinstance(known.get("engine", ""), str):
+            return VoiceSettings()
         settings = VoiceSettings(**known).clamp()
     except (OSError, ValueError, TypeError, AttributeError):
         return VoiceSettings()
@@ -213,9 +215,16 @@ class VoicevoxEngine(Engine):
             data = self._get("/speakers")
         except (OSError, ValueError):
             return []
-        return [{"id": s.get("speaker_uuid") or s.get("name"), "name": s.get("name"),
-                 "styles": [{"id": str(st.get("id")), "name": st.get("name")} for st in s.get("styles", [])]}
-                for s in data]
+        if not isinstance(data, list):            # 応答の形が違えば話者なし（画面ではエンジンを使えないと示す）
+            return []
+        out = []
+        for s in data:
+            if not isinstance(s, dict) or not isinstance(s.get("styles", []), list):
+                continue
+            out.append({"id": s.get("speaker_uuid") or s.get("name"), "name": s.get("name"),
+                        "styles": [{"id": str(st.get("id")), "name": st.get("name")}
+                                   for st in s.get("styles", []) if isinstance(st, dict)]})
+        return out
 
     def synthesize(self, text, settings, cancel=None):
         import soundfile as sf
