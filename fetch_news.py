@@ -4,6 +4,8 @@
 2026-10、T-803）。
 """
 
+import sys
+
 import feedparser
 
 from config import RSS_FEEDS
@@ -37,10 +39,16 @@ def fetch_feed(feed: dict) -> list[str]:
 
 
 def fetch_all() -> list[str]:
-    """設定済みの全フィードを取得し、新規Sourceノードのidリストを返す。"""
+    """設定済みの全フィードを取得し、新規Sourceノードのidリストを返す。
+    1 つのフィードの失敗（接続の切断など）で全体を止めない。失敗したフィードは標準エラーに出して続ける
+    （2026-10-18 06:00、1 つのサイトの切断で日次の処理がすべて止まった）。"""
     all_new_ids = []
     for feed in RSS_FEEDS:
-        all_new_ids.extend(fetch_feed(feed))
+        try:
+            all_new_ids.extend(fetch_feed(feed))
+        except Exception as e:  # フィードごとに分ける（ほかのフィードは続ける）
+            print(f"[警告] フィードを取得できませんでした: {feed.get('name')} {feed.get('url')}: "
+                  f"{type(e).__name__}: {e}", file=sys.stderr)
     return all_new_ids
 
 

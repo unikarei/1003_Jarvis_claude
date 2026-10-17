@@ -31,3 +31,22 @@ def test_stored_title_with_ideographic_space_is_matched(db_path, monkeypatch):
     db.insert_node(node_type="Source", category="minpaku", title="セミナー。\u3000村上  晴", content="", url="https://x/old")
     monkeypatch.setattr(fetch_news.feedparser, "parse", lambda url: _feed([("https://x/old-2", "セミナー。\u3000村上 晴")]))
     assert fetch_news.fetch_feed({"name": "観光経済", "url": "u", "category": "minpaku"}) == []
+
+
+def test_one_failing_feed_does_not_stop_the_others(db_path, monkeypatch, capsys):
+    """1 つのフィードの接続が切れても、ほかのフィードは取得する（2026-10-18 の日次の失敗）。"""
+    import http.client
+    import fetch_news
+    db.init_db()
+    feeds = [{"name": "壊れた", "url": "https://broken.example/rss", "category": "news"},
+             {"name": "正常", "url": "https://ok.example/rss", "category": "news"}]
+    monkeypatch.setattr(fetch_news, "RSS_FEEDS", feeds)
+
+    def parse(url):
+        if "broken" in url:
+            raise http.client.RemoteDisconnected("Remote end closed connection without response")
+        return type("P", (), {"entries": [{"link": "https://ok.example/a", "title": "記事", "summary": "本文"}]})()
+    monkeypatch.setattr(fetch_news.feedparser, "parse", parse)
+    ids = fetch_news.fetch_all()
+    assert len(ids) == 1
+    assert "フィードを取得できませんでした: 壊れた" in capsys.readouterr().err
