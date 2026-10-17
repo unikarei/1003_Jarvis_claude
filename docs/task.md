@@ -272,6 +272,7 @@
 ## 声での会話（FR-014、`../docs/tasks.md` T-1213〜T-1215、2026-10-14 Owner 承認）
 
 - [x] T-1213 `voice/record.py`（Enter で開始、周囲の音から決めたしきい値で無音 0.8 秒で区切る、最長 20 秒、保存しない）、`voice/speak.py`（文ごとの読み上げ、URL・出典の番号・コード・表の区切りは読まない、スキルごとの話し言葉の要約）
+- [x] 起動用ファイル `run_text_chat.command`（chat.py）・`run_voice_chat.command`（voice_chat.py）。Finder でダブルクリックで起動（2026-10-17 Owner 依頼）
 - [x] T-1214 `voice_chat.py`（orchestrator・逐次表示・読み上げ・キーボードでの確認・記録・ナレッジ化の材料）、`speech_to_text.transcribe_array`（認識のヒントの語）、faster-whisper の small モデルのダウンロード
 - [ ] T-1215 受け入れ（Owner の声で）
 
