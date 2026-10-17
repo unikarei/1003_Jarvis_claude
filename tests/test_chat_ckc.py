@@ -92,13 +92,13 @@ def test_chat_question_answers_with_sources_and_traces(chat, db_path, monkeypatc
                         url="https://example.com/b")
 
     def fake(prompt, provider=None, timeout=None):
-        return "振り分けません" if "振り分け係" in prompt else "補助金には条件があります [1]"
+        return "振り分けません" if "振り分け係" in prompt else "補助金には条件があります [1][2]"
     monkeypatch.setattr(llm, "complete", fake)
 
     def fake_stream(prompt, on_text, provider=None, timeout=None):     # 逐次表示（T-1212）
-        for part in ("補助金には", "条件があります [1]"):
+        for part in ("補助金には", "条件があります [1][2]"):
             on_text(part)
-        return "補助金には条件があります [1]"
+        return "補助金には条件があります [1][2]"
     monkeypatch.setattr(llm, "complete_stream", fake_stream)
     _inputs(monkeypatch, "民泊の補助金の条件は？", "その出典は？", "2 番目の出典は？", "exit")
     chat.main()

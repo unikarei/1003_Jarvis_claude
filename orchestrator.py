@@ -32,6 +32,7 @@ class Context:
     last_skill: str | None = None
     stream: Callable[[str], None] | None = None   # 答えを生成しながら表示する（chat.py が設定、T-1212）
     shown: str = ""                               # stream で表示済みの部分（chat.py は残りだけを表示する）
+    voice: bool = False                           # 声の会話（答えを短い話し言葉にする、ADR-0026）
 
 
 @dataclass
@@ -194,11 +195,13 @@ def _ordinal(text: str) -> int | None:
 
 def _answer(inputs, ctx, text):
     import knowledge_engine as ke
-    answer, hits = ke.answer(inputs.get("question") or text, projects=_projects(inputs), on_text=ctx.stream)
+    answer, hits = ke.answer(inputs.get("question") or text, projects=_projects(inputs), on_text=ctx.stream,
+                             history=ctx.history, voice=ctx.voice)
     if ctx.stream is not None:
         ctx.shown = answer        # 答えの本文は表示済み。出典だけが残り
-    lines = [answer, ""] + [f"[{i}] {h.title}  {h.url or h.knowledge_id}" for i, h in enumerate(hits, 1)]
-    return "\n".join(lines).strip(), _hit_items(hits)
+    used = ke.cited(answer, hits)  # 出典は答えで使ったものだけ示す（LLM の知識で答えたときは出さない）
+    lines = [answer, ""] + [f"[{i}] {h.title}  {h.url or h.knowledge_id}" for i, h in enumerate(hits, 1) if i in used]
+    return "\n".join(lines).strip(), (_hit_items(hits) if used else [])   # 番号は [n] と対応させる
 
 
 def _projects(inputs) -> list[str] | None:

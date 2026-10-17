@@ -231,3 +231,26 @@ def test_llm_cannot_choose_write_or_paid_skills(index, monkeypatch):
     r = orc.route("家具は来月までに買うことにする", orc.Context(), use_llm=True)
     assert (r.skill, r.method) == ("knowledge-answer", "default")
     assert "theme-register" not in calls[0] and "knowledge-search" in calls[0]
+
+
+def test_answer_shows_only_cited_sources(monkeypatch):
+    """出典は答えで使った番号だけを示す。LLM の知識で答えたとき（番号なし）は出典も直前の結果も残さない（ADR-0026）。"""
+    import knowledge_engine as ke
+    from knowledge_engine import Hit
+    hits = [Hit(knowledge_id=f"k{i}", title=f"題{i}", url=f"https://x/{i}", score=1.0, projects=[], created_at="2026-10-17", snippet="")
+            for i in (1, 2, 3)]
+    seen = {}
+
+    def fake_answer(question, projects=None, on_text=None, history=None, voice=False):
+        seen.update(history=history, voice=voice)
+        return seen["reply"], hits
+    monkeypatch.setattr(ke, "answer", fake_answer)
+    ctx = orc.Context(voice=True, history=["前の発言"])
+    seen["reply"] = "答えです [2]。"
+    text, items = orc._answer({"question": "q"}, ctx, "q")
+    assert "[2] 題2  https://x/2" in text and "題1" not in text and "題3" not in text
+    assert [i["knowledge_id"] for i in items] == ["k1", "k2", "k3"]     # 番号は [n] と対応させる
+    assert seen == {"history": ["前の発言"], "voice": True, "reply": "答えです [2]。"}
+    seen["reply"] = "一般的には、こうです。"
+    text, items = orc._answer({"question": "q"}, ctx, "q")
+    assert text == "一般的には、こうです。" and items == []
