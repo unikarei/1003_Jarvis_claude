@@ -213,6 +213,7 @@
 ## Knowledge Engine（MAP Phase 7）
 
 - [x] `knowledge_engine.py`・`knowledge_cli.py`: プロジェクト横断の検索（BM25、プロジェクトで絞り込み）、出典の追跡（Vault・Registry・会話まで）、重複と鮮度の監査、検索結果だけを根拠に答える（RAG、llm.complete）
+- [x] T-1304 `knowledge_cli.py audit --json`（監査結果を JSON で出す。DB を読めないときは標準エラーに 1 行で終了コード 1。`../docs/testing.md` §10）
 - [ ] 意味検索（埋め込み）: ローカル LLM（Ollama）の埋め込みモデルの導入が必要なため Owner の承認待ち
 
 ## Knowledge Architect（MAP Phase 8）
