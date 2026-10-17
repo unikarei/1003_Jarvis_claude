@@ -49,6 +49,16 @@ def speech_summary(skill: str, text: str) -> str:
         if source:
             return f"出典は、{_plain(source.split('← 出典:', 1)[1])}です。"
         return _plain(lines[0]) if lines else ""
+    if skill == "knowledge-stats":
+        items = []
+        for line in lines:
+            m = re.match(r"^\d+\. (.*): (\d+) 件", line)
+            if m and len(items) < 3:
+                name = PAREN.sub("", m.group(1)).replace("「", " ").replace("」", "")
+                items.append(f"{speakable(name) or '分野なし'}、{m.group(2)} 件")
+        if not items:
+            return _plain(lines[0]) if lines else ""
+        return "上位は、" + "。".join(items) + "です。"
     if skill == "system-status" and lines:
         counts = re.match(r"(エラー \d+ 件・警告 \d+ 件)", lines[0])
         errors = []

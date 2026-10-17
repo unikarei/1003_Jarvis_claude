@@ -216,6 +216,7 @@
 
 - [x] `knowledge_engine.py`・`knowledge_cli.py`: プロジェクト横断の検索（BM25、プロジェクトで絞り込み）、出典の追跡（Vault・Registry・会話まで）、重複と鮮度の監査、検索結果だけを根拠に答える（RAG、llm.complete）
 - [x] T-1304 `knowledge_cli.py audit --json`（監査結果を JSON で出す。DB を読めないときは標準エラーに 1 行で終了コード 1。`../docs/testing.md` §10）
+- [x] T-1401 集計のスキル `knowledge-stats`（会話の経路 C、ADR-0027）: `knowledge_engine.stats()`（jarvis.db の Knowledge をデータソース別・分野別に集計、Registry の Vault で取り込まれていないものは「未取得」）、`knowledge_cli.py stats [--json]`、`orchestrator.py` のハンドラー（件数・分野を発言から決める、LLM を呼ばない）、声では上位 3 つの名前と件数だけを読む。スキルの索引への登録は jarvis-skills の別の PR（`../docs/testing.md` §11）
 - [ ] 意味検索（埋め込み）: ローカル LLM（Ollama）の埋め込みモデルの導入が必要なため Owner の承認待ち
 
 ## Knowledge Architect（MAP Phase 8）
