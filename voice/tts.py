@@ -146,6 +146,10 @@ class VoicevoxEngine(Engine):
     def __init__(self, name: str, label: str, base_url: str, note: str):
         super().__init__(name, label, note=note)
         self.base_url = base_url.rstrip("/")
+        from urllib.parse import urlparse
+        host = urlparse(self.base_url).hostname or ""
+        # ローカル・無料のエンジンに限る（環境変数で外のサーバーを指しても、文を外へ送らない）
+        self.local_ok = host in ("127.0.0.1", "localhost", "::1")
 
     def _get(self, path: str, timeout: float = HTTP_TIMEOUT):
         with urllib.request.urlopen(self.base_url + path, timeout=timeout) as r:
@@ -158,6 +162,8 @@ class VoicevoxEngine(Engine):
             return r.read()
 
     def available(self) -> tuple[bool, str]:
+        if not self.local_ok:
+            return False, f"{self.label} の接続先が Mac の中（127.0.0.1）ではありません（{self.base_url}）"
         try:
             self._get("/version", timeout=1.0)
             return True, ""
@@ -177,6 +183,8 @@ class VoicevoxEngine(Engine):
         import soundfile as sf
         from urllib.parse import urlencode
 
+        if not self.local_ok:
+            raise TTSError(f"{self.label} の接続先が Mac の中ではありません")
         style = settings.speaker
         if not str(style).isdigit():
             raise TTSError(f"{self.label} の話者はスタイルの番号で指定してください（今の設定: {style}）")
@@ -190,7 +198,10 @@ class VoicevoxEngine(Engine):
             raise TTSError(f"{self.label} で合成できません: {e}") from None
         if cancel is not None and cancel.is_set():
             raise TTSError("取り消されました")
-        audio, rate = sf.read(io.BytesIO(wav), dtype="float32")
+        try:
+            audio, rate = sf.read(io.BytesIO(wav), dtype="float32")
+        except Exception as e:                    # 壊れた音声も「合成できない」にして say に切り替えさせる
+            raise TTSError(f"{self.label} の音声を読めません: {e}") from None
         return resample(audio, rate)
 
 
@@ -257,7 +268,8 @@ def split_long(text: str) -> tuple[str, str]:
     語や数字の途中では切らない（読点の直後だけ）。"""
     if len(text) <= LONG_SENTENCE:
         return "", text
-    commas = [m.end() for m in re.finditer(r"[、，]", text)   # 半角のカンマは数字（1,000）にあるので使わない
+    # 読点の直後だけで切る。半角・全角のカンマは数字（1,000・１，０００）の間なら使わない
+    commas = [m.end() for m in re.finditer(r"、|(?<![0-9０-９])，|，(?![0-9０-９])", text)
               if m.end() >= MIN_PHRASE]
     if not commas:
         return "", text

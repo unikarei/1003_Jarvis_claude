@@ -46,6 +46,9 @@ def test_split_long_sentence_only_at_commas():
     assert tts.split_long(no_comma) == ("", no_comma)
     late = "あ" * 70 + "、" + "い" * 10                                  # 最初の読点が 60 字より後（Codex の指摘 3）
     assert tts.split_long(late) == ("あ" * 70 + "、", "い" * 10)
+    zenkaku = "売上は１，０００，０００円で" + "あ" * 70                    # 全角のカンマの数字でも切らない
+    assert tts.split_long(zenkaku) == ("", zenkaku)
+    assert tts.split_long("あ" * 20 + "，" + "い" * 50)[0] == "あ" * 20 + "，"   # 数字でない全角のカンマでは切る
     numbers = "売上は1,000,000円で" + "あ" * 70                     # 半角のカンマ（数字）では切らない
     assert tts.split_long(numbers) == ("", numbers)
 
@@ -246,3 +249,38 @@ def test_save_settings_and_refuse_paid(server, settings_path):
     code, body, _ = req(server, "POST", "/api/settings", {"engine": "elevenlabs", "speaker": "x"})
     assert code == 400 and tts.load_settings().engine == "say"
     assert json.loads(req(server, "GET", "/api/settings")[1])["rate"] == 1.2
+
+
+
+def test_long_chunk_is_split_repeatedly():
+    """1 回で届いた長い文も、読点ごとに繰り返し区切る（2 回目の指摘 3）。"""
+    played = []
+
+    class P:
+        def enqueue(self, turn, s, a): played.append(s)
+        def stop(self): pass
+        def speaking(self): return False
+        def heard(self, t): return []
+        def close(self): pass
+    sp = duplex.DuplexSpeaker(P(), synth=lambda s, c: np.zeros(10, dtype=np.float32))
+    parts = ["一" * 50 + "、", "二" * 50 + "、", "三" * 50 + "、", "四" * 20]
+    sp.feed("".join(parts))
+    sp.wait()
+    assert played == parts[:3]
+    sp.flush()
+    sp.wait()
+    assert played == parts
+    sp.close()
+
+
+def test_http_engine_only_on_this_mac_and_bad_audio(fake_voicevox, monkeypatch):
+    """接続先は Mac の中だけ。壊れた音声は TTSError（say に切り替える）（2 回目の指摘 1・2）。"""
+    remote = tts.VoicevoxEngine("voicevox", "VOICEVOX", "http://example.com:50021", "テスト")
+    ok, reason = remote.available()
+    assert not ok and "Mac の中" in reason
+    with pytest.raises(tts.TTSError):
+        remote.synthesize("文", tts.VoiceSettings(engine="voicevox", speaker="13"))
+    engine, _ = fake_voicevox
+    monkeypatch.setattr(engine, "_post", lambda path, body=None, timeout=10: b"{}" if "audio_query" in path else b"broken")
+    with pytest.raises(tts.TTSError):
+        engine.synthesize("文", tts.VoiceSettings(engine="voicevox", speaker="13"))
