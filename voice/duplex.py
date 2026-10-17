@@ -281,6 +281,11 @@ class DuplexSpeaker(Speaker):
                     in_code = not in_code
                     continue
                 if not in_code:
+                    while True:                  # 句点まで届いた長い文も、読点の切れ目で区切って読む
+                        head, part = tts.split_long(part)
+                        if not head:
+                            break
+                        self._put(turn, head)
                     self._put(turn, part)
             while not in_code:
                 head, buffer = tts.split_long(buffer)   # 句点まで長い文は、読点の切れ目で先に読み始める（繰り返し）

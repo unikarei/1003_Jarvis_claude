@@ -140,6 +140,40 @@ class SayEngine(Engine):
         return resample(audio, rate)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """転送（リダイレクト）を追わない（ローカルのエンジンが外へ転送しても、文を外へ送らない）。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, "転送は追いません", headers, fp)
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _cancellable(fn, cancel: threading.Event | None, timeout: float):
+    """fn を別のスレッドで動かし、取り消されたらすぐ TTSError で戻る（通信は裏で終わるまで続くが、結果は使わない）。
+    割り込みの後に、次の発言の合成が前の通信を待たないように。"""
+    result: dict = {}
+
+    def run():
+        try:
+            result["value"] = fn()
+        except BaseException as e:  # 呼び出し側で扱う
+            result["error"] = e
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    deadline = time.monotonic() + timeout
+    while t.is_alive():
+        if cancel is not None and cancel.is_set():
+            raise TTSError("取り消されました")
+        if time.monotonic() > deadline:
+            raise TTSError("時間切れ")
+        t.join(0.02)
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
 class VoicevoxEngine(Engine):
     """VOICEVOX ENGINE と同じ HTTP API（AivisSpeech Engine も同じ形）。"""
 
@@ -152,13 +186,13 @@ class VoicevoxEngine(Engine):
         self.local_ok = host in ("127.0.0.1", "localhost", "::1")
 
     def _get(self, path: str, timeout: float = HTTP_TIMEOUT):
-        with urllib.request.urlopen(self.base_url + path, timeout=timeout) as r:
+        with _OPENER.open(self.base_url + path, timeout=timeout) as r:
             return json.loads(r.read())
 
     def _post(self, path: str, body: bytes | None = None, timeout: float = HTTP_TIMEOUT) -> bytes:
         req = urllib.request.Request(self.base_url + path, data=body or b"", method="POST",
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _OPENER.open(req, timeout=timeout) as r:
             return r.read()
 
     def available(self) -> tuple[bool, str]:
@@ -189,11 +223,12 @@ class VoicevoxEngine(Engine):
         if not str(style).isdigit():
             raise TTSError(f"{self.label} の話者はスタイルの番号で指定してください（今の設定: {style}）")
         try:
-            query = json.loads(self._post("/audio_query?" + urlencode({"text": text, "speaker": style})))
-            if cancel is not None and cancel.is_set():
-                raise TTSError("取り消されました")
+            query = json.loads(_cancellable(
+                lambda: self._post("/audio_query?" + urlencode({"text": text, "speaker": style})), cancel,
+                HTTP_TIMEOUT))
             query.update(speedScale=settings.rate, intonationScale=settings.intonation, pitchScale=settings.pitch)
-            wav = self._post("/synthesis?" + urlencode({"speaker": style}), json.dumps(query).encode())
+            wav = _cancellable(lambda: self._post("/synthesis?" + urlencode({"speaker": style}),
+                                                  json.dumps(query).encode()), cancel, HTTP_TIMEOUT)
         except (OSError, ValueError) as e:
             raise TTSError(f"{self.label} で合成できません: {e}") from None
         if cancel is not None and cancel.is_set():

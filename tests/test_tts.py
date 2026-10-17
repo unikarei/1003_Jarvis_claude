@@ -284,3 +284,63 @@ def test_http_engine_only_on_this_mac_and_bad_audio(fake_voicevox, monkeypatch):
     monkeypatch.setattr(engine, "_post", lambda path, body=None, timeout=10: b"{}" if "audio_query" in path else b"broken")
     with pytest.raises(tts.TTSError):
         engine.synthesize("文", tts.VoiceSettings(engine="voicevox", speaker="13"))
+
+
+
+def test_long_sentence_with_period_in_the_same_chunk_is_split():
+    """長い文と句点が 1 回で届いても、読点で区切る（3 回目の指摘 3）。"""
+    played = []
+
+    class P:
+        def enqueue(self, turn, s, a): played.append(s)
+        def stop(self): pass
+        def speaking(self): return False
+        def heard(self, t): return []
+        def close(self): pass
+    sp = duplex.DuplexSpeaker(P(), synth=lambda s, c: np.zeros(10, dtype=np.float32))
+    first, rest = "一" * 50 + "、", "二" * 30 + "。"
+    sp.feed(first + rest)
+    sp.wait()
+    assert played == [first, rest]
+    sp.close()
+
+
+def test_http_engine_does_not_follow_redirects():
+    """ローカルのエンジンが外へ転送しても追わない（3 回目の指摘 1）。"""
+    class Redirect(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_POST(self):
+            self.send_response(307); self.send_header("Location", "http://example.com/steal")
+            self.send_header("Content-Length", "0"); self.end_headers()
+        do_GET = do_POST
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        e = tts.VoicevoxEngine("voicevox", "VOICEVOX", f"http://127.0.0.1:{srv.server_address[1]}", "テスト")
+        with pytest.raises(tts.TTSError):
+            e.synthesize("秘密の文", tts.VoiceSettings(engine="voicevox", speaker="13"))
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def test_http_synthesis_can_be_cancelled_mid_request():
+    """遅いローカルのエンジンでも、取り消せばすぐ戻る（次の発言の合成を待たせない、3 回目の指摘 2）。"""
+    import time as _time
+
+    class Slow(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_POST(self):
+            _time.sleep(3)
+            self.send_response(200); self.send_header("Content-Length", "2"); self.end_headers(); self.wfile.write(b"{}")
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        e = tts.VoicevoxEngine("voicevox", "VOICEVOX", f"http://127.0.0.1:{srv.server_address[1]}", "テスト")
+        cancel = threading.Event()
+        threading.Timer(0.2, cancel.set).start()
+        started = _time.monotonic()
+        with pytest.raises(tts.TTSError):
+            e.synthesize("文", tts.VoiceSettings(engine="voicevox", speaker="13"), cancel)
+        assert _time.monotonic() - started < 1.0
+    finally:
+        srv.shutdown(); srv.server_close()
