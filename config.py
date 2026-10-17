@@ -64,6 +64,10 @@ ESCALATION_MODEL = os.environ.get("JARVIS_ESCALATION_MODEL", "claude-sonnet-5-5"
 LLM_PROVIDER = os.environ.get("JARVIS_LLM_PROVIDER", "claude_cli")
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local" / "bin" / "claude"))
 CLAUDE_CLI_TIMEOUT_SECONDS = int(os.environ.get("JARVIS_CLAUDE_CLI_TIMEOUT", "300"))
+# ローカルの Ollama（llm の "ollama" プロバイダー、ADR-0027、T-1402）。無料・最初の文字まで約 0.5 秒
+OLLAMA_URL = os.environ.get("JARVIS_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+CHAT_MODEL = os.environ.get("JARVIS_CHAT_MODEL", "gemma4:12b")
+OLLAMA_TIMEOUT_SECONDS = int(os.environ.get("JARVIS_OLLAMA_TIMEOUT", "120"))
 # 会話の振り分けに LLM を使うか（FR-014、T-1212）。claude -p の起動に約 3 秒かかるため既定は使わない
 ROUTE_WITH_LLM = os.environ.get("JARVIS_ROUTE_WITH_LLM", "0") == "1"
 
