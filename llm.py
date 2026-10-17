@@ -1,6 +1,7 @@
 """Claude APIへの問い合わせを共通化するヘルパー。"""
 
 import json
+import os
 import subprocess
 import tempfile
 
@@ -61,6 +62,17 @@ class LLMError(Exception):
     """LLM の呼び出しに失敗した（CLI の異常終了、上限到達、タイムアウトなど）。別のプロバイダーには切り替えない。"""
 
 
+# claude -p に渡さない環境変数。.env の ANTHROPIC_API_KEY などが見えると、Claude Code は Pro のサブスクリプションでは
+# なく API の従量課金で動く（ADR-0020 の「サブスクリプションの CLI を使う」に反する。2026-10-17 に検出）。
+CLI_BLOCKED_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
+                   "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
+
+
+def _cli_env() -> dict[str, str]:
+    """claude -p に渡す環境（API キー・API の接続先を除く）。"""
+    return {k: v for k, v in os.environ.items() if k not in CLI_BLOCKED_ENV}
+
+
 def _complete_claude_cli(prompt: str, timeout: int | None = None) -> str:
     """Claude Code CLI（claude -p）をツールなしで実行し、最終応答のテキストを返す。"""
     timeout = timeout or CLAUDE_CLI_TIMEOUT_SECONDS
@@ -68,7 +80,7 @@ def _complete_claude_cli(prompt: str, timeout: int | None = None) -> str:
     with tempfile.TemporaryDirectory(prefix="jarvis-llm-") as workdir:
         try:
             proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                                  cwd=workdir, timeout=timeout)
+                                  cwd=workdir, timeout=timeout, env=_cli_env())
         except FileNotFoundError:
             raise LLMError(f"Claude Code CLI が見つかりません: {CLAUDE_BIN}") from None
         except subprocess.TimeoutExpired:
@@ -119,7 +131,7 @@ def _stream_claude_cli(prompt: str, on_text, timeout: int | None = None) -> str:
     with tempfile.TemporaryDirectory(prefix="jarvis-llm-") as workdir:
         try:
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    text=True, cwd=workdir)
+                                    text=True, cwd=workdir, env=_cli_env())
         except FileNotFoundError:
             raise LLMError(f"Claude Code CLI が見つかりません: {CLAUDE_BIN}") from None
         proc.stdin.write(prompt)
