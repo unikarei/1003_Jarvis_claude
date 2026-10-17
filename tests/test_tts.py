@@ -172,25 +172,50 @@ def test_engine_failing_mid_conversation_falls_back_to_say(monkeypatch, fake_voi
 
 
 def test_voice_chat_uses_saved_settings_in_every_mode(settings_path, monkeypatch, capsys):
-    """保存した設定は、割り込みあり・なし・押してから話す形のどれでも使う（Codex の指摘 1・4）。"""
+    """保存した設定は、割り込みあり・なし・押してから話す形のどれでも合成に渡る（実際に main を動かして確かめる）。"""
+    import queue as _queue
+    import speech_to_text
     import voice_chat
+    from voice import record as mic
     tts.save_settings(tts.VoiceSettings(engine="say", speaker="Reed (日本語（日本）)", rate=1.3))
     seen = []
-    monkeypatch.setattr(tts, "make_synth", lambda s: seen.append(s) or (lambda sentence, cancel: None))
+    monkeypatch.setattr(tts, "make_synth", lambda s: seen.append((s.speaker, s.rate)) or (lambda sentence, c: None))
 
-    class P:
+    class FakePlayer:
+        def __init__(self, device=None): pass
         def stop(self): pass
         def speaking(self): return False
         def heard(self, t): return []
         def close(self): pass
         def enqueue(self, *a): pass
-    sp = voice_chat.build_speaker(player=P())
-    assert seen[0].speaker == "Reed (日本語（日本）)" and seen[0].rate == 1.3
-    assert "Reed" in capsys.readouterr().out
-    sp.close()
-    import inspect
-    src = inspect.getsource(voice_chat.main)
-    assert src.count("build_speaker()") == 2                             # 割り込みの形と、それ以外の形の両方
+        def set_turn(self, t): pass
+    monkeypatch.setattr(duplex, "Player", FakePlayer)
+    monkeypatch.setattr(voice_chat, "init_db", lambda: None)
+
+    def quit_keys():
+        q = _queue.Queue(); q.put("q"); return q
+    # 押してから話す形・割り込みなしの形
+    for kwargs in ({"push_to_talk": True}, {"barge_in": False}):
+        assert voice_chat.main(listen=lambda: None, transcribe=lambda a: "", keys=quit_keys(), **kwargs) == 0
+    # 割り込みのある形（マイクと音声認識は偽物）
+    monkeypatch.setattr(mic, "has_input_device", lambda: True)
+    monkeypatch.setattr(speech_to_text, "load_model", lambda: None)
+    captured = {}
+    monkeypatch.setattr(voice_chat, "run_barge_in", lambda session, transcribe, keys: captured.setdefault("s", session) and 0)
+    monkeypatch.setattr(duplex, "Session", lambda player, speaker: type("S", (), {"speaker": speaker})())
+    assert voice_chat.main(keys=quit_keys(), barge_in=True) == 0
+    assert seen == [("Reed (日本語（日本）)", 1.3)] * 3                    # 3 つの形すべてで同じ設定
+    assert isinstance(captured["s"].speaker, duplex.DuplexSpeaker)
+
+
+def test_unknown_or_paid_engine_in_settings_falls_back(settings_path):
+    """設定ファイルに知らない・有料のエンジンがあっても、起動できるように say（Kyoko）に戻す（6 回目の指摘 1）。"""
+    for name in ("unknown-engine", "elevenlabs"):
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps({"engine": name, "speaker": "x"}))
+        assert tts.load_settings() == tts.VoiceSettings()
+    settings_path.write_text("[1, 2]")
+    assert tts.load_settings() == tts.VoiceSettings()
 
 
 # ---------------------------------------------------------------- 設定と試聴の画面

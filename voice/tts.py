@@ -56,9 +56,12 @@ def load_settings(path: Path | None = None) -> VoiceSettings:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         known = {k: v for k, v in data.items() if k in VoiceSettings.__dataclass_fields__}
-        return VoiceSettings(**known).clamp()
-    except (OSError, ValueError, TypeError):
+        settings = VoiceSettings(**known).clamp()
+    except (OSError, ValueError, TypeError, AttributeError):
         return VoiceSettings()
+    if settings.engine not in ENGINES or ENGINES[settings.engine].paid:
+        return VoiceSettings()                    # 知らない・有料のエンジンは使わない（say・Kyoko に戻す）
+    return settings
 
 
 def save_settings(settings: VoiceSettings, path: Path | None = None) -> None:
