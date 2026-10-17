@@ -20,6 +20,7 @@ from collections.abc import Callable
 import numpy as np
 
 from voice import record as rec
+from voice import tts
 from voice.speak import SENTENCE_END, Speaker, speakable
 
 SAMPLE_RATE = 16000
@@ -281,6 +282,10 @@ class DuplexSpeaker(Speaker):
                     continue
                 if not in_code:
                     self._put(turn, part)
+            if not in_code:
+                head, buffer = tts.split_long(buffer)   # 句点まで長い文は、読点の切れ目で先に読み始める
+                if head:
+                    self._put(turn, head)
             self._buffers[turn] = (buffer, in_code)
 
     def flush(self, turn: int | None = None) -> None:
