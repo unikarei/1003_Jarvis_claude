@@ -767,3 +767,36 @@ def test_synthesis_failure_does_not_stop_the_speaker():
     t.join(2)
     assert not t.is_alive() and [s for _, s in player.played] == ["次の文。"]
     sp.close()
+
+
+def test_barge_in_is_announced_only_after_index_and_stop():
+    """割り込みの通知（barged）は、録音の開始位置の確定と停止（聞いた文の整理）の後（10 回目の指摘）。"""
+    s, _ = _session()
+    seen = {}
+
+    class OrderSpeaker:
+        turn = 0
+        def new_turn(self):
+            seen["index_set"] = s.barge_index is not None
+            seen["barged_before_stop"] = s.barged.is_set()
+            self.turn += 1
+    s.speaker = OrderSpeaker()
+    s.arm()
+    for _ in range(6):
+        s.push(_frame(5000))
+    assert s.barged.is_set()
+    assert seen == {"index_set": True, "barged_before_stop": False}
+
+
+def test_rejected_decision_does_not_block_later_barge_ins():
+    """発言が変わって確定しなかった判定の後も、次の発言では割り込みを検出できる（10 回目の指摘 3）。"""
+    s, speaker = _session()
+    s.arm()
+    speaker.turn = 7                                        # arm の後に発言が変わった（arm し直す前）
+    for _ in range(6):
+        s.push(_frame(5000))
+    assert not s.barged.is_set()
+    s.arm()                                                 # 次の発言
+    for _ in range(6):
+        s.push(_frame(5000))
+    assert s.barged.is_set()

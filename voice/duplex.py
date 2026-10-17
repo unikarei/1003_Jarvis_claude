@@ -382,30 +382,29 @@ class Session:
                 self.base += drop
             index = self.base + len(self.frames) - 1  # 通し番号
             self._cond.notify_all()
+        # 判定・録音の開始位置の確定・停止（聞いた文の整理を含む）・通知を、すべて arm のロックの中でこの順に行う。
+        # 会話の側は disarm（同じロック）を待ち合わせにして、割り込みを確定し終えた状態だけを見る
         with self._arm_lock:
-            armed, gen, gate = self.armed, self._arm_gen, self.gate
-        if armed and gate is not None:
+            if not self.armed or self.gate is None:
+                return
             ref = self.player.level(now - self.delay - 0.04, now - self.delay + 0.04)
-            if gate.update(level, ref):
-                with self._arm_lock:              # disarm・次の arm と同期し、判定を始めた arm の発言だけを止める
-                    target = self._arm_turn
-                    if (not self.armed or self._arm_gen != gen
-                            or target != getattr(self.speaker, "turn", target)):
-                        return
-                    self.armed = False
-                    # 先に知らせてから止める（会話の側が「割り込みなしで終わった」と判断しないように）。
-                    # まず止める（目標 200 ms 以内）。番号も進め、検出の後に届く古い発言の文・生成をすぐ捨てさせる
-                    self.barged.set()
-                    self.speaker.new_turn()
-                stopped = time.monotonic()
-                self.stop_latency.append(stopped - now)
-                with self._cond:
-                    self.barge_index = max(self.base, index - self.gate.onset_back - self.PREROLL_FRAMES)
-                    onset = self.frames[max(0, index - self.gate.onset_back - self.base)][0]
-                out_ms = round(getattr(self.player, "output_latency", 0.0) * 1000)
-                self.events.append({"detect_ms": round((now - onset) * 1000 + FRAME_SECONDS * 1000),
-                                    "stop_call_ms": round((stopped - now) * 1000, 1), "output_ms": out_ms})
-                self.barged.set()
+            if not self.gate.update(level, ref):
+                return
+            if self._arm_turn != getattr(self.speaker, "turn", self._arm_turn):
+                self.gate.reset()                 # 発言が変わっていたら確定しない（判定はやり直し）
+                return
+            self.armed = False
+            with self._cond:
+                self.barge_index = max(self.base, index - self.gate.onset_back - self.PREROLL_FRAMES)
+                onset = self.frames[max(0, index - self.gate.onset_back - self.base)][0]
+            # 止める（目標 200 ms 以内）。番号も進め、検出の後に届く古い発言の文・生成をすぐ捨てさせる
+            self.speaker.new_turn()
+            stopped = time.monotonic()
+            self.stop_latency.append(stopped - now)
+            out_ms = round(getattr(self.player, "output_latency", 0.0) * 1000)
+            self.events.append({"detect_ms": round((now - onset) * 1000 + FRAME_SECONDS * 1000),
+                                "stop_call_ms": round((stopped - now) * 1000, 1), "output_ms": out_ms})
+            self.barged.set()                     # 最後に知らせる
 
     # 校正 -------------------------------------------------------------
 
