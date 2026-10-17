@@ -33,6 +33,7 @@ TASK_NAME = re.compile(r"^[A-Za-z0-9._-]+\.md$")
 RUN_PART = re.compile(r"^[A-Za-z0-9._-]+$")
 LOG_TAIL = 6000
 START_WAIT_SECONDS = 3   # すぐ断られた（実行しない時間帯・実行中）ときの理由を拾う
+WORKTREES_TTL = 60       # 作業フォルダの判定は git fetch を伴うため、この秒数だけ使い回す
 
 
 def workspace() -> Path:
@@ -154,6 +155,7 @@ class Controller:
     def __init__(self):
         self._lock = threading.Lock()
         self.proc: subprocess.Popen | None = None
+        self._worktrees: tuple[float, list] | None = None
 
     def running(self) -> bool:
         if self.proc is not None and self.proc.poll() is None:
@@ -185,10 +187,33 @@ class Controller:
             return 409, {"error": mask_secrets(log.read_text(encoding="utf-8").strip()) or "開始を断られました"}
         return 202, {"started": tasks[name]["task_id"], "pid": self.proc.pid, "exited": rc}
 
+    def _cli(self, *args: str, timeout: int = 90) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(orchestrator()), *args], cwd=workspace(), capture_output=True,
+                              text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+
     def stop(self) -> tuple[int, dict]:
-        res = subprocess.run([sys.executable, str(orchestrator()), "stop"], cwd=workspace(), capture_output=True,
-                             text=True, timeout=90, stdin=subprocess.DEVNULL)
+        res = self._cli("stop")
         return (200 if res.returncode == 0 else 500), {"message": mask_secrets((res.stdout + res.stderr).strip())}
+
+    def worktrees(self, refresh: bool = False) -> tuple[int, dict]:
+        """残っている作業フォルダと、消してよいか（マージ済み・変更なし・実行中でない）。判定はオーケストレーター。"""
+        if not refresh and self._worktrees and time.monotonic() - self._worktrees[0] < WORKTREES_TTL:
+            return 200, {"worktrees": self._worktrees[1]}
+        res = self._cli("worktrees", "--json", timeout=300)
+        try:
+            items = json.loads(res.stdout)
+        except ValueError:
+            return 500, {"error": mask_secrets((res.stderr or res.stdout).strip()[:500]) or "判定できません"}
+        self._worktrees = (time.monotonic(), items)
+        return 200, {"worktrees": items}
+
+    def cleanup(self, task_id: str) -> tuple[int, dict]:
+        if not RUN_PART.match(task_id):
+            return 400, {"error": "タスクの ID が違います"}
+        with self._lock:
+            res = self._cli("cleanup", task_id, timeout=300)
+            self._worktrees = None
+        return (200 if res.returncode == 0 else 409), {"message": mask_secrets((res.stdout + res.stderr).strip())}
 
 
 def make_handler(token: str, port: int, controller: Controller):
@@ -256,6 +281,8 @@ def make_handler(token: str, port: int, controller: Controller):
                 return
             if url.path == "/":
                 return self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            if url.path == "/api/worktrees":
+                return self._json(*controller.worktrees("refresh" in parse_qs(url.query)))
             if url.path == "/api/tasks":
                 return self._json(200, {"tasks": list(allowed_tasks().values())})
             if url.path == "/api/runs":
@@ -278,6 +305,8 @@ def make_handler(token: str, port: int, controller: Controller):
                 return self._json(*controller.start(str(body.get("task", "")), bool(body.get("pr"))))
             if self.path == "/api/stop":
                 return self._json(*controller.stop())
+            if self.path == "/api/cleanup":
+                return self._json(*controller.cleanup(str(body.get("task_id", ""))))
             self._json(404, {"error": "ありません"})
 
     return Handler
@@ -388,6 +417,8 @@ test: .venv/bin/python -m pytest tests -q
 <tr><td><span class="st STOPPED">STOPPED</span></td><td>自分で止めた</td><td>—</td></tr>
 </table>
 <p>マージは自動では行われません。マージ後の本番への反映は Claude Code に依頼します。</p>
+<h3>6. 後片付け（マージの後）</h3>
+<p>PR を GitHub でマージしたら、一覧の「作業フォルダを削除」を押します。押せるのは、作業ブランチが main にマージ済みで、作業フォルダに未コミットの変更がなく、実行中でないときだけです（押せない理由はボタンの下に出ます）。マージの判定は 60 秒ごとに更新されます。消えるのは作業フォルダとローカルの作業ブランチで、実行の記録・GitHub のブランチと PR は残ります。</p>
 <h3>注意</h3>
 <ul>
 <li><strong>同じ ID は使い回せません</strong>。一度実行した ID で再び開始すると、前回の作業フォルダが残っているため BLOCKED になります。やり直すときは ID を変えます（例: T-1400 → T-1400b）。</li>
@@ -400,7 +431,7 @@ test: .venv/bin/python -m pytest tests -q
 <select id="task"></select> <label><input type="checkbox" id="pr"> PASS なら PR を作る（マージはしない）</label>
 <button id="start">開始</button> <button id="stop" class="danger">実行中の run を停止</button>
 <div id="msg" class="muted"></div></section>
-<section><h2>実行の一覧</h2><table><thead><tr><th>タスク</th><th>状態</th><th>段階</th><th>回（指摘の数）</th><th>開始</th><th>PR</th></tr></thead>
+<section><h2>実行の一覧</h2><table><thead><tr><th>タスク</th><th>状態</th><th>段階</th><th>回（指摘の数）</th><th>開始</th><th>PR</th><th>作業フォルダ</th></tr></thead>
 <tbody id="runs"></tbody></table></section>
 <section id="detail" hidden><h2 id="dtitle"></h2><div id="dbody"></div></section>
 </main>
@@ -411,6 +442,17 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const badge = s => `<span class="st ${esc(s)}">${esc(s)}</span>`;
 const link = u => u && /^https:\\/\\/github\\.com\\//.test(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.split("/").slice(-3).join("/"))}</a>` : "";
 async function api(path, opts) { const r = await fetch(path, opts); return [r.status, await r.json()]; }
+let worktrees = [];
+function wtCell(r) {
+  const w = worktrees.find(w => w.task_id === r.task_id && w.run === r.run);
+  if (!w) return "";
+  return `<button class="cleanup" data-task="${esc(w.task_id)}" ${w.removable ? "" : "disabled"} title="${esc(w.removable ? "マージ済み。作業フォルダとローカルのブランチを消す" : w.reason)}">作業フォルダを削除</button>` +
+    (w.removable ? "" : `<div class="muted">${esc(w.reason)}</div>`);
+}
+async function loadWorktrees(refresh) {
+  const [code, d] = await api("/api/worktrees" + (refresh ? "?refresh=1" : ""));
+  if (code === 200) { worktrees = d.worktrees; loadRuns(); }
+}
 async function loadTasks() {
   const [, d] = await api("/api/tasks");
   document.getElementById("task").innerHTML = d.tasks.map(t => `<option value="${esc(t.name)}">${esc(t.task_id)}（${esc(t.repo)}）${esc(t.name)}</option>`).join("");
@@ -421,7 +463,7 @@ async function loadRuns() {
   document.getElementById("runs").innerHTML = d.runs.map(r => `<tr data-k="${esc(r.task_id)}/${esc(r.run)}" class="${selected === r.task_id + "/" + r.run ? "sel" : ""}">
     <td><a href="#" data-k="${esc(r.task_id)}/${esc(r.run)}">${esc(r.task_id)}</a><div class="muted">${esc(r.run)}</div></td>
     <td>${badge(r.status)}${r.reason ? `<div class="muted">${esc(r.reason)}</div>` : ""}</td><td>${esc(r.stage)}</td>
-    <td>${esc(r.cycles)} / ${esc(r.max_cycles)}（${esc(r.findings.join("・"))}）</td><td>${esc(r.started_at)}</td><td>${link(r.pr_url)}</td></tr>`).join("");
+    <td>${esc(r.cycles)} / ${esc(r.max_cycles)}（${esc(r.findings.join("・"))}）</td><td>${esc(r.started_at)}</td><td>${link(r.pr_url)}</td><td>${wtCell(r)}</td></tr>`).join("");
   document.getElementById("stop").disabled = !d.running;
   document.getElementById("start").disabled = d.running;
   if (selected) loadDetail(selected);
@@ -440,7 +482,15 @@ async function loadDetail(k) {
     <details><summary>テストのログ（末尾）</summary><pre>${esc(c.test_log)}</pre></details>`).join("") +
     `<details><summary>進捗の記録（events）</summary><pre>${esc(d.events.join("\\n"))}</pre></details>`;
 }
-document.getElementById("runs").addEventListener("click", e => {
+document.getElementById("runs").addEventListener("click", async e => {
+  const b = e.target.closest("button.cleanup");
+  if (b) {
+    if (b.disabled || !confirm(b.dataset.task + " の作業フォルダを削除しますか（マージ済み。ローカルの作業ブランチも消します。実行の記録・GitHub のブランチと PR は残ります）")) return;
+    document.getElementById("msg").textContent = "削除しています…";
+    const [, d] = await api("/api/cleanup", {method: "POST", headers: H, body: JSON.stringify({task_id: b.dataset.task})});
+    document.getElementById("msg").textContent = d.message || d.error;
+    loadWorktrees(true); return;
+  }
   const k = e.target.closest("[data-k]")?.dataset.k; if (!k) return; e.preventDefault(); selected = k; loadRuns();
 });
 document.getElementById("start").onclick = async () => {
@@ -460,7 +510,7 @@ const help = document.getElementById("help");
 document.getElementById("help-open").onclick = () => help.showModal();
 document.getElementById("help-close").onclick = () => help.close();
 help.addEventListener("click", e => { if (e.target === help) help.close(); });   // 外側をクリックで閉じる
-loadTasks(); loadRuns(); setInterval(loadRuns, 5000);
+loadTasks(); loadRuns(); loadWorktrees(false); setInterval(loadRuns, 5000); setInterval(() => loadWorktrees(true), 60000);
 </script></body></html>
 """
 
