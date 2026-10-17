@@ -1,5 +1,6 @@
 """Claude APIへの問い合わせを共通化するヘルパー。"""
 
+import codecs
 import json
 import os
 import subprocess
@@ -119,7 +120,11 @@ def complete(prompt: str, provider: str | None = None, timeout: int | None = Non
     return PROVIDERS[name](prompt, timeout=timeout) if timeout else PROVIDERS[name](prompt)
 
 
-def _stream_claude_cli(prompt: str, on_text, timeout: int | None = None) -> str:
+class LLMCancelled(LLMError):
+    """呼び出し側の取り消し（声の割り込み、ADR-0028）で生成を止めた。"""
+
+
+def _stream_claude_cli(prompt: str, on_text, timeout: int | None = None, cancel=None) -> str:
     """claude -p の逐次出力（stream-json）。差分のテキストを on_text に渡し、最後に全文を返す（FR-014、T-1212）。"""
     import selectors
     import time
@@ -139,26 +144,47 @@ def _stream_claude_cli(prompt: str, on_text, timeout: int | None = None) -> str:
         selector = selectors.DefaultSelector()
         selector.register(proc.stdout, selectors.EVENT_READ)
         result = None
+        fd = proc.stdout.fileno()
+        os.set_blocking(fd, False)                 # 改行を待たずに読む（行の途中で止まっても取り消せる）
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        pending, lines, eof = "", [], False
         try:
             while True:
+                if lines:
+                    line = lines.pop(0)
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if event.get("type") == "stream_event":
+                        delta = (event.get("event") or {}).get("delta") or {}
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            on_text(delta["text"])
+                    elif event.get("type") == "result":
+                        result = event
+                    continue
+                if eof:
+                    break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise LLMError(f"Claude Code CLI が {timeout} 秒でタイムアウトしました")
-                if not selector.select(timeout=remaining):
+                if cancel is not None and cancel():
+                    raise LLMCancelled("取り消されました")   # finally で claude -p を止める
+                if not selector.select(timeout=min(remaining, 0.1)):
                     continue
-                line = proc.stdout.readline()
-                if not line:
-                    break
                 try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
+                    chunk = os.read(fd, 65536)
+                except BlockingIOError:
                     continue
-                if event.get("type") == "stream_event":
-                    delta = (event.get("event") or {}).get("delta") or {}
-                    if delta.get("type") == "text_delta" and delta.get("text"):
-                        on_text(delta["text"])
-                elif event.get("type") == "result":
-                    result = event
+                if not chunk:
+                    eof = True
+                    pending += decoder.decode(b"", final=True)
+                    if pending:
+                        lines.append(pending)
+                    continue
+                pending += decoder.decode(chunk)
+                *complete, pending = pending.split("\n")
+                lines.extend(complete)
         finally:
             selector.close()
             if proc.poll() is None:
@@ -173,12 +199,18 @@ def _stream_claude_cli(prompt: str, on_text, timeout: int | None = None) -> str:
     return result.get("result", "")
 
 
-def complete_stream(prompt: str, on_text, provider: str | None = None, timeout: int | None = None) -> str:
+def complete_stream(prompt: str, on_text, provider: str | None = None, timeout: int | None = None,
+                    cancel=None) -> str:
     """complete() の逐次表示版。claude_cli では生成中の差分を on_text に渡す。
     逐次出力のないプロバイダーは、全文を一度だけ on_text に渡す。失敗時は LLMError（別のプロバイダーに切り替えない）。"""
     name = provider or LLM_PROVIDER
     if name == "claude_cli" and PROVIDERS.get(name) is _complete_claude_cli:
-        return _stream_claude_cli(prompt, on_text, timeout)
+        return _stream_claude_cli(prompt, on_text, timeout, cancel)
+    # 逐次出力のないプロバイダーは、生成の途中では取り消せない（前と後で確かめ、取り消されていれば結果を渡さない）
+    if cancel is not None and cancel():
+        raise LLMCancelled("取り消されました")
     text = complete(prompt, provider=provider, timeout=timeout)
+    if cancel is not None and cancel():
+        raise LLMCancelled("取り消されました")
     on_text(text)
     return text

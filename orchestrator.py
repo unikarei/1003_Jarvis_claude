@@ -33,6 +33,7 @@ class Context:
     stream: Callable[[str], None] | None = None   # 答えを生成しながら表示する（chat.py が設定、T-1212）
     shown: str = ""                               # stream で表示済みの部分（chat.py は残りだけを表示する）
     voice: bool = False                           # 声の会話（答えを短い話し言葉にする、ADR-0026）
+    cancel: Callable[[], bool] | None = None      # True を返したら答えの生成を止める（声の割り込み、ADR-0028）
 
 
 @dataclass
@@ -196,7 +197,7 @@ def _ordinal(text: str) -> int | None:
 def _answer(inputs, ctx, text):
     import knowledge_engine as ke
     answer, hits = ke.answer(inputs.get("question") or text, projects=_projects(inputs), on_text=ctx.stream,
-                             history=ctx.history, voice=ctx.voice)
+                             history=ctx.history, voice=ctx.voice, cancel=ctx.cancel)
     if ctx.stream is not None:
         ctx.shown = answer        # 答えの本文は表示済み。出典だけが残り
     used = ke.cited(answer, hits)  # 出典は答えで使ったものだけ示す（LLM の知識で答えたときは出さない）
