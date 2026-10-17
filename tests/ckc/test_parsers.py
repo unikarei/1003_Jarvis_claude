@@ -144,6 +144,15 @@ def test_claude_non_string_sender_is_excluded(tmp_path, sender):
     assert len(result.warnings) == 1 and "bad" in result.warnings[0]
 
 
+@pytest.mark.parametrize("current", ["missing-node", "", 1, ["a"]])
+def test_chatgpt_invalid_current_node_is_skipped_with_warning(tmp_path, current):
+    # 指定先が不正なら、最後の葉（別の枝）に切り替えず会話ごと飛ばす
+    bad = _chatgpt_conv("bad", current_node=current)
+    result = parse_chatgpt_export(_write(tmp_path, [bad, _chatgpt_conv("ok", current_node=None)]), CAPTURED_AT)
+    assert [c.external_id for c in result.conversations] == ["ok"]
+    assert len(result.warnings) == 1 and "bad" in result.warnings[0] and "current_node" in result.warnings[0]
+
+
 @pytest.mark.parametrize("parse", [parse_chatgpt_export, parse_claude_export])
 def test_non_dict_items_are_skipped_with_warning(tmp_path, parse):
     path = tmp_path / "conversations.json"

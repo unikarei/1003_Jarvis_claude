@@ -12,10 +12,8 @@ from ckc.parsers import ParseResult, as_key, as_str, load_conversation_list, uni
 _ROLES = {"user": Speaker.OWNER, "assistant": Speaker.AI}
 
 
-def _start_node(mapping: dict, current: object) -> str | None:
-    """たどり始めるノード。current_node がなければ children が空のノードのうち最後のもの。"""
-    if isinstance(current, str) and current in mapping:
-        return current
+def _last_leaf(mapping: dict) -> str | None:
+    """children が空のノードのうち最後のもの（current_node がない場合のたどり始め）。"""
     leaves = [k for k, v in mapping.items() if isinstance(v, dict) and not v.get("children")]
     return leaves[-1] if leaves else None
 
@@ -71,7 +69,15 @@ def parse_chatgpt_export(path: Path, captured_at: str) -> ParseResult:
         if occurred_at is None:
             result.warnings.append(f"ChatGPT の会話 {external_id}: create_time がないか不正なため飛ばしました")
             continue
-        start = _start_node(mapping, item.get("current_node"))
+        current = item.get("current_node")
+        if current is None:
+            start = _last_leaf(mapping)
+        elif isinstance(current, str) and current in mapping:
+            start = current
+        else:
+            # 指定先が不正なとき、別の枝を本筋として取り込まないよう最後の葉は使わない
+            result.warnings.append(f"ChatGPT の会話 {external_id}: current_node が mapping にないため飛ばしました")
+            continue
         turns = [t for t in (_turn(n) for n in _branch(mapping, start)) if t] if start else []
         if not turns:
             result.warnings.append(f"ChatGPT の会話 {external_id}: 発言がないため飛ばしました")
