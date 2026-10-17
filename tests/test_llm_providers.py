@@ -145,6 +145,33 @@ def test_ollama_stream_cancel_stops_reading_and_closes_connection(ollama):
     assert ollama.closed.wait(3)                       # 接続が閉じられた
 
 
+@pytest.mark.parametrize("protocol, connection", [("HTTP/1.0", None), ("HTTP/1.1", "close")])
+def test_ollama_stream_cancel_closes_socket_held_by_response(ollama, protocol, connection):
+    """HTTP/1.0・Connection: close の応答（getresponse() の後に conn.sock が None）でも、取り消したら
+    接続を閉じ、読み取りのスレッドが残らない（相手が何も書かずに止まっていても）。"""
+    def stream(h, body):
+        h.protocol_version = protocol
+        h.send_response(200)
+        h.send_header("Content-Type", "application/x-ndjson")
+        if connection:
+            h.send_header("Connection", connection)
+        h.end_headers()
+        h.wfile.write(_line("最初"))
+        h.wfile.flush()
+        time.sleep(3)                                  # 何も書かずに待つ
+        h.close_connection = True
+    ollama.on_post = stream
+    got = []
+    with pytest.raises(llm.LLMCancelled):
+        llm.complete_stream("質問", got.append, provider="ollama", cancel=lambda: bool(got))
+    assert got == ["最初"]
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline and any(t.name == "jarvis-ollama-reader" and t.is_alive()
+                                              for t in threading.enumerate()):
+        time.sleep(0.02)
+    assert not any(t.name == "jarvis-ollama-reader" and t.is_alive() for t in threading.enumerate())
+
+
 def test_ollama_stream_cancel_while_waiting(ollama):
     """最初の行が届く前でも、0.1 秒ごとに取り消しを確かめる。"""
     ollama.on_post = lambda h, body: (_start_stream(h), h.wfile.flush(), time.sleep(3))
@@ -238,6 +265,11 @@ out({{"type": "system", "subtype": "init"}})
 if content == "slow":
     delta("最初")
     time.sleep(10)
+if content == "burst":                          # 複数の行を一度に書く（1 回の読み取りで届く）
+    sys.stdout.write("".join(json.dumps({{"type": "stream_event", "event": {{"delta": {{
+        "type": "text_delta", "text": t}}}}}}, ensure_ascii=False) + "\\n" for t in ["一", "二", "三"]))
+    sys.stdout.flush()
+    time.sleep(10)
 pieces = ["答え:", content, "@" + str(os.getpid())]
 for piece in pieces:
     delta(piece)
@@ -306,6 +338,15 @@ def test_claude_warm_cancel(fake_claude):
         import os
         os.kill(used, 0)                       # 取り消したプロセスは止まっている
     assert llm._warm is not None and llm._warm[0].poll() is None   # 次のプロセスは起動しておく
+
+
+def test_claude_warm_cancel_between_lines_read_at_once(fake_claude):
+    """一度に読んだ複数の行の途中で取り消しても、残りの差分を渡さない。"""
+    got = []
+    started = time.monotonic()
+    with pytest.raises(llm.LLMCancelled):
+        llm.complete_stream("burst", got.append, provider="claude_warm", cancel=lambda: bool(got))
+    assert got == ["一"] and time.monotonic() - started < 3
 
 
 def test_claude_warm_child_has_no_api_key(fake_claude):

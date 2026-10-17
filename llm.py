@@ -140,7 +140,8 @@ _STREAM_OPTIONS = ["-p", "--tools", "", "--no-session-persistence", "--output-fo
 
 def _read_claude_stream(proc, on_text, deadline: float, timeout: int, cancel) -> dict | None:
     """claude -p の stream-json を終わり（EOF）まで読み、差分を on_text に渡して result のイベントを返す。
-    改行を待たずに読み、0.1 秒ごとに取り消しと時間切れを確かめる。プロセスは止めない（呼び出し側で止める）。"""
+    改行を待たずに読み、行ごとと 0.1 秒ごとに取り消しを、0.1 秒ごとに時間切れを確かめる。
+    プロセスは止めない（呼び出し側で止める）。"""
     selector = selectors.DefaultSelector()
     selector.register(proc.stdout, selectors.EVENT_READ)
     result = None
@@ -150,6 +151,8 @@ def _read_claude_stream(proc, on_text, deadline: float, timeout: int, cancel) ->
     pending, lines, eof = "", [], False
     try:
         while True:
+            if cancel is not None and cancel():   # 一度に届いた複数の行の間でも確かめ、以後の差分を渡さない
+                raise LLMCancelled("取り消されました")   # 呼び出し側の finally で claude -p を止める
             if lines:
                 line = lines.pop(0)
                 try:
@@ -168,8 +171,6 @@ def _read_claude_stream(proc, on_text, deadline: float, timeout: int, cancel) ->
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise LLMError(f"Claude Code CLI が {timeout} 秒でタイムアウトしました")
-            if cancel is not None and cancel():
-                raise LLMCancelled("取り消されました")   # 呼び出し側の finally で claude -p を止める
             if not selector.select(timeout=min(remaining, 0.1)):
                 continue
             try:
@@ -392,9 +393,18 @@ def _stream_ollama(prompt: str, on_text, timeout: int | None = None, cancel=None
     body = json.dumps(_ollama_chat_payload(prompt, stream=True), ensure_ascii=False).encode("utf-8")
     items = queue.Queue()
     stop = threading.Event()
+    sock_lock = threading.Lock()
+    socks = []      # 接続のソケット。HTTP/1.0・Connection: close の応答では getresponse() の後に conn.sock が None に
+                    # なり応答の側がソケットを持つので、接続した時点で控えておき、取り消し・終わりのときにこれを閉じる
 
     def reader():
+        response = None
         try:
+            conn.connect()
+            with sock_lock:
+                if stop.is_set():                  # 接続する前に取り消された・時間切れになった
+                    return
+                socks.append(conn.sock)
             conn.request("POST", url.path.rstrip("/") + "/api/chat", body=body,
                          headers={"Content-Type": "application/json"})
             response = conn.getresponse()
@@ -410,6 +420,8 @@ def _stream_ollama(prompt: str, on_text, timeout: int | None = None, cancel=None
         except Exception as e:  # noqa: BLE001  受け取る側で LLMError にする
             items.put(e)
         finally:
+            if response is not None:
+                response.close()
             conn.close()
 
     threading.Thread(target=reader, name="jarvis-ollama-reader", daemon=True).start()
@@ -446,12 +458,13 @@ def _stream_ollama(prompt: str, on_text, timeout: int | None = None, cancel=None
             if event.get("done"):
                 break
     finally:
-        stop.set()
-        sock = conn.sock
-        if sock is not None:                       # 読み取りのスレッドの待ちを解く（接続を閉じる）
+        with sock_lock:
+            stop.set()
+            taken = list(socks)
+        for sock in taken:                         # 読み取りのスレッドの待ちを解く（接続を閉じる）
             try:
                 sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
+            except OSError:                        # すでに閉じている
                 pass
     return "".join(parts)
 
