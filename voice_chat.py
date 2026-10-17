@@ -157,7 +157,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
                 break
             if not finished and not worker.is_alive():
                 finished = True
-                _finish_answer(result["outcome"], state, ctx, speaker)
+                _finish_answer(result["outcome"], state, ctx, speaker, turn)
             if finished and not speaker.speaking():
                 break
             if not state["asking"] and _poll_keys(keys, speaker):
@@ -199,20 +199,22 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
     return _end(speaker, session)
 
 
-def _finish_answer(outcome, state: dict, ctx, speaker) -> None:
-    """答えの残り（出典など）を表示し、逐次表示しなかった答えは短い要約を読む。"""
+def _finish_answer(outcome, state: dict, ctx, speaker, turn: int | None = None) -> None:
+    """答えの残り（出典など）を表示し、逐次表示しなかった答えは短い要約を読む。turn（その発言の番号）を渡すと、
+    割り込みで番号が進んでいたら読まない。"""
+    extra = {"turn": turn} if turn is not None else {}
     if state["started"] and ctx.shown and outcome.text.startswith(ctx.shown):
-        speaker.flush()
+        speaker.flush(**extra)
         rest = outcome.text[len(ctx.shown):].strip()
         print(("\n\n" + rest if rest else "") + "\n")
         return
     if state["started"]:
-        speaker.flush()
+        speaker.flush(**extra)
         print()
     print(f"\nJARVIS > {outcome.text}\n")
     if outcome.skill not in STREAMED_SKILLS or not state["started"]:
         state["status"] = "SPEAKING"
-        speaker.say(speech_summary(outcome.skill, outcome.text))
+        speaker.say(speech_summary(outcome.skill, outcome.text), **extra)
 
 
 def _record(text: str, outcome) -> None:

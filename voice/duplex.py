@@ -211,6 +211,7 @@ class DuplexSpeaker(Speaker):
         self._synth = synth or (lambda sentence, cancel: synthesize_say(sentence, voice, cancel))
         self._cancel = threading.Event()
         self._busy = False
+        self._buffers: dict[int, tuple[str, bool]] = {}   # 発言ごとの区切りの途中の文字とコードの区間
         super().__init__(voice=voice, runner=lambda cmd: None)
 
     def _loop(self) -> None:
@@ -233,43 +234,60 @@ class DuplexSpeaker(Speaker):
                     self._busy = False
                 self._queue.task_done()
 
-    def say(self, text: str, turn: int | None = None) -> None:
-        """1 文を読む。turn を渡したら、その番号が今の発言のときだけ（番号の確認と投入を同じロックで）。"""
+    # 番号の確認・文の区切りの途中の文字（発言ごと）・キューへの投入は、すべて new_turn と同じロックの中で行う。
+    # 割り込みと逐次表示・読み上げの完了が重なっても、古い発言の文字が新しい発言に混ざらない。
+
+    def _put(self, turn: int, text: str) -> None:
         text = speakable(text)
-        if not text:
-            return
+        if text:
+            self._queue.put((turn, text))
+
+    def say(self, text: str, turn: int | None = None) -> None:
+        """1 文を読む。turn を渡したら、その番号が今の発言のときだけ。"""
         with self._lock:
             if turn is not None and turn != self.turn:
                 return
-            self._queue.put((self.turn if turn is None else turn, text))
+            self._put(self.turn if turn is None else turn, text)
 
     def feed(self, chunk: str, turn: int | None = None) -> None:
         """逐次表示の差分を文に区切って読む。turn を渡したら、その番号の発言としてだけ読む。"""
-        if turn is not None and turn != self.turn:
-            return
-        self._buffer += chunk
-        parts = SENTENCE_END.split(self._buffer)
-        self._buffer = parts.pop()
-        for part in parts:
-            if part.strip().startswith("```"):
-                self._in_code = not self._in_code
-                continue
-            if not self._in_code:
-                self.say(part, turn)
+        with self._lock:
+            turn = self.turn if turn is None else turn
+            if turn != self.turn:
+                return
+            buffer, in_code = self._buffers.get(turn, ("", False))
+            parts = SENTENCE_END.split(buffer + chunk)
+            buffer = parts.pop()
+            for part in parts:
+                if part.strip().startswith("```"):
+                    in_code = not in_code
+                    continue
+                if not in_code:
+                    self._put(turn, part)
+            self._buffers[turn] = (buffer, in_code)
+
+    def flush(self, turn: int | None = None) -> None:
+        """区切りの途中の残りを読む（その番号が今の発言のときだけ）。"""
+        with self._lock:
+            turn = self.turn if turn is None else turn
+            buffer, in_code = self._buffers.pop(turn, ("", False))
+            if turn == self.turn and buffer and not in_code:
+                self._put(turn, buffer)
 
     def new_turn(self) -> int:
-        """新しい発言を始める（古い発言の合成・未再生の音を捨てる）。"""
+        """新しい発言を始める（古い発言の合成・未再生の音・区切りの途中の文字を捨てる）。"""
         with self._lock:
             self.turn += 1
             turn = self.turn
+            self._buffers.clear()
         if hasattr(self.player, "set_turn"):
             self.player.set_turn(turn)            # 再生の側でも古い番号の音を受け付けない
         self.stop()
         return turn
 
     def stop(self) -> None:
-        self._buffer, self._in_code = "", False
         with self._lock:
+            self._buffers.clear()
             self._cancel.set()
         import queue as _queue
         try:

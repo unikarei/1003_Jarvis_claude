@@ -486,3 +486,48 @@ def test_history_keeps_only_what_was_spoken(kb, monkeypatch):
     assert history[0] == "空調について知ってること"
     assert history[1] == "2 件見つかりました。1 件目は、大洗 空調。"          # 読んだ要約だけ
     assert "https://" not in "".join(history) and "熊本" not in "".join(history)
+
+
+def test_partial_text_of_old_turn_never_leaks_into_new_turn():
+    """古い発言の区切りの途中の文字は、割り込みの後の新しい発言に残らない。完了の処理（flush・要約）も、
+    元の番号で呼べば新しい発言に入らない（4 回目の指摘）。"""
+    player = FakePlayer()
+    sp = duplex.DuplexSpeaker(player, synth=lambda s, c: np.zeros(10, dtype=np.float32))
+    old = sp.new_turn()
+    sp.feed("古い答えの途中", turn=old)                    # 文の区切りの前で割り込まれる
+    new = sp.new_turn()
+    sp.flush(turn=old)                                     # 古い発言の完了の処理（割り込みと重なった）
+    sp.say("古い要約。", turn=old)
+    sp.feed("新しい", turn=new)
+    sp.feed("答え。", turn=new)
+    sp.feed("続き", turn=new)
+    sp.flush(turn=new)
+    sp.wait()
+    assert [s for _, s in player.played] == ["新しい答え。", "続き"]
+    sp.close()
+
+
+def test_feed_and_new_turn_from_two_threads_do_not_mix():
+    """古い生成のスレッドが読み上げに渡し続けている間に割り込んでも、新しい発言には新しい文だけが入る。"""
+    player = FakePlayer()
+    sp = duplex.DuplexSpeaker(player, synth=lambda s, c: np.zeros(10, dtype=np.float32))
+    old = sp.new_turn()
+    stop = threading.Event()
+
+    def old_worker():
+        while not stop.is_set():
+            sp.feed("古い", turn=old)
+            sp.feed("文。", turn=old)
+    t = threading.Thread(target=old_worker)
+    t.start()
+    time.sleep(0.05)
+    new = sp.new_turn()
+    for _ in range(50):
+        sp.feed("新しい", turn=new)
+        sp.feed("文。", turn=new)
+    stop.set()
+    t.join()
+    sp.wait()
+    assert {s for turn, s in player.played if turn == new} == {"新しい文。"}
+    assert all(s == "古い文。" for turn, s in player.played if turn == old)
+    sp.close()
