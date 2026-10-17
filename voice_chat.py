@@ -180,6 +180,8 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
                 return _end(speaker, session)
             time.sleep(0.02)
         session.disarm()
+        if not interrupted and session.barged.is_set():
+            from_barge = True                 # 答えを読み終えた直後の割り込み: 履歴は普通に確定し、録音は話し始めから
 
         if interrupted:
             state["status"] = "INTERRUPTED"

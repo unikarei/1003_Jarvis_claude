@@ -238,7 +238,10 @@ class DuplexSpeaker(Speaker):
                         continue
                     self._busy = True
                     self._cancel = cancel = threading.Event()
-                audio = self._synth(sentence, cancel)
+                try:
+                    audio = self._synth(sentence, cancel)
+                except Exception:                     # 合成の失敗でスレッドを止めない（その文は読まない）
+                    audio = None
                 if audio is not None and turn == self.turn and not cancel.is_set():
                     self.player.enqueue(turn, sentence, audio)
             finally:
@@ -390,7 +393,9 @@ class Session:
                             or target != getattr(self.speaker, "turn", target)):
                         return
                     self.armed = False
+                    # 先に知らせてから止める（会話の側が「割り込みなしで終わった」と判断しないように）。
                     # まず止める（目標 200 ms 以内）。番号も進め、検出の後に届く古い発言の文・生成をすぐ捨てさせる
+                    self.barged.set()
                     self.speaker.new_turn()
                 stopped = time.monotonic()
                 self.stop_latency.append(stopped - now)

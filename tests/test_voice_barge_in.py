@@ -227,10 +227,11 @@ def test_session_listen_after_barge_in_keeps_the_start():
 class FakeSession:
     """listen は台本の音を順に返す。音声合成のときに台本の文が来たら割り込む（読み上げ中の割り込み）。"""
 
-    def __init__(self, utterances, barge_on=()):
+    def __init__(self, utterances, barge_on=(), barge_after=()):
         self.player = FakePlayer()
         self.barged = threading.Event()
         self.barge_on = set(barge_on)
+        self.barge_after = set(barge_after)   # この文を再生に渡した直後に割り込む（読み終えと割り込みが重なる）
         self.utterances = list(utterances)
         self.armed = False
         self.listened = []
@@ -243,6 +244,10 @@ class FakeSession:
             self.speaker.new_turn()                       # 本物の Session と同じく、番号を進めて止める
             self.barged.set()
             return None
+        if sentence in self.barge_after and self.armed:
+            self.barge_after.discard(sentence)
+            threading.Timer(0.0, lambda: (setattr(self, "armed", False), self.barged.set(),
+                                          self.speaker.new_turn())).start()
         return np.zeros(10, dtype=np.float32)
 
     def calibrate(self, greeting):
@@ -736,3 +741,29 @@ def test_player_writes_output_inside_the_lock():
     s.pump()
     p.stop()
     assert not s.pump().any()
+
+
+
+def test_barge_in_right_when_the_answer_ends(kb, monkeypatch):
+    """読み終えと割り込みが重なっても、次の録音は話し始めから（割り込みの後の録音）になる（9 回目の指摘 1・3）。"""
+    _llm(monkeypatch, [["最後の文です。"], ["次の答え。"]])
+    session = FakeSession(["質問一", "質問二"], barge_after=["最後の文です。"])
+    assert _run(session) == 0
+    assert session.listened[:2] == [False, True]
+    assert "次の答え。" in [s for _, s in session.player.played]
+
+
+def test_synthesis_failure_does_not_stop_the_speaker():
+    """合成が例外を出しても、次の文は読まれ、止まったままにならない（9 回目の指摘 2）。"""
+    def synth(sentence, cancel):
+        if sentence == "壊れる文。":
+            raise RuntimeError("say が失敗")
+        return np.zeros(10, dtype=np.float32)
+    player = FakePlayer()
+    sp = duplex.DuplexSpeaker(player, synth=synth)
+    sp.feed("壊れる文。次の文。")
+    t = threading.Thread(target=sp.wait, daemon=True)
+    t.start()
+    t.join(2)
+    assert not t.is_alive() and [s for _, s in player.played] == ["次の文。"]
+    sp.close()
