@@ -176,6 +176,7 @@
 - [x] T-115 `chat.py` との連携
 - [x] T-116 受け入れテスト（2026-10-12。本物の claude -p・jarvis-knowledge・Mac/スマートフォン間の同期で手順 1〜9・11 を確認。手順 10 の日次処理は main マージ後の 6:00 の実行で確認）
 - [ ] T-117 ChatGPT・Claude のエクスポートの取り込み（Codex、任意）
+  - [x] T-117 変換モジュール（`ckc/parsers/`。架空の fixture でテスト。capture・CLI への接続と実際のエクスポートでの確認は未実施）
 
 ## Architecture Registry との接続（T-310、MAP Phase 2）
 
