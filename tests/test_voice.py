@@ -1,6 +1,7 @@
 """声での会話（FR-014、T-1213・T-1214）のテスト。マイク・音声認識・say はモック。"""
 
 import json
+import os
 
 import numpy as np
 import pytest
@@ -15,10 +16,17 @@ def _blocks(levels, n=1600):
     return [np.full(n, level, dtype=np.int16) for level in levels]
 
 
+@pytest.fixture(autouse=True)
+def _no_voice_env(monkeypatch):
+    for name in ("JARVIS_VOICE_THRESHOLD_FACTOR", "JARVIS_VOICE_SILENCE_SECONDS"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_segment_cuts_at_silence():
+    """T-1404 でプリロール（話し始めの直前 3 ブロック）を含めるようにしたため、期待する長さに前の 3 ブロックを足した。"""
     blocks = _blocks([50] * 3 + [2000] * 5 + [50] * 8 + [2000] * 5)
     audio = rec.segment(iter(blocks), threshold=300, silence_seconds=0.8)
-    assert audio is not None and len(audio) == 1600 * (5 + 8)      # 話し始め〜0.8 秒の無音まで
+    assert audio is not None and len(audio) == 1600 * (3 + 5 + 8)  # 直前 0.3 秒＋話し始め〜0.8 秒の無音まで
 
 
 def test_segment_without_speech_is_none_and_max_length():
@@ -28,8 +36,91 @@ def test_segment_without_speech_is_none_and_max_length():
 
 
 def test_threshold_from_noise():
+    """T-1404 で基準を最大値から中央値に、倍率を 3 から 2 に変えたため、400 のときの期待値を 800 にした。"""
     assert rec.threshold_from(_blocks([90, 80])) == rec.MIN_THRESHOLD
-    assert rec.threshold_from(_blocks([400])) == 1200
+    assert rec.threshold_from(_blocks([400])) == 800
+
+
+def test_threshold_uses_median_and_factor_from_env(monkeypatch):
+    assert rec.threshold_from(_blocks([270, 260, 2000])) == 270 * 2      # 一瞬の物音（2000）に引きずられない
+    monkeypatch.setenv("JARVIS_VOICE_THRESHOLD_FACTOR", "3")
+    assert rec.threshold_from(_blocks([270, 260, 280])) == 270 * 3
+    monkeypatch.setenv("JARVIS_VOICE_THRESHOLD_FACTOR", "1.5")
+    assert rec.threshold_from(_blocks([100, 90, 110])) == rec.MIN_THRESHOLD   # 下限
+
+
+def test_segment_includes_preroll():
+    """話し始めの前の 3 ブロック（最初の音節）が発話に含まれる。"""
+    blocks = [np.full(1600, v, dtype=np.int16) for v in (10, 20, 30, 40, 50)] + _blocks([2000] * 5 + [0] * 8)
+    audio = rec.segment(iter(blocks), threshold=300, silence_seconds=0.8)
+    assert len(audio) == 1600 * (3 + 5 + 8)
+    assert list(audio[::1600][:4]) == [30, 40, 50, 2000]
+
+
+def test_segment_preroll_from_measured_blocks():
+    """blocks の初めから話し始めても、前に録ったブロック（preroll）を直前 0.3 秒として含める。"""
+    measured = [np.full(1600, v, dtype=np.int16) for v in (10, 20, 30)]
+    audio = rec.segment(iter(_blocks([2000] * 5 + [0] * 8)), threshold=300, preroll=measured)
+    assert len(audio) == 1600 * (3 + 5 + 8)
+    assert list(audio[::1600][:4]) == [10, 20, 30, 2000]
+    audio = rec.segment(iter(_blocks([40] + [2000] * 3 + [0] * 8)), threshold=300, preroll=measured)
+    assert list(audio[::1600][:3]) == [20, 30, 40]                   # 直近の 3 ブロックだけ
+
+
+def test_record_utterance_uses_measured_blocks_as_preroll(monkeypatch):
+    """周囲の音の測定に使った 3 ブロックの直後に話し始めても、話し始めの前の 0.3 秒が落ちない。"""
+    mic = [np.full(1600, v, dtype=np.int16) for v in (100, 110, 120)] + _blocks([8000] * 5 + [0] * 8)
+
+    def fake_mic(samplerate, block_seconds):
+        yield from mic
+    monkeypatch.setattr(rec, "_blocks_from_microphone", fake_mic)
+    audio = rec.record_utterance()
+    assert len(audio) == 1600 * (3 + 5 + 8)
+    assert np.allclose(audio[::1600][:4] * 32768, [100, 110, 120, 8000])
+
+
+def test_segment_needs_two_loud_blocks_to_start():
+    single = _blocks([0] * 3 + [2000] + [0] * 3 + [2000] * 5 + [0] * 8)
+    audio = rec.segment(iter(single), threshold=300, silence_seconds=0.8)
+    assert len(audio) == 1600 * (3 + 5 + 8)                          # 1 つだけの「カチッ」では始めない
+    assert list(audio[::1600][:4]) == [0, 0, 0, 2000]
+    assert rec.segment(iter(_blocks([0, 2000, 0] * 30)), threshold=300, start_timeout=5.0) is None
+    audio = rec.segment(iter(_blocks([2000, 2000, 2000] + [0] * 8)), threshold=300, silence_seconds=0.8)
+    assert len(audio) == 1600 * (3 + 8)                              # 2 つ続けば始まる
+
+
+def test_segment_hysteresis_and_silence_from_env(monkeypatch):
+    """しきい値の 0.7〜1.0 倍の声が続いても区切らず、0.7 倍を下回る無音が続くと区切る。"""
+    quiet_voice = [250] * 12                                         # しきい値 300 の 0.83 倍
+    audio = rec.segment(iter(_blocks([2000] * 3 + quiet_voice + [2000] * 2 + [100] * 8 + [2000] * 5)),
+                        threshold=300)
+    assert len(audio) == 1600 * (3 + 12 + 2 + 8)
+    audio = rec.segment(iter(_blocks([2000] * 3 + [200] * 8 + [2000] * 5)), threshold=300)
+    assert len(audio) == 1600 * (3 + 8)                              # 0.7 倍（210）未満は無音
+    monkeypatch.setenv("JARVIS_VOICE_SILENCE_SECONDS", "1.5")
+    audio = rec.segment(iter(_blocks([2000] * 3 + [100] * 10 + [2000] * 3 + [100] * 20)), threshold=300)
+    assert len(audio) == 1600 * (3 + 10 + 3 + 15)                    # 1.0 秒の間では区切らない
+
+
+def test_segment_too_short_is_none():
+    assert rec.segment(iter(_blocks([0] * 3 + [2000] * 2 + [0] * 10)), threshold=300) is None   # 0.2 秒
+    assert rec.segment(iter(_blocks([0] * 3 + [2000] * 3 + [0] * 10)), threshold=300) is not None
+
+
+def test_transcribe_array_uses_hotwords(monkeypatch):
+    import speech_to_text
+
+    calls = []
+
+    class FakeModel:
+        def transcribe(self, audio, **kwargs):
+            calls.append(kwargs)
+            return iter([type("S", (), {"text": " 民泊の件数は？"})()]), None
+    monkeypatch.setattr(speech_to_text, "_model", FakeModel())
+    assert speech_to_text.transcribe_array(np.zeros(10, dtype=np.float32)) == "民泊の件数は？"
+    assert calls[0]["hotwords"] == speech_to_text.VOCABULARY and "initial_prompt" not in calls[0]
+    if "JARVIS_VOICE_VOCAB" not in os.environ:                       # 環境変数で差し替えていなければ既定の語
+        assert all(w in speech_to_text.VOCABULARY for w in ("フラッタ", "Obsidian", "ナレッジ", "データソース", "件数"))
 
 
 def test_speakable_and_summary():

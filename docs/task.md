@@ -277,6 +277,7 @@
 - [x] 起動用ファイル `run_text_chat.command`（chat.py）・`run_voice_chat.command`（voice_chat.py）。Finder でダブルクリックで起動（2026-10-17 Owner 依頼）
 - [x] T-1214 `voice_chat.py`（orchestrator・逐次表示・読み上げ・キーボードでの確認・記録・ナレッジ化の材料）、`speech_to_text.transcribe_array`（認識のヒントの語）、faster-whisper の small モデルのダウンロード
 - [ ] T-1215 受け入れ（Owner の声で）
+- [x] T-1404 録音の改善（ADR-0027、`../docs/testing.md` §11）: `voice/record.py` に話し始めの直前 0.3 秒のプリロール、しきい値を周囲の音の中央値 × 2.0（`JARVIS_VOICE_THRESHOLD_FACTOR`、下限 300）、2 ブロック続いたら話し始め、途中の間はしきい値の 0.7 倍未満だけを無音と数える、無音の長さ `JARVIS_VOICE_SILENCE_SECONDS`（既定 0.8 秒）、0.3 秒未満の発話は捨てる。`speech_to_text.transcribe_array` はヒントの語を `hotwords` で渡す（語を 5 つ追加）
 
 ## Project OS API の再開（`../docs/tasks.md` T-1216・`../docs/project-os-api-restart-plan.md` 案 A、2026-10-16 Owner 承認）
 
