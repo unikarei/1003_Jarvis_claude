@@ -219,19 +219,30 @@ def engine(name: str) -> Engine:
 
 
 def make_synth(settings: VoiceSettings, fallback: VoiceSettings | None = None, notify=print):
-    """DuplexSpeaker に渡す合成の関数（文, 取り消し）→ 音声。選んだエンジンが使えなければ say（Kyoko）にする。"""
+    """DuplexSpeaker に渡す合成の関数（文, 取り消し）→ 音声。選んだエンジンが使えなければ say（Kyoko）にする。
+    会話の途中でエンジンが止まったときも、その文は say（Kyoko）で読む（会話を止めない）。"""
+    fallback = fallback or VoiceSettings()
     chosen = engine(settings.engine)
     ok, reason = chosen.available()
     if not ok:
         notify(f"[音声] {chosen.label} は使えません（{reason}）。macOS の say（Kyoko）で読み上げます。")
-        settings = fallback or VoiceSettings()
+        settings = fallback
         chosen = engine(settings.engine)
+    warned = {"done": False}
 
     def synth(sentence: str, cancel: threading.Event):
         try:
             return chosen.synthesize(sentence, settings, cancel)
-        except TTSError:
-            return None
+        except TTSError as e:
+            if (cancel is not None and cancel.is_set()) or settings == fallback:
+                return None                       # 取り消し、または say 自体の失敗（その文は読まない）
+            if not warned["done"]:
+                warned["done"] = True
+                notify(f"[音声] {chosen.label} で合成できません（{e}）。say（Kyoko）で読み上げます。")
+            try:
+                return engine(fallback.engine).synthesize(sentence, fallback, cancel)
+            except TTSError:
+                return None
     return synth
 
 
@@ -246,10 +257,10 @@ def split_long(text: str) -> tuple[str, str]:
     語や数字の途中では切らない（読点の直後だけ）。"""
     if len(text) <= LONG_SENTENCE:
         return "", text
-    cut = -1
-    for m in re.finditer(r"[、，]", text):            # 半角のカンマは数字（1,000）にあるので使わない
-        if MIN_PHRASE <= m.end() <= LONG_SENTENCE:
-            cut = m.end()
-    if cut < 0:
+    commas = [m.end() for m in re.finditer(r"[、，]", text)   # 半角のカンマは数字（1,000）にあるので使わない
+              if m.end() >= MIN_PHRASE]
+    if not commas:
         return "", text
+    within = [c for c in commas if c <= LONG_SENTENCE]
+    cut = within[-1] if within else commas[0]                # 60 字までに読点がなければ、最初の読点で
     return text[:cut], text[cut:]

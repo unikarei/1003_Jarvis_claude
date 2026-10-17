@@ -44,6 +44,8 @@ def test_split_long_sentence_only_at_commas():
     assert head.endswith("、") and head + rest == text and len(head) <= tts.LONG_SENTENCE
     no_comma = "あ" * 80
     assert tts.split_long(no_comma) == ("", no_comma)
+    late = "あ" * 70 + "、" + "い" * 10                                  # 最初の読点が 60 字より後（Codex の指摘 3）
+    assert tts.split_long(late) == ("あ" * 70 + "、", "い" * 10)
     numbers = "売上は1,000,000円で" + "あ" * 70                     # 半角のカンマ（数字）では切らない
     assert tts.split_long(numbers) == ("", numbers)
 
@@ -147,7 +149,45 @@ def test_make_synth_falls_back_to_say(monkeypatch):
     assert calls[0].engine == "say" and calls[0].speaker == "Kyoko" and "使えません" in notes[0]
     monkeypatch.setattr(tts.ENGINES["say"], "synthesize",
                         lambda *a, **k: (_ for _ in ()).throw(tts.TTSError("x")))
-    assert synth("文。", threading.Event()) is None                      # 合成の失敗は None（その文は読まない）
+    assert synth("文。", threading.Event()) is None                      # say 自体の失敗は None（その文は読まない）
+
+
+def test_engine_failing_mid_conversation_falls_back_to_say(monkeypatch, fake_voicevox):
+    """会話の途中で選んだエンジンが止まっても、その文は say（Kyoko）で読む（Codex の指摘 2）。"""
+    engine, _ = fake_voicevox
+    monkeypatch.setitem(tts.ENGINES, "voicevox", engine)
+    said = []
+    monkeypatch.setattr(tts.ENGINES["say"], "synthesize", lambda text, s, cancel=None: said.append(s.speaker) or np.ones(3))
+    notes = []
+    synth = tts.make_synth(tts.VoiceSettings(engine="voicevox", speaker="13"), notify=notes.append)
+    assert len(synth("文。", threading.Event())) == 16000                 # まだ動いている（VOICEVOX の音）
+    monkeypatch.setattr(engine, "synthesize", lambda *a, **k: (_ for _ in ()).throw(tts.TTSError("止まった")))
+    assert synth("次の文。", threading.Event()) is not None and said == ["Kyoko"]
+    assert any("say（Kyoko）で読み上げます" in n for n in notes)
+    cancel = threading.Event(); cancel.set()
+    assert synth("取り消し。", cancel) is None                           # 取り消しのときは読まない
+
+
+def test_voice_chat_uses_saved_settings_in_every_mode(settings_path, monkeypatch, capsys):
+    """保存した設定は、割り込みあり・なし・押してから話す形のどれでも使う（Codex の指摘 1・4）。"""
+    import voice_chat
+    tts.save_settings(tts.VoiceSettings(engine="say", speaker="Reed (日本語（日本）)", rate=1.3))
+    seen = []
+    monkeypatch.setattr(tts, "make_synth", lambda s: seen.append(s) or (lambda sentence, cancel: None))
+
+    class P:
+        def stop(self): pass
+        def speaking(self): return False
+        def heard(self, t): return []
+        def close(self): pass
+        def enqueue(self, *a): pass
+    sp = voice_chat.build_speaker(player=P())
+    assert seen[0].speaker == "Reed (日本語（日本）)" and seen[0].rate == 1.3
+    assert "Reed" in capsys.readouterr().out
+    sp.close()
+    import inspect
+    src = inspect.getsource(voice_chat.main)
+    assert src.count("build_speaker()") == 2                             # 割り込みの形と、それ以外の形の両方
 
 
 # ---------------------------------------------------------------- 設定と試聴の画面
