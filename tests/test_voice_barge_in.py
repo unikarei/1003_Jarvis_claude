@@ -455,3 +455,34 @@ def test_player_is_speaking_until_the_output_delay_passes():
     assert p.speaking()
     time.sleep(0.25)
     assert not p.speaking()
+
+
+def test_old_generation_cannot_feed_the_new_turn():
+    """割り込みの後に次の発言が始まっても、古い生成の文は新しい発言として読まれない（3 回目の指摘 1・2）。"""
+    player = FakePlayer()
+    sp = duplex.DuplexSpeaker(player, synth=lambda s, c: np.zeros(10, dtype=np.float32))
+    old = sp.new_turn()
+    new = sp.new_turn()
+    sp.feed("古い答え。", turn=old)
+    sp.say("古い文。", turn=old)
+    sp.feed("新しい答え。", turn=new)
+    sp.wait()
+    assert [s for _, s in player.played] == ["新しい答え。"]
+    sp.close()
+
+
+def test_history_keeps_only_what_was_spoken(kb, monkeypatch):
+    """読み上げなかった内容（一覧の残り・出典）は、普通に終わった発言でも履歴に入れない（3 回目の指摘 3）。"""
+    import orchestrator
+    contexts = []
+    original = orchestrator.Context
+    monkeypatch.setattr(orchestrator, "Context", lambda **kw: contexts.append(original(**kw)) or contexts[-1])
+    long_list = "1. 大洗_空調（oarai-minpaku、2026-10-07）\n   https://x\n2. 熊本県の補助（oarai-minpaku、2026-10-11）\n   https://y"
+    monkeypatch.setattr(orchestrator, "handle", lambda text, ctx, ask=None: orchestrator.Outcome(
+        "knowledge-search", "rule", {}, long_list, True, 0.1, [], None))
+    session = FakeSession(["空調について知ってること"])
+    assert _run(session) == 0
+    history = [t.text for t in contexts[0].history]
+    assert history[0] == "空調について知ってること"
+    assert history[1] == "2 件見つかりました。1 件目は、大洗 空調。"          # 読んだ要約だけ
+    assert "https://" not in "".join(history) and "熊本" not in "".join(history)

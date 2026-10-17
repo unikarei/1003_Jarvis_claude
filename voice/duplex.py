@@ -20,7 +20,7 @@ from collections.abc import Callable
 import numpy as np
 
 from voice import record as rec
-from voice.speak import Speaker, speakable
+from voice.speak import SENTENCE_END, Speaker, speakable
 
 SAMPLE_RATE = 16000
 FRAME = 320                    # 20 ms
@@ -233,10 +233,29 @@ class DuplexSpeaker(Speaker):
                     self._busy = False
                 self._queue.task_done()
 
-    def say(self, text: str) -> None:
+    def say(self, text: str, turn: int | None = None) -> None:
+        """1 文を読む。turn を渡したら、その番号が今の発言のときだけ（番号の確認と投入を同じロックで）。"""
         text = speakable(text)
-        if text:
-            self._queue.put((self.turn, text))
+        if not text:
+            return
+        with self._lock:
+            if turn is not None and turn != self.turn:
+                return
+            self._queue.put((self.turn if turn is None else turn, text))
+
+    def feed(self, chunk: str, turn: int | None = None) -> None:
+        """逐次表示の差分を文に区切って読む。turn を渡したら、その番号の発言としてだけ読む。"""
+        if turn is not None and turn != self.turn:
+            return
+        self._buffer += chunk
+        parts = SENTENCE_END.split(self._buffer)
+        self._buffer = parts.pop()
+        for part in parts:
+            if part.strip().startswith("```"):
+                self._in_code = not self._in_code
+                continue
+            if not self._in_code:
+                self.say(part, turn)
 
     def new_turn(self) -> int:
         """新しい発言を始める（古い発言の合成・未再生の音を捨てる）。"""

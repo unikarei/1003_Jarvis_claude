@@ -88,15 +88,19 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
     init_db()
     state = {"turn": 0, "started": False, "asking": False, "status": "IDLE"}
 
-    def stream(chunk: str) -> None:
-        if state["turn"] != speaker.turn:
-            raise Cancelled()                 # 割り込まれた。claude -p は llm 側で止まる
-        if not state["started"]:
-            state["started"] = True
-            state["status"] = "SPEAKING"
-            print("\nJARVIS > ", end="", flush=True)
-        print(chunk, end="", flush=True)
-        speaker.feed(chunk)
+    def stream_for(turn: int):
+        """発言 turn 専用の逐次表示。番号は呼び出しの間ずっと固定し、読み上げにも同じ番号で渡す
+        （割り込みの後に次の発言が始まっても、古い生成の文が新しい発言として読まれない）。"""
+        def stream(chunk: str) -> None:
+            if turn != speaker.turn:
+                raise Cancelled()             # 割り込まれた。claude -p は llm 側で止まる
+            if not state["started"]:
+                state["started"] = True
+                state["status"] = "SPEAKING"
+                print("\nJARVIS > ", end="", flush=True)
+            print(chunk, end="", flush=True)
+            speaker.feed(chunk, turn=turn)
+        return stream
 
     def ask(prompt: str) -> str:
         state["asking"] = True
@@ -109,7 +113,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
         finally:
             state["asking"] = False
 
-    ctx = orchestrator.Context(stream=stream, voice=True, cancel=lambda: state["turn"] != speaker.turn)
+    ctx = orchestrator.Context(voice=True)
     print("JARVIS と声で会話します。そのまま話しかけてください。JARVIS が話している途中でも、話し始めれば止まります。"
           "（「終了」と話すか q と Enter で終了）")
     info = session.calibrate("ジャービスです。どうぞ。")
@@ -139,6 +143,8 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
 
         turn = speaker.new_turn()
         state.update(turn=turn, started=False, status="THINKING")
+        ctx.stream = stream_for(turn)                       # この発言の生成だけが使う（呼び出しの時に固定される）
+        ctx.cancel = lambda t=turn: t != speaker.turn
         result: dict = {}
         worker = threading.Thread(target=lambda: result.update(outcome=orchestrator.handle(text, ctx, ask=ask)),
                                   daemon=True)
@@ -173,7 +179,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
             worker.join(timeout=10)            # 生成は取り消しの確認（0.1 秒ごと）で止まる
             if worker.is_alive():              # 止まらない処理（逐次表示のないスキル）は、文脈を分けて切り離す
                 print("[前の処理は裏で終わるまで続きます。結果は使いません]")
-                ctx = orchestrator.Context(stream=stream, voice=True, cancel=ctx.cancel, history=list(ctx.history))
+                ctx = orchestrator.Context(voice=True, history=list(ctx.history))
             if "outcome" in result:
                 _record(text, result["outcome"])
             ctx.history.append(Turn(Who.OWNER, text))
@@ -186,8 +192,9 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
         _record(text, outcome)
         if not (outcome.skill == "knowledge-capture" and outcome.method == "rule"):
             ctx.history.append(Turn(Who.OWNER, text))
-            if outcome.ok and outcome.error is None:
-                ctx.history.append(Turn(Who.AI, outcome.text))
+            heard = "".join(speaker.heard(turn))         # 読み上げた文だけ（表示だけの出典・一覧の残りは入れない）
+            if outcome.ok and outcome.error is None and heard:
+                ctx.history.append(Turn(Who.AI, heard))
         state["status"] = "IDLE"
     return _end(speaker, session)
 
