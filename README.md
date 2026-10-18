@@ -18,6 +18,7 @@ Mac mini では、1003 の直下の起動用ファイルでも始められる（
     `~/Applications/AivisSpeech-Engine/run --host 127.0.0.1 --port 10101 --disable_sentry`（約 5 GB のメモリ）、
     `~/Applications/VOICEVOX-Engine/run --host 127.0.0.1 --port 50021`（約 1.3 GB）。止まっていれば say（Kyoko）で読む
 - `run_voice_chat.command`: 声で会話する（`voice_chat.py`。ハンズフリー: そのまま話しかける。JARVIS が話している途中でも、話し始めれば止まって聞く（割り込み。`--no-barge-in` で無効）。終了は「終了」と話すか q と Enter。Enter を押してから話す従来の形は `.venv/bin/python voice_chat.py --push-to-talk`）
+- 遅延の集計: `.venv/bin/python -m latency report`（会話の段階ごとの p50・p95。`--days 7`・`--mode voice`・`--skill knowledge-answer` で絞る。記録は `data/latency/latency.jsonl`、本文は残さない）
 
 継続的な対話型CLI。入力内容に応じてナレッジ検索（`ask.py`と同じ検索対象: ニュース・民泊ノート・大洗Project OS等すべてのcategory）またはコード実行サブエージェントに自動で振り分けられる（`run_task.py`と同じ分類ロジック）。終了は `exit` / `quit` / Ctrl+C。
 

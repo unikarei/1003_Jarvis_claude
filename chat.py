@@ -11,6 +11,7 @@ import sys
 sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
 
+import latency  # noqa: E402
 import orchestrator  # noqa: E402
 from ckc.models import Speaker, Turn  # noqa: E402
 from db import init_db  # noqa: E402
@@ -38,6 +39,7 @@ def _stream(chunk: str) -> None:
 def main():
     print(GREETING)
     init_db()
+    orchestrator.start_warm_up()   # 使う LLM を裏で読み込んでおく（最初の答えを速くする、T-1405）
     ctx = orchestrator.Context(stream=_stream)
 
     while True:
@@ -55,6 +57,7 @@ def main():
 
         started = [False]
         _STREAM_STATE["started"] = started
+        latency.start("text")             # 段階ごとの時間を記録する（本文は記録しない、T-1405）
         outcome = orchestrator.handle(user_input, ctx)
         if started[0] and ctx.shown and outcome.text.startswith(ctx.shown):
             rest = outcome.text[len(ctx.shown):].strip()          # 答えは表示済み。出典などの残りだけ
@@ -63,6 +66,7 @@ def main():
             if started[0]:
                 print()
             print(f"\nJARVIS > {outcome.text}\n")
+        latency.finish()
         try:
             record(user_input, outcome)   # 使ったスキルと成否をナレッジグラフに記録する
         except Exception as e:  # 記録の失敗で対話を止めない

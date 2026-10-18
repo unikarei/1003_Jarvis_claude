@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import db
+import latency
 import llm
 import registry
 from db import _fetchall, extract_keywords, get_node
@@ -313,7 +314,8 @@ def answer(question: str, projects: list[str] | None = None, limit: int = 8,
     on_text を渡すと、答えを生成しながら差分を渡す（逐次表示、T-1212）。返す hits は検索結果の全件
     （番号は答えの [n] と対応する。表示する出典は cited() で絞る）。provider を省くと設定（JARVIS_LLM_PROVIDER）。"""
     hits = search(question, projects=projects, limit=limit)
-    context = "\n\n".join(f"[{i}] {h.title}（{', '.join(h.projects) or '-'}、{h.created_at[:10]}）\n"
+    latency.mark("search")
+    context ="\n\n".join(f"[{i}] {h.title}（{', '.join(h.projects) or '-'}、{h.created_at[:10]}）\n"
                             f"{(get_node(h.knowledge_id)['content'] or '')[:1500]}"
                             for i, h in enumerate(hits, 1)) or "（なし）"
     prompt = ANSWER_PROMPT.format(question=question, context=context, history=format_history(history),

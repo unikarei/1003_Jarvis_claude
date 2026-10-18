@@ -18,6 +18,7 @@ import urllib.request
 
 import anthropic
 
+import latency
 from agent_log import log_event
 from config import (ANTHROPIC_API_KEY, CHAT_MODEL, CLAUDE_BIN, CLAUDE_CLI_TIMEOUT_SECONDS, ESCALATION_MODEL,
                     LLM_PROVIDER, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL, SUMMARY_MODEL)
@@ -213,6 +214,7 @@ def _stream_claude_cli(prompt: str, on_text, timeout: int | None = None, cancel=
                                     text=True, cwd=workdir, env=_cli_env())
         except FileNotFoundError:
             raise LLMError(f"Claude Code CLI が見つかりません: {CLAUDE_BIN}") from None
+        latency.mark("llm_ready")                  # 起動した claude -p に送れる状態（遅延の記録、T-1405）
         proc.stdin.write(prompt)
         proc.stdin.close()
         try:
@@ -290,14 +292,17 @@ def stop_warm_claude() -> None:
 
 
 def _take_claude_warm():
-    """待機中の claude -p を受け取る。ない・死んでいるときはその場で起動する。"""
+    """待機中の claude -p を受け取る。ない・死んでいるときはその場で起動する。
+    待機中のものを使えたかを遅延の記録の warm に入れる（T-1405）。"""
     global _warm
     with _warm_lock:
         taken, _warm = _warm, None
     if taken is not None:
         if taken[0].poll() is None:
+            latency.set("warm", True)
             return taken
         _end_claude_process(*taken)
+    latency.set("warm", False)
     return _spawn_claude_warm()
 
 
@@ -315,9 +320,11 @@ def _stream_claude_warm(prompt: str, on_text, timeout: int | None = None, cancel
     timeout = timeout or CLAUDE_CLI_TIMEOUT_SECONDS
     message = json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}, ensure_ascii=False) + "\n"
     proc, workdir = _take_claude_warm()
+    latency.mark("llm_ready")                      # 待機中の claude を受け取った・起動した（T-1405）
     try:
         if not _send_message(proc, message):
             _end_claude_process(proc, workdir)
+            latency.set("warm", False)             # 受け取ったものは死んでいた。その場で起動したものを使う
             proc, workdir = _spawn_claude_warm()
             if not _send_message(proc, message):
                 raise LLMError("Claude Code CLI に発言を送れませんでした（起動直後に終了）")
@@ -378,6 +385,7 @@ def _ollama_post(path: str, payload: dict, timeout: float) -> dict:
 
 
 def _complete_ollama(prompt: str, timeout: int | None = None) -> str:
+    latency.mark("llm_ready")                      # 要求を送る直前（遅延の記録、T-1405）
     data = _ollama_post("/api/chat", _ollama_chat_payload(prompt, stream=False), timeout or OLLAMA_TIMEOUT_SECONDS)
     return (data.get("message") or {}).get("content") or ""
 
@@ -424,6 +432,7 @@ def _stream_ollama(prompt: str, on_text, timeout: int | None = None, cancel=None
                 response.close()
             conn.close()
 
+    latency.mark("llm_ready")                      # 要求を送る直前（送信は読み取りのスレッド。遅延の記録、T-1405）
     threading.Thread(target=reader, name="jarvis-ollama-reader", daemon=True).start()
     parts = []
     done = False
