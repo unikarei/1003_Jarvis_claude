@@ -472,3 +472,29 @@ def test_candidates_api_requires_token(server, monkeypatch):
     code, body, _ = req(server, "GET", "/api/candidates")
     cands = json.loads(body)["candidates"]
     assert code == 200 and any(c["label"] == "macOS Kyoko" and c["available"] for c in cands)
+
+
+def test_candidates_carry_presets_for_butler_style():
+    """執事風の候補は話速・抑揚・高さの調整を持ち、ほかの候補は標準の値（2026-10-18）。"""
+    from acc import voice_settings
+    engines = [{"name": "aivisspeech", "label": "AivisSpeech", "available": True, "reason": "",
+                "speakers": [{"id": "u", "name": "阿井田 茂", "styles": [{"id": "1310138977", "name": "Calm"}]}]}]
+    info = {c["label"]: c for c in voice_settings.candidates_info(engines)}
+    butler = info["AivisSpeech 阿井田 茂（Calm・執事風）"]
+    plain = info["AivisSpeech 阿井田 茂（Calm）"]
+    assert butler["speaker"] == plain["speaker"] == "1310138977"
+    assert (butler["rate"], butler["intonation"], butler["pitch"]) == (0.92, 0.8, -0.03)
+    assert (plain["rate"], plain["intonation"], plain["pitch"]) == (1.0, 1.0, 0.0)
+    s = tts.VoiceSettings(engine="aivisspeech", speaker="1", **voice_settings.BUTLER).clamp()
+    assert (s.rate, s.intonation, s.pitch) == (0.92, 0.8, -0.03)     # 設定の範囲の中
+
+
+def test_settings_page_sliders_can_hold_butler_preset():
+    """執事風の値をスライダーが丸めずに持てる（刻み 0.01）。"""
+    import re as _re
+    from acc import voice_settings
+    for k in ("rate", "intonation", "pitch"):
+        tag = _re.search(rf'<input type="range" id="{k}"[^>]*>', voice_settings.PAGE).group(0)
+        step = float(_re.search(r'step="([0-9.]+)"', tag).group(1))
+        value = voice_settings.BUTLER[k]
+        assert abs(round(value / step) * step - value) < 1e-9

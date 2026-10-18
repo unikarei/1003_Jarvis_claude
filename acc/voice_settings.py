@@ -70,9 +70,21 @@ def preview(body: dict) -> tuple[bytes, float]:
     return wav_bytes(audio), round(time.monotonic() - started, 2)
 
 
+# 執事のように落ち着いた話し方の調整（少し遅く・抑揚を抑え・少し低く。2026-10-18 Owner「もっと JARVIS っぽい声」）
+BUTLER = {"rate": 0.92, "intonation": 0.8, "pitch": -0.03}
+
 # Owner が試聴して既定を決める候補（2026-10-18 の比較、../docs/jarvis-tts-review.md §6）。
-# (エンジン, 話者の名前（say は声の名前の正規表現）, スタイルの名前, 表示名, メモ)。入っていない候補は「使えない」と示す
+# (エンジン, 話者の名前（say は声の名前の正規表現）, スタイルの名前, 表示名, メモ[, 話速・抑揚・高さの調整])。
+# 入っていない候補は「使えない」と示す
 CANDIDATES = (
+    ("aivisspeech", "阿井田 茂", "Calm", "AivisSpeech 阿井田 茂（Calm・執事風）", "落ち着いたバリトン＋執事風の調整。ACML", BUTLER),
+    ("aivisspeech", "Shinjou Tomoharu", "ノーマル", "AivisSpeech Shinjou Tomoharu（執事風）",
+     "落ち着いた中年の男性＋執事風の調整。ACML-NC（非商用）", BUTLER),
+    ("aivisspeech", "hinakoyuhara", "落ち着き", "AivisSpeech hinakoyuhara（落ち着き・執事風）",
+     "中年の男性＋執事風の調整。ACML", BUTLER),
+    ("aivisspeech", "TANAKA", "ノーマル", "AivisSpeech TANAKA（執事風）", "ナレーション向けの年配の男性＋執事風の調整。ACML", BUTLER),
+    ("aivisspeech", "ろてじん（匿名インタビュー風）", "ノーマル", "AivisSpeech ろてじん（匿名インタビュー風）",
+     "低く抑えた男性。ACML"),
     ("aivisspeech", "阿井田 茂", "Calm", "AivisSpeech 阿井田 茂（Calm）", "落ち着いたバリトンの男性。ACML"),
     ("aivisspeech", "Shinjou Tomoharu", "ノーマル", "AivisSpeech Shinjou Tomoharu", "落ち着いた中年の男性。ACML-NC（非商用）"),
     ("aivisspeech", "まお", "おちつき", "AivisSpeech まお（おちつき）", "女性。ACML"),
@@ -92,7 +104,8 @@ def candidates_info(engines: list[dict] | None = None) -> list[dict]:
     """候補ごとに、使えるか・設定に使う話者の値（スタイルの番号、say は声の名前）を返す。"""
     by_name = {e["name"]: e for e in (engines if engines is not None else engines_info())}
     out = []
-    for engine, speaker, style, label, note in CANDIDATES:
+    for engine, speaker, style, label, note, *rest in CANDIDATES:
+        preset = {"rate": 1.0, "intonation": 1.0, "pitch": 0.0, **(rest[0] if rest else {})}
         e = by_name.get(engine)
         value, reason = "", ""
         if e is None or not e["available"]:
@@ -106,7 +119,7 @@ def candidates_info(engines: list[dict] | None = None) -> list[dict]:
             value = str(st["id"]) if st and str(st.get("id")).isdigit() else ""   # 番号でなければ合成できない
             reason = "" if value else f"{e['label']} にこの話者・スタイルがありません"
         out.append({"label": label, "note": note, "engine": engine, "speaker": value,
-                    "available": bool(value), "reason": reason})
+                    "available": bool(value), "reason": reason, **preset})
     return out
 
 
@@ -272,15 +285,15 @@ td, th { border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; 
 <section><h2>音声を選ぶ</h2>
 <label>音声エンジン <select id="engine"></select></label>
 <label>話者・スタイル <select id="speaker"></select></label><br>
-<label>話速 <input type="range" id="rate" min="0.5" max="2" step="0.05" value="1"> <span id="rate_v">1.00</span></label>
-<label>抑揚 <input type="range" id="intonation" min="0" max="2" step="0.05" value="1"> <span id="intonation_v">1.00</span></label>
+<label>話速 <input type="range" id="rate" min="0.5" max="2" step="0.01" value="1"> <span id="rate_v">1.00</span></label>
+<label>抑揚 <input type="range" id="intonation" min="0" max="2" step="0.01" value="1"> <span id="intonation_v">1.00</span></label>
 <label>高さ <input type="range" id="pitch" min="-0.15" max="0.15" step="0.01" value="0"> <span id="pitch_v">0.00</span></label>
 <div><button id="play">試聴</button> <button id="save">この音声を使う</button> <span id="msg" class="muted"></span></div>
 <div class="muted" id="note"></div>
 <audio id="audio" controls></audio></section>
 <section><h2>候補の比較（同じ文を各音声で）</h2>
 <table><thead><tr><th>音声</th><th>状態</th><th>合成の秒数</th><th></th></tr></thead><tbody id="cands"></tbody></table>
-<p class="muted">「選ぶ」で上の欄に入る。話速・抑揚を調整して「この音声を使う」で保存する。</p></section>
+<p class="muted">「選ぶ」で上の欄に入る（執事風は話速 0.92・抑揚 0.80・高さ -0.03 も入る）。調整して「この音声を使う」で保存する。</p></section>
 <section><h2>エンジンの比較（同じ文を各音声で）</h2>
 <table><thead><tr><th>エンジン</th><th>状態</th><th>話者</th><th>合成の秒数</th><th></th></tr></thead><tbody id="compare"></tbody></table>
 <p class="muted">抑揚・高さは VOICEVOX・AivisSpeech だけに効く。macOS の say は話速だけ。</p></section>
@@ -347,8 +360,10 @@ async function loadCandidates() {
     const b = e.target.closest("button[data-c]"); if (!b) return;
     const c = cands[+b.dataset.c];
     if (b.dataset.act === "play")
-      return play({engine: c.engine, speaker: c.speaker, rate: 1, intonation: 1, pitch: 0, text: $("text").value}, $("c" + b.dataset.c));
+      return play({engine: c.engine, speaker: c.speaker, rate: c.rate, intonation: c.intonation, pitch: c.pitch,
+                   text: $("text").value}, $("c" + b.dataset.c));
     $("engine").value = c.engine; onEngine(); $("speaker").value = c.speaker;
+    for (const k of ["rate", "intonation", "pitch"]) { $(k).value = c[k]; $(k + "_v").textContent = (+$(k).value).toFixed(2); }
     $("msg").textContent = c.label + " を選びました（保存はまだ）";
   };
 }

@@ -275,7 +275,7 @@
 - [x] T-1213 `voice/record.py`（Enter で開始、周囲の音から決めたしきい値で無音 0.8 秒で区切る、最長 20 秒、保存しない）、`voice/speak.py`（文ごとの読み上げ、URL・出典の番号・コード・表の区切りは読まない、スキルごとの話し言葉の要約）
 - [x] 自然な会話（ADR-0026、2026-10-17 Owner 指示）: `knowledge_engine.answer` はナレッジになければ LLM の知識で答える（出典は使ったものだけ、直近 6 発言を渡す、声のときは 2〜3 文）。`voice_chat.py` は既定でハンズフリー（話し終えたら自動で聞く、雑音の決まり文句は無視、`--push-to-talk` で従来の形）
 - [x] 読み上げの音声エンジンの選択（`../docs/decisions.md` ADR-0029、T-1408）: `voice/tts.py`（say・AivisSpeech・VOICEVOX、有料は未接続）、設定と試聴の画面 `python -m acc.voice_settings`、割り込みの再生に差し込む、長い文を読点で区切る
-- [x] 音声の候補の比較（2026-10-18 Owner 指示）: 試聴の画面に「候補の比較」（AivisSpeech 4・VOICEVOX 3・macOS の拡張の声 2・Kyoko）。入っていない候補は理由を示す。AivisSpeech Engine 1.2.0・VOICEVOX ENGINE 0.25.2 を `~/Applications` に導入（自動起動なし）
+- [x] 音声の候補の比較（2026-10-18 Owner 指示）: 試聴の画面に「候補の比較」（AivisSpeech 4・VOICEVOX 3・macOS の拡張の声 2・Kyoko）。2026-10-18 Owner「もっと JARVIS っぽい声」: AivisHub の hinakoyuhara・TANAKA・ろてじん（ACML）を追加し、執事風の調整（話速 0.92・抑揚 0.8・高さ -0.03）の候補を加えた（AivisSpeech 9 件。話速・抑揚の刻みを 0.01 に）。入っていない候補は理由を示す。AivisSpeech Engine 1.2.0・VOICEVOX ENGINE 0.25.2 を `~/Applications` に導入（自動起動なし）
 - [x] 声の会話の割り込み（Barge-in、`../docs/decisions.md` ADR-0028、T-1407）: `voice/duplex.py`（自前の再生と参照の音量、回り込みの校正と予測、発言の番号、取り消し）。`voice_chat.py` は既定で割り込みあり（`--no-barge-in`・`JARVIS_VOICE_BARGE_IN=0` で無効）。聞いた文だけを履歴に
 - [x] 起動用ファイル `run_text_chat.command`（chat.py）・`run_voice_chat.command`（voice_chat.py）。Finder でダブルクリックで起動（2026-10-17 Owner 依頼）
 - [x] T-1214 `voice_chat.py`（orchestrator・逐次表示・読み上げ・キーボードでの確認・記録・ナレッジ化の材料）、`speech_to_text.transcribe_array`（認識のヒントの語）、faster-whisper の small モデルのダウンロード
