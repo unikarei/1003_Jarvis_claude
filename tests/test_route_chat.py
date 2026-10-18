@@ -67,6 +67,77 @@ def test_knowledge_questions_go_to_knowledge_answer(index, text):
     assert (r.skill, r.method) == ("knowledge-answer", "default")
 
 
+@pytest.mark.parametrize("text", ["Pythonのリスト内包表記って何？", "生成AIとは何ですか", "モデルの仕組みを説明して",
+                                  "AI の使い方を教えて", "新幹線と飛行機の違い"])
+def test_general_knowledge_question_goes_to_general_chat_even_with_high_score(index, monkeypatch, text):
+    """一般知識の質問の形は、検索の点数が高くても通常の会話（2026-10-18 Owner 指示）。"""
+    from types import SimpleNamespace
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [SimpleNamespace(score=100.0)])   # 点数の経路なら必ず B になる
+    assert not orc.is_knowledge_question(text)
+    assert orc.route(text, orc.Context(), use_llm=False).skill == "general-chat"
+
+
+@pytest.mark.parametrize("text", ["新しい趣味を始めたい", "この文章をまとめて", "最近疲れてる"])
+def test_broad_words_are_left_to_the_score(index, monkeypatch, text):
+    """「新しい」「まとめて」「最近」だけではナレッジの質問にしない（点数が低ければ通常の会話）。"""
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [])
+    assert orc.route(text, orc.Context(), use_llm=False).skill == "general-chat"
+
+
+@pytest.mark.parametrize("text", ["各社のモデルについて分かったことは？", "あとはどうなった？"])
+def test_koto_wa_is_not_a_general_question_form(index, monkeypatch, text):
+    """「ことは」「あとは」は一般知識の質問の形にしない（点数の判定に進む）。"""
+    from types import SimpleNamespace
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [SimpleNamespace(score=100.0)])
+    assert orc.is_knowledge_question(text)
+
+
+@pytest.mark.parametrize("text", ["ナレッジにある AI ニュースとは", "大洗の補助金とは", "民泊の仕組みを説明して"])
+def test_knowledge_or_project_words_win_over_general_question_form(index, monkeypatch, text):
+    """ナレッジ・プロジェクトの語があれば、質問の形にかかわらずナレッジの質問。"""
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [])   # 検索の点数では当てない
+    assert orc.route(text, orc.Context(), use_llm=False).skill == "knowledge-answer"
+
+
+@pytest.mark.parametrize("text", ["発表の仕方って何？", "昨日食べた料理の作り方って何？", "トレンドって何？", "最新のモデルって何？"])
+def test_recent_words_do_not_override_general_question_form(index, monkeypatch, text):
+    """最近の出来事を聞く語があっても、一般知識の質問の形なら通常の会話（語だけでは決めない）。"""
+    from types import SimpleNamespace
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [SimpleNamespace(score=100.0)])
+    assert orc.route(text, orc.Context(), use_llm=False).skill == "general-chat"
+
+
+@pytest.mark.parametrize("text,score,expected", [
+    ("OpenAI の最近の動向は？", 2.0, "knowledge-answer"),     # 最近の語: しきい値 8.0 × 0.25
+    ("OpenAI の最近の動向は？", 1.9, "general-chat"),
+    ("最近疲れてるんだよね", 1.0, "general-chat"),               # 語だけでは決めない
+    ("OpenAI の様子は？", 7.9, "general-chat"),                 # 最近の語がなければ 8.0
+])
+def test_recent_words_lower_the_score_threshold(index, monkeypatch, text, score, expected):
+    from types import SimpleNamespace
+    monkeypatch.setattr(config, "KNOWLEDGE_SCORE_THRESHOLD", 8.0)
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [SimpleNamespace(score=score)])
+    assert orc.route(text, orc.Context(), use_llm=False).skill == expected
+
+
+def test_recent_words_are_removed_from_the_search_query(index, monkeypatch):
+    """「最近」自体の点数で当てないよう、最近の出来事を聞く語を除いた話題で検索する。話題がなければ検索しない。"""
+    queries = []
+    monkeypatch.setattr(ke, "search", lambda q, **k: queries.append(q) or [])
+    assert not orc.is_knowledge_question("OpenAI の最近の動向は？")
+    assert "最近" not in queries[0] and "動向" not in queries[0] and "OpenAI" in queries[0]
+    queries.clear()
+    assert not orc.is_knowledge_question("最近")
+    assert queries == []
+
+
+def test_recent_small_talk_stays_general_with_real_search(index):
+    """実際の検索で、「最近」だけの雑談は通常の会話（索引に「最近」を含む知識があっても）。"""
+    import db
+    db.insert_node("Knowledge", category="news", title="最近の話題", content="最近 最近 最近", url="https://example.com/r")
+    assert orc.route("最近疲れてるんだよね", orc.Context(), use_llm=False).skill == "general-chat"
+
+
 def test_stats_rule_is_unchanged(index):
     r = orc.route("登録件数の多い順に3つ", orc.Context(), use_llm=False)
     assert (r.skill, r.method) == ("knowledge-stats", "rule")
@@ -74,8 +145,8 @@ def test_stats_rule_is_unchanged(index):
 
 def test_high_search_score_counts_as_knowledge_question(index, monkeypatch):
     """語に当たらなくても、検索の最上位の点数がしきい値以上ならナレッジの質問（c）。"""
-    text = "新しいモデルの発表はどうだった？"
-    assert not any(w in text for w in orc.KNOWLEDGE_WORDS + orc.PROJECT_WORDS)
+    text = "各社のモデルはどうだった？"
+    assert not any(w in text for w in orc.KNOWLEDGE_WORDS + orc.PROJECT_WORDS + orc.RECENT_WORDS)
     score = ke.search(text, limit=1)[0].score
     monkeypatch.setattr(config, "KNOWLEDGE_SCORE_THRESHOLD", score)
     assert orc.route(text, orc.Context(), use_llm=False).skill == "knowledge-answer"

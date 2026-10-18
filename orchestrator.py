@@ -200,16 +200,36 @@ def _has_project_id(text: str) -> bool:
     return any(re.search(rf"(?<![a-z0-9_-]){re.escape(pid.lower())}(?![a-z0-9_-])", lowered) for pid in _project_ids())
 
 
+# 最近の出来事を聞く語。あれば、この語を除いた文（話題）で検索し、しきい値を下げる（集めたニュースで答える）。
+# 語だけでは決めない。「最近」自体が検索で 7 点ほどになり、「最近疲れてる」もナレッジに回るため（2026-10-18 の実機）
+RECENT_WORDS = ("最近", "最新", "今週", "先週", "今月", "先月", "昨日", "動向", "発表", "トレンド")
+RECENT_SCORE_FACTOR = 0.25
+# 一般知識の質問の形（「〜って何？」「〜とは」など）。検索の点数が高くても通常の会話にする。BM25 の点数は一般の語でも
+# 8〜12 点になり、「Python のリスト内包表記って何？」がナレッジに回っていた（2026-10-18 の実機）。
+# 「とは」は文末か「とは何・どういう」の形だけ（「分かったことは？」「あとは」に当てない）
+GENERAL_QUESTION = re.compile(r"って(何|なに|なん)|(?<![こあも])とは(?:[?？。]?$|何|なに|なん|どういう|どんな)"
+                              r"|って(どんな|どういう)|の仕組み|の使い方|の意味|を説明して|の違い")
+
+
 def is_knowledge_question(text: str) -> bool:
-    """ナレッジの語・プロジェクトの語を含むか、検索の最上位の点数がしきい値以上なら True。迷えば False（通常の会話）。"""
+    """ナレッジの語・プロジェクトの語を含むなら True。一般知識の質問の形なら False。それ以外は、検索の最上位の
+    点数がしきい値以上なら True（最近の出来事を聞く語があれば、その語を除いて検索し、しきい値は RECENT_SCORE_FACTOR 倍）。
+    迷えば False（通常の会話）。"""
     if any(w in text for w in KNOWLEDGE_WORDS + PROJECT_WORDS) or _has_project_id(text):
         return True
+    if GENERAL_QUESTION.search(text):
+        return False
+    query, threshold = text, config.KNOWLEDGE_SCORE_THRESHOLD
+    if any(w in text for w in RECENT_WORDS):
+        for w in RECENT_WORDS:
+            query = query.replace(w, " ")
+        threshold *= RECENT_SCORE_FACTOR
     import knowledge_engine as ke
     try:
-        hits = ke.search(text, limit=1)
+        hits = ke.search(query, limit=1) if query.strip() else []
     except Exception:   # DB がない・壊れているときは通常の会話にする
         return False
-    return bool(hits) and hits[0].score >= config.KNOWLEDGE_SCORE_THRESHOLD
+    return bool(hits) and hits[0].score >= threshold
 
 
 def route(text: str, ctx: Context, use_llm: bool | None = None) -> Route:
