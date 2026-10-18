@@ -15,9 +15,8 @@ Mac mini では、1003 の直下の起動用ファイルでも始められる（
 - `run_text_chat.command`: 文字で会話する（`chat.py`）
 - 声の選択: `.venv/bin/python -m acc.voice_settings` で音声エンジン・話者・話速・抑揚を選んで試聴し、「この音声を使う」で保存する（次に起動する声の会話から使う）。「候補の比較」で、AivisSpeech・VOICEVOX・macOS の候補を同じ文で聞き比べられる
 - 実マイクの評価: `.venv/bin/python -m acc.voice_eval` で表示した URL を開き、10 の文を 1 件ずつ「測る」→ 読み上げて黙る。認識の誤り（CER）と、話し終えてから最初の声までの p50・p95 を示す（結果は `data/voice/eval/`、音声は保存しない）
-  - AivisSpeech・VOICEVOX は、使うときだけ手で起動する（自動起動はしない。Mac の中だけで待ち受ける）:
-    `~/Applications/AivisSpeech-Engine/run --host 127.0.0.1 --port 10101 --disable_sentry`（約 5 GB のメモリ）、
-    `~/Applications/VOICEVOX-Engine/run --host 127.0.0.1 --port 50021`（約 1.3 GB）。止まっていれば say（Kyoko）で読む
+  - 選んだ音声のエンジン（VOICEVOX・AivisSpeech、`~/Applications` に導入済み）は、声の会話（`run_voice_chat.command`）と評価の画面の間だけ自動で起動し、終わると止まる（起動していたものはそのまま使い、止めない）。起動できなければ say（Kyoko）で読む。試聴の画面で使うときだけは手で起動する:
+    `~/Applications/VOICEVOX-Engine/run --host 127.0.0.1 --port 50021`、`~/Applications/AivisSpeech-Engine/run --host 127.0.0.1 --port 10101 --disable_sentry`
 - `run_voice_chat.command`: 声で会話する（`voice_chat.py`。ハンズフリー: そのまま話しかける。JARVIS が話している途中でも、話し始めれば止まって聞く（割り込み。`--no-barge-in` で無効）。終了は「終了」と話すか q と Enter。Enter を押してから話す従来の形は `.venv/bin/python voice_chat.py --push-to-talk`）
 - 遅延の集計: `.venv/bin/python -m latency report`（会話の段階ごとの p50・p95。`--days 7`・`--mode voice`・`--skill knowledge-answer` で絞る。記録は `data/latency/latency.jsonl`、本文は残さない）
 

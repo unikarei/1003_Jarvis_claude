@@ -380,34 +380,86 @@ def _end(speaker, session) -> int:
     return 0
 
 
-def build_speaker(settings: "tts.VoiceSettings | None" = None, player=None) -> "duplex.DuplexSpeaker":
-    """保存した音声の設定（python -m acc.voice_settings で選ぶ）で読み上げる。どの起動の形でも使う（ADR-0029）。"""
+def build_speaker(settings: "tts.VoiceSettings | None" = None, player=None, recover=None) -> "duplex.DuplexSpeaker":
+    """保存した音声の設定（python -m acc.voice_settings で選ぶ）で読み上げる。どの起動の形でも使う（ADR-0029）。
+    recover を渡すと、会話の途中でエンジンが止まったときに起動し直して選んだ音声に戻す。"""
     settings = settings or tts.load_settings()
     print(f"（音声: {tts.engine(settings.engine).label}・{settings.speaker}・話速 {settings.rate}）")
     player = player or duplex.Player(device=output_device())
-    return duplex.DuplexSpeaker(player, voice=VOICE, synth=tts.make_synth(settings))
+    return duplex.DuplexSpeaker(player, voice=VOICE, synth=tts.make_synth(settings, recover=recover))
+
+
+def _recover_for(launcher):
+    """会話の途中でエンジンが止まったときに起動し直す関数（選んだ話者を先に読み込む）。管理しないなら None。"""
+    if launcher is None:
+        return None
+    speaker = tts.load_settings().speaker
+    return lambda: launcher.recover(speaker=speaker)
+
+
+def start_engine(launcher) -> None:
+    """選んだ音声のエンジンを起動し始める（待たない。音声認識のモデルの読み込みと並べる）。"""
+    if launcher is not None:
+        launcher.start()
+        if launcher.status:
+            print(f"（音声: {launcher.status}）")
+
+
+def wait_engine(launcher) -> None:
+    """エンジンが使えるようになるまで待つ。使えなければ build_speaker が say（Kyoko）にする。"""
+    if launcher is not None and launcher.owned:
+        launcher.wait_ready()
+        print(f"（音声: {launcher.status}）")
+    if launcher is not None:
+        from voice import engine_process
+        engine_process.preload(launcher, tts.load_settings())   # 最初の文の合成を速くする
 
 
 def main(listen=None, transcribe=None, speaker: Speaker | None = None, push_to_talk: bool = False,
-         keys: "queue.Queue[str] | None" = None, barge_in: bool | None = None) -> int:
+         keys: "queue.Queue[str] | None" = None, barge_in: bool | None = None, launcher=None) -> int:
     """既定はハンズフリー（JARVIS が話し終えたら自動で聞く、ADR-0026）。push_to_talk で Enter を押してから話す。
-    listen・transcribe・speaker・keys はテストで差し替える。"""
+    listen・transcribe・speaker・keys・launcher はテストで差し替える。
+    選んだ音声のエンジン（VOICEVOX・AivisSpeech）が止まっていれば、この会話の間だけ起動し、終わりに止める
+    （この会話が起動したものだけ。voice/engine_process.py）。"""
     if listen is None and not mic.has_input_device():
         print("マイクが見つかりません。ヘッドセットなどをつないでから起動してください（文字の対話は chat.py）。")
         return 1
+    if launcher is None and listen is None:
+        from voice import engine_process
+        launcher = engine_process.for_settings(tts.load_settings())
+    restore = _stop_on_signals(launcher)
+    try:
+        start_engine(launcher)
+        return _main(listen, transcribe, speaker, push_to_talk, keys, barge_in, launcher)
+    finally:
+        try:
+            if launcher is not None:
+                launcher.stop()              # この会話が起動したものだけを止める
+        finally:
+            restore()
+
+
+def _stop_on_signals(launcher):
+    from voice import engine_process
+    return engine_process.stop_on_signals(launcher)
+
+
+def _main(listen, transcribe, speaker, push_to_talk, keys, barge_in, launcher) -> int:
     orchestrator.start_warm_up()              # 使う LLM を裏で読み込んでおく（最初の答えを速くする、T-1405）
     if listen is None:
         print("音声認識のモデルを読み込んでいます（初回はダウンロードに数分かかります）…")
         from speech_to_text import load_model, transcribe_array
         load_model()
+    wait_engine(launcher)                     # 読み込みの間に起動したエンジンを待つ（選んだ音声を使えるように）
+    if listen is None:
         if barge_in is None:
             barge_in = duplex.barge_in_enabled()
         if barge_in and not push_to_talk:     # 割り込みのある会話（ADR-0028）
-            speaker = build_speaker()
+            speaker = build_speaker(recover=_recover_for(launcher))
             session = duplex.Session(speaker.player, speaker)
             return run_barge_in(session, transcribe_array, keys if keys is not None else keyboard())
         listen, transcribe = mic.record_utterance, transcribe_array
-    speaker = speaker or build_speaker()      # 割り込みなし・押してから話す形でも、選んだ音声で読む
+    speaker = speaker or build_speaker(recover=_recover_for(launcher))   # どの形でも選んだ音声で読む
     keys = keys if keys is not None else keyboard()
     init_db()
 
