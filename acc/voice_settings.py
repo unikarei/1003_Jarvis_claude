@@ -11,6 +11,7 @@ import argparse
 import hmac
 import io
 import json
+import re
 import secrets
 import sys
 import threading
@@ -67,6 +68,46 @@ def preview(body: dict) -> tuple[bytes, float]:
     started = time.monotonic()
     audio = e.synthesize(text, settings)
     return wav_bytes(audio), round(time.monotonic() - started, 2)
+
+
+# Owner が試聴して既定を決める候補（2026-10-18 の比較、../docs/jarvis-tts-review.md §6）。
+# (エンジン, 話者の名前（say は声の名前の正規表現）, スタイルの名前, 表示名, メモ)。入っていない候補は「使えない」と示す
+CANDIDATES = (
+    ("aivisspeech", "阿井田 茂", "Calm", "AivisSpeech 阿井田 茂（Calm）", "落ち着いたバリトンの男性。ACML"),
+    ("aivisspeech", "Shinjou Tomoharu", "ノーマル", "AivisSpeech Shinjou Tomoharu", "落ち着いた中年の男性。ACML-NC（非商用）"),
+    ("aivisspeech", "まお", "おちつき", "AivisSpeech まお（おちつき）", "女性。ACML"),
+    ("aivisspeech", "fumifumi", "ノーマル", "AivisSpeech fumifumi", "落ち着いた青年。ACML"),
+    ("voicevox", "青山龍星", "しっとり", "VOICEVOX 青山龍星（しっとり）", "低く落ち着いた男性"),
+    ("voicevox", "青山龍星", "ノーマル", "VOICEVOX 青山龍星（ノーマル）", "低く落ち着いた男性"),
+    ("voicevox", "玄野武宏", "ノーマル", "VOICEVOX 玄野武宏（ノーマル）", "青年の男性"),
+    ("say", r"^Kyoko\s*[（(](拡張|Enhanced|プレミアム|Premium)", None, "macOS Kyoko（拡張）",
+     "システム設定から無料でダウンロード"),
+    ("say", r"^Otoya\s*[（(](拡張|Enhanced|プレミアム|Premium)", None, "macOS Otoya（拡張）",
+     "システム設定から無料でダウンロード"),
+    ("say", r"^Kyoko$", None, "macOS Kyoko", "今の既定"),
+)
+
+
+def candidates_info(engines: list[dict] | None = None) -> list[dict]:
+    """候補ごとに、使えるか・設定に使う話者の値（スタイルの番号、say は声の名前）を返す。"""
+    by_name = {e["name"]: e for e in (engines if engines is not None else engines_info())}
+    out = []
+    for engine, speaker, style, label, note in CANDIDATES:
+        e = by_name.get(engine)
+        value, reason = "", ""
+        if e is None or not e["available"]:
+            reason = e["reason"] if e else "知らないエンジンです"
+        elif engine == "say":
+            value = next((s["id"] for s in e["speakers"] if re.search(speaker, str(s["id"]))), "")
+            reason = "" if value else "この声は入っていません"
+        else:
+            sp = next((s for s in e["speakers"] if s.get("name") == speaker), None)
+            st = next((x for x in (sp or {}).get("styles", []) if x.get("name") == style), None)
+            value = str(st["id"]) if st and str(st.get("id")).isdigit() else ""   # 番号でなければ合成できない
+            reason = "" if value else f"{e['label']} にこの話者・スタイルがありません"
+        out.append({"label": label, "note": note, "engine": engine, "speaker": value,
+                    "available": bool(value), "reason": reason})
+    return out
 
 
 def make_handler(token: str, port: int):
@@ -129,6 +170,9 @@ def make_handler(token: str, port: int):
                                   "text/html; charset=utf-8")
             if url.path == "/api/engines":
                 return self._json(200, {"engines": engines_info()})
+            if url.path == "/api/candidates":
+                engines = engines_info()          # 選択欄と候補を同じ取得結果で作る（画面の表示中に起動したエンジン）
+                return self._json(200, {"engines": engines, "candidates": candidates_info(engines)})
             if url.path == "/api/settings":
                 from dataclasses import asdict
                 return self._json(200, asdict(tts.load_settings()))
@@ -234,6 +278,9 @@ td, th { border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; 
 <div><button id="play">試聴</button> <button id="save">この音声を使う</button> <span id="msg" class="muted"></span></div>
 <div class="muted" id="note"></div>
 <audio id="audio" controls></audio></section>
+<section><h2>候補の比較（同じ文を各音声で）</h2>
+<table><thead><tr><th>音声</th><th>状態</th><th>合成の秒数</th><th></th></tr></thead><tbody id="cands"></tbody></table>
+<p class="muted">「選ぶ」で上の欄に入る。話速・抑揚を調整して「この音声を使う」で保存する。</p></section>
 <section><h2>エンジンの比較（同じ文を各音声で）</h2>
 <table><thead><tr><th>エンジン</th><th>状態</th><th>話者</th><th>合成の秒数</th><th></th></tr></thead><tbody id="compare"></tbody></table>
 <p class="muted">抑揚・高さは VOICEVOX・AivisSpeech だけに効く。macOS の say は話速だけ。</p></section>
@@ -268,9 +315,12 @@ function onEngine() {
   $("speaker").innerHTML = options(e);
   $("note").textContent = e.available ? e.note : e.reason;
 }
+function engineOptions() {
+  $("engine").innerHTML = engines.map(e => `<option value="${esc(e.name)}" ${e.available ? "" : "disabled"}>${esc(e.label)}${e.available ? "" : "（使えない）"}</option>`).join("");
+}
 async function load() {
   engines = (await (await fetch("/api/engines")).json()).engines;
-  $("engine").innerHTML = engines.map(e => `<option value="${esc(e.name)}" ${e.available ? "" : "disabled"}>${esc(e.label)}${e.available ? "" : "（使えない）"}</option>`).join("");
+  engineOptions();
   const s = await (await fetch("/api/settings")).json();
   $("engine").value = engines.find(e => e.name === s.engine && e.available) ? s.engine : "say";
   onEngine();
@@ -284,6 +334,24 @@ async function load() {
       <td id="t${i}">-</td><td>${e.available && first ? `<button data-i="${i}" data-sp="${esc(first)}">試聴</button>` : ""}</td></tr>`;
   }).join("");
 }
+async function loadCandidates() {
+  const data = await (await fetch("/api/candidates")).json();
+  const cands = data.candidates, keep = {engine: $("engine").value, speaker: $("speaker").value};
+  engines = data.engines; engineOptions();           // 選択欄も候補と同じ取得結果にする
+  $("engine").value = keep.engine; onEngine();
+  if ([...$("speaker").options].some(o => o.value === keep.speaker)) $("speaker").value = keep.speaker;
+  $("cands").innerHTML = cands.map((c, i) => `<tr><td>${esc(c.label)}<div class="muted">${esc(c.note)}</div></td>
+    <td class="${c.available ? "ok" : "ng"}">${c.available ? "使える" : esc(c.reason)}</td><td id="c${i}">-</td>
+    <td>${c.available ? `<button data-c="${i}" data-act="play">試聴</button> <button data-c="${i}" data-act="pick">選ぶ</button>` : ""}</td></tr>`).join("");
+  $("cands").onclick = e => {
+    const b = e.target.closest("button[data-c]"); if (!b) return;
+    const c = cands[+b.dataset.c];
+    if (b.dataset.act === "play")
+      return play({engine: c.engine, speaker: c.speaker, rate: 1, intonation: 1, pitch: 0, text: $("text").value}, $("c" + b.dataset.c));
+    $("engine").value = c.engine; onEngine(); $("speaker").value = c.speaker;
+    $("msg").textContent = c.label + " を選びました（保存はまだ）";
+  };
+}
 $("engine").onchange = onEngine;
 for (const k of ["rate", "intonation", "pitch"]) $(k).oninput = () => $(k + "_v").textContent = (+$(k).value).toFixed(2);
 $("play").onclick = () => play(current());
@@ -296,7 +364,7 @@ $("compare").onclick = e => {
   const eng = engines[+b.dataset.i];
   play({engine: eng.name, speaker: b.dataset.sp, rate: 1, intonation: 1, pitch: 0, text: $("text").value}, $("t" + b.dataset.i));
 };
-load();
+load().then(loadCandidates);
 </script></body></html>
 """
 
