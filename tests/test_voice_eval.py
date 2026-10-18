@@ -2,6 +2,7 @@
 
 import http.client
 import json
+import os
 import tempfile
 import threading
 import time
@@ -118,11 +119,24 @@ def fake_speaker(monkeypatch):
 
 
 class FakeSay:
-    """say の代わり（0.2 秒で読み終える）。"""
+    """say -i の代わり。outputs（[(秒, バイト列)]）を擬似端末に書き、最後の出力から 0.2 秒で読み終える。"""
 
-    def __init__(self, cmd):
+    def __init__(self, cmd, stdout=None, outputs=()):
         self.cmd, self.done = cmd, threading.Event()
-        threading.Timer(0.2, self.done.set).start()
+        fd = os.dup(stdout) if stdout is not None else None   # 呼び出し側は起動の後で閉じる
+
+        def run():
+            start = time.monotonic()
+            for at, data in outputs:
+                time.sleep(max(0.0, start + at - time.monotonic()))
+                if self.done.is_set():
+                    break
+                os.write(fd, data)
+            self.done.wait(0.2)
+            if fd is not None:
+                os.close(fd)
+            self.done.set()
+        threading.Thread(target=run, daemon=True).start()
 
     def wait(self):
         self.done.wait()
@@ -261,27 +275,46 @@ def test_measure_full_streams_answer_and_stops_after_first_sentence(server, fake
 
 def test_measure_full_with_say_plays_directly_without_audio_files(server, fake_mic, index, tmpdir_watch, tmp_path,
                                                                  monkeypatch):
-    """既定の say は -o（一時の WAV）を使わず直接再生し、say の起動で最初の声を記録する。"""
+    """既定の say は -o（一時の WAV）を使わず直接再生し、起動の時刻ではなく say -i が最初の語を強調した
+    （再生が始まった）時刻で最初の声を記録する。"""
+    started = _say_full(server, fake_mic, tmp_path, monkeypatch,
+                        outputs=[(0.0, "エラー 0 件".encode()), (0.4, b"\x1b[7m\xe3\x82\xa8\x1b[m")])
+    code, data = started.pop()
+    assert code == 200 and data["executed"] is True and "first_audio" in data["stages"]
+    st = data["stages"]
+    assert st["first_audio"] - st["first_text"] >= 300                         # 起動（first_text の直後）では記録しない
+    assert len(started) == 1 and started[0][:2] == ["say", "-r"] and "-i" in started[0] and "-o" not in started[0]
+    assert "Kyoko" in started[0] and started[0][-1] == "エラー 0 件、警告 1 件です。"
+    assert list(tmpdir_watch.iterdir()) == []                                  # 音声の一時ファイルもない
+
+
+def test_measure_full_with_say_without_playback_signal_records_no_first_audio(server, fake_mic, index, tmp_path,
+                                                                            monkeypatch):
+    """say が強調を出さない（再生の通知がない）ときは、起動の時刻で代用せず最初の声を記録しない。"""
+    started = _say_full(server, fake_mic, tmp_path, monkeypatch, outputs=[(0.0, "エラー 0 件".encode())])
+    code, data = started.pop()
+    assert code == 200 and data["executed"] is True and "first_audio" not in data["stages"]
+    assert "検出できませんでした" in data["note"]
+
+
+def _say_full(server, fake_mic, tmp_path, monkeypatch, outputs):
+    """設定なし（say・Kyoko）で 8 の文を full で測る。起動した say のコマンドの列の最後に (code, data) を足して返す。"""
     import voice_chat
     from voice import tts
-    monkeypatch.setattr(tts, "SETTINGS_PATH", tmp_path / "none.json")         # 設定なし = say・Kyoko
+    monkeypatch.setattr(tts, "SETTINGS_PATH", tmp_path / "none.json")
     monkeypatch.setattr(voice_chat, "output_device", lambda: None)
     started = []
 
-    def fake_popen(cmd):
+    def fake_popen(cmd, stdout):
         started.append(cmd)
-        return FakeSay(cmd)
+        return FakeSay(cmd, stdout, outputs)
     monkeypatch.setattr(voice_eval, "_popen", fake_popen)
     monkeypatch.setitem(orchestrator.HANDLERS, "system-status",
                         lambda inputs, ctx, text: ("エラー 0 件・警告 1 件・情報 2 件（前回の照合結果）", []))
     fake_mic["text"] = "システムの状態は？"
     code, body, _ = req(server, "POST", "/api/measure", {"index": 8, "mode": "full"})
-    data = json.loads(body)
-    assert code == 200 and data["executed"] is True and "first_audio" in data["stages"]
-    assert data["stages"]["first_text"] <= data["stages"]["first_audio"]
-    assert len(started) == 1 and started[0][:2] == ["say", "-r"] and "-o" not in started[0]
-    assert "Kyoko" in started[0] and started[0][-1] == "エラー 0 件、警告 1 件です。"
-    assert list(tmpdir_watch.iterdir()) == []                                  # 音声の一時ファイルもない
+    started.append((code, json.loads(body)))
+    return started
 
 
 def test_make_speaker_does_not_fall_back_to_say_file(monkeypatch, tmp_path):

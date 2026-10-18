@@ -160,13 +160,18 @@ def _executable(skill_name: str) -> bool:
 
 # ---------------------------------------------------------------- 読み上げ（ファイルを使わない）
 
-def _popen(cmd: list[str]) -> subprocess.Popen:
-    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+SAY_HIGHLIGHT = b"\x1b"              # say -i が話している語を強調する端末の制御の始まり
+
+
+def _popen(cmd: list[str], stdout: int) -> subprocess.Popen:
+    env = dict(os.environ, TERM="xterm")   # say -i の強調（standout）を端末の制御で出させる
+    return subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=stdout, stderr=subprocess.DEVNULL, env=env)
 
 
 class SaySpeaker(speak.Speaker):
-    """macOS の say で直接再生する（-o を使わず、音声をファイルに書かない）。voice.speak.Speaker に話速を足し、
-    say を起動した時に on_start を呼ぶ（最初の声は say の再生の開始＝起動の時刻で記録する）。"""
+    """macOS の say で直接再生する（-o を使わず、音声をファイルに書かない）。voice.speak.Speaker に話速を足す。
+    最初の声は say の起動では記録しない（起動の直後は合成も再生もまだ始まっていない）。say -i は話している語を
+    再生に合わせて強調するので、擬似端末で受けた出力に最初の強調が現れた時点で on_start を呼ぶ。"""
 
     def __init__(self, voice: str, rate: float, device: str | None, on_start):
         self.rate, self._on_start = rate, on_start
@@ -174,12 +179,36 @@ class SaySpeaker(speak.Speaker):
 
     def _command(self, sentence: str) -> list[str]:
         cmd = super()._command(sentence)
-        return cmd[:1] + ["-r", str(int(tts.SAY_BASE_RATE * self.rate))] + cmd[1:]
+        return cmd[:1] + ["-r", str(int(tts.SAY_BASE_RATE * self.rate)), "-i"] + cmd[1:]
 
     def _start(self, cmd: list[str]) -> subprocess.Popen:
-        proc = _popen(cmd)
-        self._on_start()
+        master, slave = os.openpty()
+        try:
+            proc = _popen(cmd, slave)
+        except BaseException:
+            os.close(master)
+            raise
+        finally:
+            os.close(slave)
+        threading.Thread(target=self._watch, args=(master,), name="jarvis-say-watch", daemon=True).start()
         return proc
+
+    def _watch(self, fd: int) -> None:
+        """say の出力を読み切る（途中で止めると say が書き込みで止まる）。最初の強調で 1 回だけ on_start を呼ぶ。"""
+        started = False
+        try:
+            while True:
+                try:
+                    data = os.read(fd, 1024)
+                except OSError:                     # say が終わると擬似端末は EIO を返す
+                    return
+                if not data:
+                    return
+                if not started and SAY_HIGHLIGHT in data:
+                    started = True
+                    self._on_start()
+        finally:
+            os.close(fd)
 
 
 def make_speaker(on_start):
@@ -335,7 +364,7 @@ class Evaluator:
                         speaker.say(speech_summary(outcome.skill, outcome.text))
                 if answered and not speaker.speaking():
                     if "first_audio" not in turn.stages:
-                        result["note"] = "読み上げる文がありませんでした"
+                        result["note"] = "最初の声の再生開始を検出できませんでした（読み上げる文がない、または再生の通知がない）"
                     break
                 time.sleep(0.01)
         finally:
