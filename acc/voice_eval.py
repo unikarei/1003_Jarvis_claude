@@ -240,12 +240,20 @@ class Evaluator:
         self.folder = folder
         self._busy = threading.Lock()      # 計測と評価の切り替えを同じロックで守る
         self._run: dict | None = None
+        self._lingering: threading.Thread | None = None   # 最初の声で止めた後も終わっていない前の生成
+
+    def _check_lingering(self) -> None:
+        """前の計測のスキル・LLM がまだ動いていれば Busy（次の計測と並行させない）。ロックを持って呼ぶ。"""
+        if self._lingering is not None and self._lingering.is_alive():
+            raise Busy("前の計測の処理がまだ終わっていません。少し待ってからもう一度押してください")
+        self._lingering = None
 
     def new_run(self) -> dict:
         """新しい評価を始める。計測の実行中は Busy（進行中の結果が別の評価に入らないように）。"""
         if not self._busy.acquire(blocking=False):
             raise Busy("計測の実行中です。終わってから新しい評価を始めてください")
         try:
+            self._check_lingering()
             return self._start_run()
         finally:
             self._busy.release()
@@ -277,6 +285,7 @@ class Evaluator:
         if not self._busy.acquire(blocking=False):
             raise Busy("計測の実行中です。終わってからもう一度押してください")
         try:
+            self._check_lingering()
             result = self._measure(index, mode)
             if self._run is None:
                 self._start_run()
@@ -373,6 +382,8 @@ class Evaluator:
             stop.set()                                   # 最初の声まで測ったら、生成と読み上げを止める
             speaker.stop()
             worker.join(timeout=5)
+            if worker.is_alive():
+                self._lingering = worker                 # 終わるまで次の計測を受け付けない
             speaker.close()
         outcome = box.get("outcome")
         # 実際にスキルを動かしたときだけ「実行した」（確認を断った・使えないスキルは実行していない）
@@ -569,7 +580,8 @@ function render(cur) {
   const items = {}; for (const it of (cur?.items || [])) items[it.index] = it;
   $("rows").innerHTML = sentences.map(s => {
     const it = items[s.index], st = it?.stages || {};
-    const skill = it ? `${esc(it.skill || "-")}<div class="muted">${esc(it.provider || "")}${it.note ? " " + esc(it.note) : ""}</div>` : "";
+    const ran = it && it.mode === "full" ? (it.executed ? "実行した" : "実行しない") : "";
+    const skill = it ? `${esc(it.skill || "-")}<div class="muted">${esc(ran)} ${esc(it.provider || "")}${it.note ? " " + esc(it.note) : ""}</div>` : "";
     return `<tr><td>${s.index}</td><td>${esc(s.text)}${it ? `<div class="muted">→ ${esc(it.text)}（${esc(it.mode)}）</div>` : ""}</td>
       <td class="num">${it ? pct(it.cer) : "-"}</td><td class="num">${ms(st.segment)}</td><td class="num">${ms(st.stt)}</td>
       <td class="num">${ms(st.route)}</td><td class="num">${ms(st.first_text)}</td><td class="num">${ms(st.first_audio)}</td>

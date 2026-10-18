@@ -499,3 +499,9 @@ def test_measure_full_counts_streamed_skill_as_executed_even_if_worker_outlives_
     code, body, _ = req(server, "POST", "/api/measure", {"index": 1, "mode": "full"})
     data = json.loads(body)
     assert code == 200 and data["executed"] is True and "first_audio" in data["stages"]
+    # 前の生成が残っている間は、次の計測を受け付けない（並行させない）
+    code, body, _ = req(server, "POST", "/api/measure", {"index": 8, "mode": "stt"})
+    assert code == 409 and "まだ終わっていません" in json.loads(body)["error"]
+    server.evaluator._lingering.join(timeout=10)
+    code, _, _ = req(server, "POST", "/api/measure", {"index": 8, "mode": "stt"})
+    assert code == 200
