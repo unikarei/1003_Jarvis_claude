@@ -331,6 +331,8 @@ class Evaluator:
         def stream(chunk: str) -> None:
             if stop.is_set():
                 raise voice_chat.Cancelled()
+            if chunk:
+                turn.mark("first_text")                 # 最初の文字を受け取った時点（2 回目以降は無視される）
             fed["any"] = True
             speaker.feed(chunk)
         ctx.stream, ctx.cancel = stream, stop.is_set
@@ -338,8 +340,8 @@ class Evaluator:
 
         def work() -> None:
             latency.use(turn)
-            try:   # 書き込みの確認には常に「いいえ」（振り分けの判定と実行の間で結果が変わっても実行しない）
-                box["outcome"] = orchestrator.handle(text, ctx, ask=lambda prompt: "n")
+            try:   # 権限を確かめた振り分け r をそのまま実行する（振り分け直さない）。確認には常に「いいえ」
+                box["outcome"] = orchestrator.execute(r, ctx, text, ask=lambda prompt: "n")
             except Exception as e:  # noqa: BLE001  取り消し・失敗でも計測は続ける
                 box["error"] = f"{type(e).__name__}: {e}"
         worker = threading.Thread(target=work, name="jarvis-voice-eval", daemon=True)
@@ -373,10 +375,10 @@ class Evaluator:
             worker.join(timeout=5)
             speaker.close()
         outcome = box.get("outcome")
-        result["executed"] = True
+        # 実際にスキルを動かしたときだけ「実行した」（確認を断った・使えないスキルは実行していない）
+        result["executed"] = outcome is not None and outcome.error not in ("declined", "inactive", "no_handler",
+                                                                             "external")
         result["provider"] = turn.attrs.get("provider") or ctx.last_provider
-        if outcome is not None and outcome.skill != r.skill:
-            result["skill"] = outcome.skill               # 実行の時に振り分けが変わった（記録だけ）
 
 
 # ---------------------------------------------------------------- 画面

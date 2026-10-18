@@ -433,3 +433,55 @@ def test_results_lists_runs_and_new_run(server, fake_mic):
     for run in data["runs"]:
         for item in run["items"]:
             assert set(item) == set(voice_eval.SAVED_KEYS)
+
+
+def test_measure_full_records_first_text_when_streaming_before_answer_completes(server, fake_mic, fake_speaker,
+                                                                                index, db_path, monkeypatch):
+    """逐次生成の最初の文字を受け取った時点で first_text を記録する（答えの完了前に最初の声が出ても欠けない）。"""
+    def fake_stream(prompt, on_text, provider=None, timeout=None, cancel=None):
+        on_text("こんにちは。")
+        for _ in range(100):                     # 答えはなかなか終わらない（最初の声で計測が止める）
+            if cancel and cancel():
+                raise llm.LLMCancelled("取り消し")
+            time.sleep(0.05)
+        return "こんにちは。"
+    monkeypatch.setattr(llm, "complete_stream", fake_stream)
+    fake_mic["text"] = "ジャービス、今日のAIニュースで重要なものを三つ教えて"
+    code, body, _ = req(server, "POST", "/api/measure", {"index": 1, "mode": "full"})
+    st = json.loads(body)["stages"]
+    assert code == 200 and "first_text" in st and "first_audio" in st
+    assert st["route"] <= st["first_text"] <= st["first_audio"]
+
+
+def test_measure_full_executes_the_checked_route_without_rerouting(server, fake_mic, fake_speaker, index, monkeypatch):
+    """権限を確かめた振り分けをそのまま実行する（振り分け直して書き込みのスキルに変わらない）。"""
+    routes = []
+    real_route = orchestrator.route
+
+    def route_once_then_write(text, ctx, use_llm=None):
+        routes.append(text)
+        if len(routes) > 1:                       # 2 回目の振り分けがあれば書き込みのスキルになる
+            return orchestrator.Route("knowledge-capture", {}, "rule")
+        return real_route(text, ctx, use_llm=use_llm)
+    monkeypatch.setattr(orchestrator, "route", route_once_then_write)
+    captured = []
+    monkeypatch.setitem(orchestrator.HANDLERS, "knowledge-capture",
+                        lambda inputs, ctx, text: captured.append(text) or ("ナレッジ化を終えました。", []))
+    monkeypatch.setitem(orchestrator.HANDLERS, "system-status", lambda inputs, ctx, text: ("エラー 0 件です。", []))
+    fake_mic["text"] = "システムの状態は？"
+    code, body, _ = req(server, "POST", "/api/measure", {"index": 8, "mode": "full"})
+    data = json.loads(body)
+    assert code == 200 and len(routes) == 1 and captured == []
+    assert data["skill"] == "system-status" and data["executed"] is True
+
+
+def test_measure_full_declined_confirmation_is_not_executed(server, fake_mic, fake_speaker, index, monkeypatch):
+    """実行の時に確認を断ったスキルは「実行した」にしない。"""
+    monkeypatch.setattr(voice_eval, "_executable", lambda name: True)   # 判定を通っても、実行時の確認は断る
+    calls = []
+    monkeypatch.setitem(orchestrator.HANDLERS, "knowledge-capture",
+                        lambda inputs, ctx, text: calls.append(text) or ("ナレッジ化を終えました。", []))
+    fake_mic["text"] = "今の会話をナレッジ化して"
+    code, body, _ = req(server, "POST", "/api/measure", {"index": 9, "mode": "full"})
+    data = json.loads(body)
+    assert code == 200 and calls == [] and data["executed"] is False
