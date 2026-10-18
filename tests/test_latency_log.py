@@ -505,18 +505,38 @@ def _keys(*lines):
     return q
 
 
-class _Player:
-    def __init__(self):
-        self.played = []
+class _OutputStream:
+    """本物の Player の出力のコールバックを、別のスレッドで 5 ms ごとに呼ぶ（スピーカーの代わり）。"""
+    def __init__(self, cb):
+        self.cb, self.running = cb, False
 
-    def enqueue(self, turn, sentence, audio):
-        self.played.append((turn, sentence))
+    def start(self):
+        from voice import duplex
+        self.running = True
 
-    def stop(self): pass
-    def speaking(self): return False
-    def heard(self, turn): return [s for t, s in self.played if t == turn]
-    def level(self, a, b): return 0.0
-    def close(self): pass
+        def run():
+            out = np.zeros((duplex.FRAME, 1), dtype=np.float32)
+            while self.running:
+                self.cb(out, duplex.FRAME, None, None)
+                time.sleep(0.005)
+        threading.Thread(target=run, daemon=True).start()
+
+    def stop(self): self.running = False
+    def close(self): self.running = False
+
+
+def _utterance(silent_blocks=8, wait=0.01):
+    """偽の録音: 声のブロックの後に無音のブロックが続く（本物の voice.record.segment で区切る）。"""
+    from voice import record as rec
+
+    def blocks():
+        for _ in range(5):
+            yield np.full(1600, 3000, dtype=np.int16)
+        for _ in range(silent_blocks + 5):
+            time.sleep(wait)
+            yield np.zeros(1600, dtype=np.int16)
+    audio = rec.segment(blocks(), threshold=1000.0, silence_seconds=silent_blocks * rec.BLOCK_SECONDS)
+    return audio.astype(np.float32) / 32768.0
 
 
 @pytest.mark.parametrize("push_to_talk", [False, True])
@@ -525,12 +545,15 @@ def test_voice_chat_starts_warm_up_and_records_voice_stages(log, index, ollama, 
     from voice import duplex
     started = []
     monkeypatch.setattr(orc, "start_warm_up", lambda: started.append(1))
-    monkeypatch.setenv("JARVIS_VOICE_SILENCE_SECONDS", "0.8")
     texts = iter(["こんにちは", "終了"])
-    sp = duplex.DuplexSpeaker(_Player(), synth=lambda sentence, cancel: np.zeros(10, dtype=np.float32))
+    player = duplex.Player(stream_factory=_OutputStream)
+    sp = duplex.DuplexSpeaker(player, synth=lambda sentence, cancel: np.zeros(10, dtype=np.float32))
     keys = _keys("", "", "q") if push_to_talk else _keys()
-    assert voice_chat.main(listen=lambda: np.zeros(10, dtype=np.float32), transcribe=lambda a: next(texts),
-                           speaker=sp, keys=keys, push_to_talk=push_to_talk) == 0
+    try:
+        assert voice_chat.main(listen=_utterance, transcribe=lambda a: next(texts),
+                               speaker=sp, keys=keys, push_to_talk=push_to_talk) == 0
+    finally:
+        player.close()
     assert started == [1]
     [rec] = _records(log)
     assert rec["mode"] == "voice" and rec["skill"] == "general-chat" and rec["provider"] == "ollama"
@@ -538,7 +561,7 @@ def test_voice_chat_starts_warm_up_and_records_voice_stages(log, index, ollama, 
     assert _in_order(stages, ["segment", "stt", "route", "llm_ready", "first_text"])
     if not push_to_talk:                        # ハンズフリーは読み上げを待ってから保存する（最初の声が必ず入る）
         assert stages["first_audio"] >= stages["first_text"]
-    assert stages["segment"] >= 800             # 話し終えてから区切りが決まるまで（無音の長さ）
+    assert stages["segment"] >= 70              # 最後の声のブロックから区切りまで（無音 8 ブロック × 10 ms の待ち）
     assert stages["done"] >= stages["first_text"]
     assert latency.current() is None
 
@@ -560,7 +583,8 @@ def test_barge_in_records_interrupted_turn_as_not_ok(log, kb_index, monkeypatch,
     assert _run(session) == 0
     recs = _records(log)
     assert [r["ok"] for r in recs] == [False, True] and all(r["mode"] == "voice" for r in recs)
-    assert all({"segment", "stt", "route", "first_text", "first_audio", "done"} <= set(r["stages"]) for r in recs)
+    # 偽の録音・偽の Player（待ちの列なし）なので、話し終えた時刻（segment）と最初の声（first_audio）は記録しない
+    assert all({"stt", "route", "first_text", "done"} <= set(r["stages"]) for r in recs)
     assert "ちょっと待って" not in log.read_text(encoding="utf-8")
 
 
@@ -574,9 +598,82 @@ def kb_index(db_path):
     skills.reset_cache()
 
 
-def test_voice_speech_end_uses_silence_length(monkeypatch):
+def _timed_blocks(clock, levels, step=0.5):
+    """音量の並びのブロック。1 つ渡すごとに偽の時計を step 秒進める（0.5 秒の待ちのある録音）。"""
+    for level in levels:
+        clock.now += step
+        yield np.full(1600, level, dtype=np.int16)
+
+
+def test_speech_end_is_last_voiced_block_not_silence_estimate():
+    """話し終えた時刻は、録音中に最後に声のあったブロックの時刻（無音の長さからの推定ではない）。"""
     import voice_chat
-    monkeypatch.setenv("JARVIS_VOICE_SILENCE_SECONDS", "0.5")
-    assert voice_chat.speech_end(10.0) == pytest.approx(9.5)
-    turn = voice_chat.start_turn(10.0, 10.3)
-    assert turn.stages == {"segment": 500, "stt": 800} and turn.attrs == {"mode": "voice"}
+    from voice import record as rec
+    clock = Clock(0.0)
+    spoken = voice_chat.SpeechEnd(clock=clock)
+    original = rec.segment
+    with spoken.watching():
+        audio = rec.segment(_timed_blocks(clock, [3000] * 4 + [0] * 3), threshold=1000.0, silence_seconds=0.3)
+    assert audio is not None and rec.segment is original          # 元に戻す
+    assert spoken.last == pytest.approx(2.0)                        # 4 つ目の声のブロック（区切りは 3.5 秒）
+    turn = voice_chat.start_turn(spoken.last, 3.5, 3.8)
+    assert turn.stages == {"segment": 1500, "stt": 1800} and turn.attrs == {"mode": "voice"}
+
+
+def test_speech_end_when_cut_by_max_length():
+    """最大の録音時間で区切られた（無音がない）ときは、最後のブロックの時刻が話し終えた時刻。"""
+    import voice_chat
+    from voice import record as rec
+    clock = Clock(0.0)
+    spoken = voice_chat.SpeechEnd(clock=clock)
+    with spoken.watching():
+        rec.segment(_timed_blocks(clock, [3000] * 30), threshold=1000.0, max_seconds=1.0)
+    assert spoken.last == pytest.approx(clock.now)
+
+
+def test_start_turn_without_speech_end_skips_segment():
+    import voice_chat
+    spoken = voice_chat.SpeechEnd()
+    with spoken.watching():
+        pass                                                        # 録音を差し替えた（segment を呼ばない）
+    turn = voice_chat.start_turn(spoken.last, 10.0, 10.3)
+    assert turn.stages == {"stt": 300}
+
+
+def test_first_audio_is_marked_when_player_outputs_not_when_enqueued():
+    """最初の声は、Player の出力のコールバックが音を出力に渡した時点（再生待ちの列に入れた時点ではない）。"""
+    import voice_chat
+    from tests.test_voice_barge_in import FakeStream
+    from voice import duplex
+    holder = {}
+    player = duplex.Player(stream_factory=lambda cb: holder.setdefault("s", FakeStream(cb)))
+    speaker = type("S", (), {"player": player})()
+    clock = Clock(0.0)
+    lat = latency.Turn("voice", clock=clock)
+    voice_chat.track_first_audio(speaker, lambda: lat)
+    player.set_turn(2)
+    player.enqueue(2, "一文目。", np.full(3200, 0.1, dtype=np.float32))
+    clock.now = 1.0
+    assert "first_audio" not in lat.stages                         # 列に入れただけでは記録しない
+    clock.now = 1.7
+    holder["s"].pump()                                              # 出力に渡した
+    assert lat.stages == {"first_audio": 1700}
+    player.stop()
+    player.enqueue(2, "二文目。", np.full(320, 0.1, dtype=np.float32))
+    clock.now = 3.0
+    holder["s"].pump()
+    assert lat.stages == {"first_audio": 1700}                     # 最初の 1 回だけ
+
+
+def test_first_audio_ignores_sound_of_old_turn():
+    import voice_chat
+    from tests.test_voice_barge_in import FakeStream
+    from voice import duplex
+    holder = {}
+    player = duplex.Player(stream_factory=lambda cb: holder.setdefault("s", FakeStream(cb)))
+    lat = latency.Turn("voice", clock=Clock(0.0))
+    voice_chat.track_first_audio(type("S", (), {"player": player})(), lambda: lat)
+    player.enqueue(1, "古い文。", np.full(320, 0.1, dtype=np.float32))
+    player.turn = 2                                                 # 列に残ったまま番号が進んだ
+    holder["s"].pump()
+    assert "first_audio" not in lat.stages
