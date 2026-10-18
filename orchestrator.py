@@ -9,13 +9,17 @@ Owner の発言から使うスキルと入力を決め、権限を確かめて�
 索引にあって active のものだけを呼ぶ。権限の段階は索引の値に従い、発言の内容で確認を省かない。
 """
 
+import contextvars
 import json
 import re
+import threading
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Callable
 
 import config
+import latency
 import llm
 import skills
 
@@ -266,13 +270,15 @@ CHAT_FALLBACK_PROVIDER = "claude_warm"   # Ollama が失敗したとき（有料
 
 class _SentTracker:
     """ctx.stream に送ったかを覚える。答えの一部を表示・読み上げた後に失敗したら、別の LLM に切り替えない
-    （切り替えると、表示した途中の答えと最後の答えが混ざる）。"""
+    （切り替えると、表示した途中の答えと最後の答えが混ざる）。最初の空でない文字を送る時点を first_text に記録する。"""
 
     def __init__(self, stream):
         self.stream, self.sent = stream, False
 
     def __call__(self, chunk: str) -> None:
         if chunk:
+            if not self.sent:
+                latency.mark("first_text")
             self.sent = True
         self.stream(chunk)
 
@@ -287,7 +293,8 @@ def _with_fallback(run, ctx, first: str, second: str):
     except llm.LLMError:
         if tracker is not None and tracker.sent:
             raise
-        return run(second, ctx.stream)
+        latency.set("fallback", True)
+        return run(second, _SentTracker(ctx.stream) if ctx.stream is not None else None)
 
 
 def _answer(inputs, ctx, text):
@@ -295,6 +302,7 @@ def _answer(inputs, ctx, text):
 
     def ask(provider, stream):
         ctx.last_provider = provider
+        latency.set("provider", provider)
         return ke.answer(inputs.get("question") or text, projects=_projects(inputs), on_text=stream,
                          history=ctx.history, voice=ctx.voice, cancel=ctx.cancel, provider=provider)
     answer, hits = _with_fallback(ask, ctx, ANSWER_PROVIDER, ANSWER_RETRY_PROVIDER)
@@ -320,6 +328,7 @@ CHAT_PROMPT = """あなたは Owner の個人アシスタント「JARVIS」で�
 
 def _chat_complete(prompt, ctx, provider, stream):
     ctx.last_provider = provider
+    latency.set("provider", provider)
     if stream is not None:
         return llm.complete_stream(prompt, stream, provider=provider, cancel=ctx.cancel)
     return llm.complete(prompt, provider=provider)
@@ -543,7 +552,8 @@ def _run_with_timeout(handler, inputs, ctx, text, seconds: int):
     """確認の入力を待たないスキルを上限付きで動かす。超えたら TimeoutError（処理は裏で終わるまで続く）。"""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
     pool = ThreadPoolExecutor(max_workers=1)
-    future = pool.submit(handler, inputs, ctx, text)
+    # 今の文脈（遅延の記録の Turn）を引き継ぐ。スレッドには文脈が引き継がれないため（T-1405）
+    future = pool.submit(contextvars.copy_context().run, handler, inputs, ctx, text)
     try:
         return future.result(timeout=seconds)
     except FutureTimeout:
@@ -597,9 +607,39 @@ def handle(text: str, ctx: Context, ask: Callable[[str], str] | None = None, use
     ctx.shown = ""
     ctx.last_provider = None
     r = route(text, ctx, use_llm=use_llm)
+    latency.mark("route")
+    latency.set("skill", r.skill)
     outcome = execute(r, ctx, text, ask)
+    latency.set("ok", outcome.ok)
+    latency.mark("done")
     if outcome.ok and outcome.items is not None and outcome.error != "declined":
         if outcome.items or r.skill in ("knowledge-answer", "knowledge-search"):
             ctx.items = outcome.items
     ctx.last_skill = r.skill
     return outcome
+
+
+def warm_up() -> None:
+    """会話の最初の 1 回を速くするため、使う LLM を読み込ませておく（T-1405）。索引に general-chat があれば
+    Ollama のモデル、knowledge-answer があれば待機させる claude。失敗しても何も出さずに続ける。"""
+    try:
+        with warnings.catch_warnings(record=True) as warned:   # 索引の読み込みの警告もここでは出さない
+            warnings.simplefilter("always")
+            active = skills.active()
+    except Exception:  # noqa: BLE001  索引が読めなくても会話は始める
+        return
+    if warned:
+        skills.reset_cache()      # 警告は会話の側の読み込みで従来どおり 1 回出す（ここで黙って読んだ結果を残さない）
+    for name, load in ((CHAT_SKILL, llm.warm_up_ollama), (DEFAULT_SKILL, llm.warm_up_claude)):
+        if name in active:
+            try:
+                load()
+            except Exception:  # noqa: BLE001  Ollama・claude がなくても会話は始める
+                pass
+
+
+def start_warm_up() -> threading.Thread:
+    """warm_up() をバックグラウンドのスレッドで呼ぶ（chat.py・voice_chat.py の起動時）。"""
+    thread = threading.Thread(target=warm_up, name="jarvis-warm-up", daemon=True)
+    thread.start()
+    return thread

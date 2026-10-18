@@ -7,12 +7,17 @@
 書き込みや課金のあるスキルの確認は、キーボードの y だけで受け付ける。終了: q と Enter、または「終了」と話す。
 """
 
+import contextlib
 import os
 import queue
 import sys
 import threading
 import time
+from collections import deque
 
+import numpy as np
+
+import latency
 import orchestrator
 from ckc.models import Speaker as Who, Turn
 from db import init_db
@@ -73,6 +78,104 @@ def _poll_keys(keys: "queue.Queue[str]", speaker: Speaker) -> bool:
         speaker.stop()
 
 
+class SpeechEnd:
+    """録音中に最後に声のあったブロックの時刻（話し終えた時刻）を残す。voice.record.segment に渡るブロックを
+    包み、区切りの判定と同じしきい値（threshold × release_ratio）以上のブロックの時刻を記録する。
+    無音の長さからの推定ではないので、最大の録音時間で区切られたときもずれない。
+    時刻は、session（voice.duplex.Session）を渡せば各ブロックの最後のフレームの収録時刻（割り込みの後に、
+    溜まった音を後から処理してもずれない）、渡さなければブロックを受け取った時刻（マイクから直接読む形）。"""
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.last: float | None = None
+        self._captured: float | None = None      # 今のブロックの収録時刻（session を見ているときだけ）
+
+    def _timed_blocks(self, session):
+        """Session._blocks と同じブロックを返し、各ブロックの最後のフレームの収録時刻を _captured に入れる。"""
+        def blocks(start: int):
+            index = start
+            while True:
+                with session._cond:
+                    index = max(index, session.base)          # 捨てられた分は飛ばす
+                    while session.base + len(session.frames) < index + 5:
+                        session._cond.wait(timeout=1.0)
+                        index = max(index, session.base)
+                    rel = index - session.base
+                    frames = session.frames[rel:rel + 5]
+                index += 5
+                self._captured = frames[-1][0]
+                yield np.concatenate([f for _, f, _ in frames])
+        return blocks
+
+    @contextlib.contextmanager
+    def watching(self, session=None):
+        """この間の録音（mic.segment の呼び出し）を見る。listen はこのスレッドだけが呼ぶ。"""
+        self.last, self._captured = None, None
+        original = mic.segment
+        timed_session = session is not None and all(hasattr(session, a) for a in ("_blocks", "_cond", "frames", "base"))
+
+        def segment(blocks, threshold, *args, **kwargs):
+            release = threshold * kwargs.get("release_ratio", mic.RELEASE_RATIO)
+
+            def timed():
+                for block in blocks:
+                    if mic.rms(block) >= release:
+                        self.last = self._captured if self._captured is not None else self.clock()
+                    yield block
+            return original(timed(), threshold, *args, **kwargs)
+        mic.segment = segment
+        own = vars(session).get("_blocks") if timed_session else None   # インスタンスに置かれていた元のもの
+        if timed_session:
+            session._blocks = self._timed_blocks(session)
+        try:
+            yield self
+        finally:
+            mic.segment = original
+            if timed_session:
+                if own is None:
+                    del session._blocks                       # 差し替えを外す（クラスのものに戻る）
+                else:
+                    session._blocks = own
+
+
+def start_turn(spoke: float | None, segmented: float, transcribed: float) -> "latency.Turn":
+    """声の発言の遅延の記録を始める（話し終えた時点 spoke から。T-1405）。話し終えた時刻が分からない
+    （録音を差し替えたなど）ときは区切りの時点から始め、segment は記録しない。"""
+    turn = latency.Turn("voice", at=segmented if spoke is None else spoke)
+    if spoke is not None:
+        turn.mark("segment", at=segmented)
+    turn.mark("stt", at=transcribed)
+    return turn
+
+
+class _StartWatch(deque):
+    """Player の再生待ちの列。出力のコールバックが音を取り出した（最初のフレームを出力に渡した）時点を知らせる。"""
+
+    def __init__(self, items, on_start):
+        super().__init__(items)
+        self.on_start = on_start
+
+    def popleft(self):
+        item = super().popleft()
+        self.on_start(item[0])
+        return item
+
+
+def track_first_audio(speaker, current) -> None:
+    """最初の声の再生開始（Player の出力のコールバックが文の音を出力に渡し始めた時点）を、current() が返す
+    今の発言の記録に入れる。再生待ちの列に入れた時点（enqueue）ではない。待ちの列のない Player では記録しない。"""
+    player = getattr(speaker, "player", None)
+    pending = getattr(player, "_queue", None)
+    if not isinstance(pending, deque):
+        return
+
+    def started(turn) -> None:
+        lat = current()
+        if lat is not None and getattr(player, "turn", None) in (None, turn):   # 捨てられた古い番号の音は数えない
+            lat.mark("first_audio")
+    player._queue = _StartWatch(pending, started)
+
+
 class Cancelled(Exception):
     """割り込まれた発言の答えの生成を止める（逐次表示の途中で投げ、claude -p を止めさせる）。"""
 
@@ -86,7 +189,9 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
     session は voice.duplex.Session と同じ形（テストで差し替える）。"""
     speaker = session.speaker
     init_db()
-    state = {"turn": 0, "started": False, "asking": False, "status": "IDLE"}
+    state = {"turn": 0, "started": False, "asking": False, "status": "IDLE", "latency": None}
+    track_first_audio(speaker, lambda: state["latency"])
+    spoken = SpeechEnd()
 
     def stream_for(turn: int):
         """発言 turn 専用の逐次表示。番号は呼び出しの間ずっと固定し、読み上げにも同じ番号で渡す
@@ -140,11 +245,14 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
             prompt_shown = True
         state["status"] = "LISTENING"
         try:
-            audio = session.listen(from_barge_in=from_barge)
+            with spoken.watching(session):             # 話し終えた時刻はフレームの収録時刻から
+                audio = session.listen(from_barge_in=from_barge)
+            segmented = time.monotonic()
             from_barge = False
             if audio is None:
                 continue
             text = transcribe(audio).strip()
+            transcribed = time.monotonic()
         except KeyboardInterrupt:
             break
         if is_noise(text):
@@ -155,12 +263,16 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
             break
 
         turn = speaker.new_turn()
-        state.update(turn=turn, started=False, status="THINKING")
+        lat = start_turn(spoken.last, segmented, transcribed)            # 段階ごとの時間（本文は記録しない、T-1405）
+        state.update(turn=turn, started=False, status="THINKING", latency=lat)
         ctx.stream = stream_for(turn)                       # この発言の生成だけが使う（呼び出しの時に固定される）
         ctx.cancel = lambda t=turn: t != speaker.turn
         result: dict = {}
-        worker = threading.Thread(target=lambda a=ask_for(turn), c=ctx: result.update(
-            outcome=orchestrator.handle(text, c, ask=a)), daemon=True)
+
+        def work(a=ask_for(turn), c=ctx, r=lat, said=text):
+            latency.use(r)                                  # handle を呼ぶスレッドで今の記録にする
+            result.update(outcome=orchestrator.handle(said, c, ask=a))
+        worker = threading.Thread(target=work, daemon=True)
         session.arm()
         worker.start()
         finished, interrupted = False, False
@@ -177,6 +289,8 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
                 session.disarm()
                 speaker.stop()
                 worker.join(timeout=5)
+                state["latency"] = None
+                latency.finish(lat, ok=False)                 # 答えの途中で終了した
                 return _end(speaker, session)
             time.sleep(0.02)
         session.disarm()
@@ -192,6 +306,8 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
                       f"（検出 {ev['detect_ms']}・停止の指示 {ev['stop_call_ms']}・出力 {ev['output_ms']}）") if ev else ""
             print(f"\n（割り込み: 読み上げを止めました{timing}）")
             worker.join(timeout=10)            # 生成は取り消しの確認（0.1 秒ごと）で止まる
+            state["latency"] = None
+            latency.finish(lat, ok=False)      # 割り込まれた発言
             if worker.is_alive():              # 止まらない処理（逐次表示のないスキル）は、文脈を分けて切り離す
                 print("[前の処理は裏で終わるまで続きます。結果は使いません]")
                 ctx = orchestrator.Context(voice=True, history=list(ctx.history))
@@ -204,6 +320,8 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
             continue
 
         outcome = result["outcome"]
+        state["latency"] = None
+        latency.finish(lat)                             # 読み上げの後（最初の声の時刻が入ってから）保存する
         _record(text, outcome)
         if not (outcome.skill == "knowledge-capture" and outcome.method == "rule"):
             ctx.history.append(Turn(Who.OWNER, text))
@@ -274,10 +392,11 @@ def main(listen=None, transcribe=None, speaker: Speaker | None = None, push_to_t
          keys: "queue.Queue[str] | None" = None, barge_in: bool | None = None) -> int:
     """既定はハンズフリー（JARVIS が話し終えたら自動で聞く、ADR-0026）。push_to_talk で Enter を押してから話す。
     listen・transcribe・speaker・keys はテストで差し替える。"""
+    if listen is None and not mic.has_input_device():
+        print("マイクが見つかりません。ヘッドセットなどをつないでから起動してください（文字の対話は chat.py）。")
+        return 1
+    orchestrator.start_warm_up()              # 使う LLM を裏で読み込んでおく（最初の答えを速くする、T-1405）
     if listen is None:
-        if not mic.has_input_device():
-            print("マイクが見つかりません。ヘッドセットなどをつないでから起動してください（文字の対話は chat.py）。")
-            return 1
         print("音声認識のモデルを読み込んでいます（初回はダウンロードに数分かかります）…")
         from speech_to_text import load_model, transcribe_array
         load_model()
@@ -313,7 +432,15 @@ def main(listen=None, transcribe=None, speaker: Speaker | None = None, push_to_t
             time.sleep(0.05)
         return _poll_keys(keys, speaker)
 
-    state = {"started": False}
+    def finish_latency() -> None:
+        """前の発言の遅延の記録を保存する（読み上げが終わり、最初の声の時刻が入ってから）。"""
+        if state["latency"] is not None:
+            lat, state["latency"] = state["latency"], None
+            latency.finish(lat)
+
+    state = {"started": False, "latency": None}
+    track_first_audio(speaker, lambda: state["latency"])
+    spoken = SpeechEnd()
     ctx = orchestrator.Context(stream=stream, voice=True)
     if push_to_talk:
         print("JARVIS と声で会話します。Enter を押してから話してください（q と Enter で終了）。")
@@ -328,19 +455,25 @@ def main(listen=None, transcribe=None, speaker: Speaker | None = None, push_to_t
                 print("\n[Enter で話す / q で終了] ", end="", flush=True)
                 if keys.get().strip().lower() == "q":
                     break
+                finish_latency()
                 speaker.stop()
                 print("（聞いています…）", flush=True)
             elif finish_speaking():
                 break
-            elif not prompt_shown:
-                print("\n（聞いています…）", flush=True)
-                prompt_shown = True
-            audio = listen()
+            else:
+                finish_latency()
+                if not prompt_shown:
+                    print("\n（聞いています…）", flush=True)
+                    prompt_shown = True
+            with spoken.watching():
+                audio = listen()
+            segmented = time.monotonic()
             if audio is None:
                 if push_to_talk:
                     print("聞き取れませんでした。")
                 continue            # ハンズフリーでは話し始めるまで聞き続ける
             text = transcribe(audio).strip()
+            transcribed = time.monotonic()
         except KeyboardInterrupt:
             break
         if is_noise(text):
@@ -353,7 +486,10 @@ def main(listen=None, transcribe=None, speaker: Speaker | None = None, push_to_t
             break
 
         state["started"] = False
+        state["latency"] = start_turn(spoken.last, segmented, transcribed)   # 段階ごとの時間（本文は記録しない、T-1405）
+        latency.use(state["latency"])
         outcome = orchestrator.handle(text, ctx, ask=ask)
+        latency.use(None)
         if state["started"] and ctx.shown and outcome.text.startswith(ctx.shown):
             speaker.flush()
             rest = outcome.text[len(ctx.shown):].strip()      # 出典は表示だけ
@@ -374,6 +510,7 @@ def main(listen=None, transcribe=None, speaker: Speaker | None = None, push_to_t
             if outcome.ok and outcome.error is None:
                 ctx.history.append(Turn(Who.AI, outcome.text))
 
+    finish_latency()
     speaker.stop()
     speaker.say("終了します。")
     speaker.wait()
