@@ -453,6 +453,22 @@ def test_warm_up_swallows_errors(tmp_path, monkeypatch, capsys):
     skills.reset_cache()
 
 
+def test_warm_up_is_silent_when_index_unreadable(tmp_path, monkeypatch, warm_calls, capsys):
+    """索引が読めないときの警告も warm_up では出さない。警告は会話の側の読み込みで従来どおり出す。"""
+    import warnings
+    path = tmp_path / "skills.json"
+    path.write_text("{壊れた JSON", encoding="utf-8")
+    monkeypatch.setenv("JARVIS_SKILLS_JSON", str(path))
+    skills.reset_cache()
+    with warnings.catch_warnings(record=True) as outer:
+        warnings.simplefilter("always")
+        orc.warm_up()
+        assert outer == [] and capsys.readouterr() == ("", "")
+        skills.active()                                              # 会話の側の読み込み
+    assert any("スキルの索引を読めない" in str(w.message) for w in outer)
+    skills.reset_cache()
+
+
 def test_warm_up_without_ollama_or_claude_does_not_raise(tmp_path, monkeypatch):
     """本物の warm_up_*（conftest で Ollama の接続先と claude を無効にしてある）でも例外を出さない。"""
     _write_index(tmp_path, monkeypatch, ["general-chat", "knowledge-answer"])
@@ -629,6 +645,28 @@ def test_speech_end_when_cut_by_max_length():
     with spoken.watching():
         rec.segment(_timed_blocks(clock, [3000] * 30), threshold=1000.0, max_seconds=1.0)
     assert spoken.last == pytest.approx(clock.now)
+
+
+def test_speech_end_uses_capture_time_of_buffered_frames():
+    """割り込みの後など、溜まった音を後から処理しても、話し終えた時刻は最後の声のフレームの収録時刻
+    （ブロックを処理した時刻ではない）。"""
+    import voice_chat
+    from tests.test_voice_barge_in import _frame, _session
+    from voice import duplex
+    s, _ = _session()
+    s.gate = None                                                   # 周囲の音は直前の音から（しきい値 540）
+    t0 = 1000.0
+    levels = [270] * 20 + [3000] * 40 + [270] * 60                  # 0.8 秒の発話の後に 1.2 秒の無音
+    for i, level in enumerate(levels):
+        s.push(_frame(level), now=t0 + i * duplex.FRAME_SECONDS)
+    s.barge_index = 0                                               # 割り込みの直後と同じく、溜まった音の頭から録る
+    clock = Clock(5000.0)                                           # 処理した時刻（ずっと後）
+    spoken = voice_chat.SpeechEnd(clock=clock)
+    with spoken.watching(s):
+        audio = s.listen(from_barge_in=True)
+    assert audio is not None
+    assert spoken.last == pytest.approx(t0 + 59 * duplex.FRAME_SECONDS)   # 最後の声のフレーム（60 番目）
+    assert "_blocks" not in vars(s)                                 # 差し替えを外す
 
 
 def test_start_turn_without_speech_end_skips_segment():

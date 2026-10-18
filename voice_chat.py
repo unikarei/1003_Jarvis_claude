@@ -15,6 +15,8 @@ import threading
 import time
 from collections import deque
 
+import numpy as np
+
 import latency
 import orchestrator
 from ckc.models import Speaker as Who, Turn
@@ -78,18 +80,39 @@ def _poll_keys(keys: "queue.Queue[str]", speaker: Speaker) -> bool:
 
 class SpeechEnd:
     """録音中に最後に声のあったブロックの時刻（話し終えた時刻）を残す。voice.record.segment に渡るブロックを
-    包み、区切りの判定と同じしきい値（threshold × release_ratio）以上のブロックを受け取った時刻を記録する。
-    無音の長さからの推定ではないので、最大の録音時間で区切られたときや、ブロックの待ちがあってもずれない。"""
+    包み、区切りの判定と同じしきい値（threshold × release_ratio）以上のブロックの時刻を記録する。
+    無音の長さからの推定ではないので、最大の録音時間で区切られたときもずれない。
+    時刻は、session（voice.duplex.Session）を渡せば各ブロックの最後のフレームの収録時刻（割り込みの後に、
+    溜まった音を後から処理してもずれない）、渡さなければブロックを受け取った時刻（マイクから直接読む形）。"""
 
     def __init__(self, clock=time.monotonic):
         self.clock = clock
         self.last: float | None = None
+        self._captured: float | None = None      # 今のブロックの収録時刻（session を見ているときだけ）
+
+    def _timed_blocks(self, session):
+        """Session._blocks と同じブロックを返し、各ブロックの最後のフレームの収録時刻を _captured に入れる。"""
+        def blocks(start: int):
+            index = start
+            while True:
+                with session._cond:
+                    index = max(index, session.base)          # 捨てられた分は飛ばす
+                    while session.base + len(session.frames) < index + 5:
+                        session._cond.wait(timeout=1.0)
+                        index = max(index, session.base)
+                    rel = index - session.base
+                    frames = session.frames[rel:rel + 5]
+                index += 5
+                self._captured = frames[-1][0]
+                yield np.concatenate([f for _, f, _ in frames])
+        return blocks
 
     @contextlib.contextmanager
-    def watching(self):
+    def watching(self, session=None):
         """この間の録音（mic.segment の呼び出し）を見る。listen はこのスレッドだけが呼ぶ。"""
-        self.last = None
+        self.last, self._captured = None, None
         original = mic.segment
+        timed_session = session is not None and all(hasattr(session, a) for a in ("_blocks", "_cond", "frames", "base"))
 
         def segment(blocks, threshold, *args, **kwargs):
             release = threshold * kwargs.get("release_ratio", mic.RELEASE_RATIO)
@@ -97,14 +120,22 @@ class SpeechEnd:
             def timed():
                 for block in blocks:
                     if mic.rms(block) >= release:
-                        self.last = self.clock()
+                        self.last = self._captured if self._captured is not None else self.clock()
                     yield block
             return original(timed(), threshold, *args, **kwargs)
         mic.segment = segment
+        own = vars(session).get("_blocks") if timed_session else None   # インスタンスに置かれていた元のもの
+        if timed_session:
+            session._blocks = self._timed_blocks(session)
         try:
             yield self
         finally:
             mic.segment = original
+            if timed_session:
+                if own is None:
+                    del session._blocks                       # 差し替えを外す（クラスのものに戻る）
+                else:
+                    session._blocks = own
 
 
 def start_turn(spoke: float | None, segmented: float, transcribed: float) -> "latency.Turn":
@@ -214,7 +245,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
             prompt_shown = True
         state["status"] = "LISTENING"
         try:
-            with spoken.watching():
+            with spoken.watching(session):             # 話し終えた時刻はフレームの収録時刻から
                 audio = session.listen(from_barge_in=from_barge)
             segmented = time.monotonic()
             from_barge = False
