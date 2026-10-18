@@ -14,6 +14,7 @@ import hmac
 import json
 import os
 import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -26,6 +27,7 @@ from urllib.parse import parse_qs, urlparse
 
 import config
 import latency
+from voice import speak, tts
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8773
@@ -156,17 +158,80 @@ def _executable(skill_name: str) -> bool:
     return skill is not None and orchestrator.effective(skill) == ("read", False)
 
 
+# ---------------------------------------------------------------- 読み上げ（ファイルを使わない）
+
+def _popen(cmd: list[str]) -> subprocess.Popen:
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+class SaySpeaker(speak.Speaker):
+    """macOS の say で直接再生する（-o を使わず、音声をファイルに書かない）。voice.speak.Speaker に話速を足し、
+    say を起動した時に on_start を呼ぶ（最初の声は say の再生の開始＝起動の時刻で記録する）。"""
+
+    def __init__(self, voice: str, rate: float, device: str | None, on_start):
+        self.rate, self._on_start = rate, on_start
+        super().__init__(voice=voice, device=device, runner=self._start)
+
+    def _command(self, sentence: str) -> list[str]:
+        cmd = super()._command(sentence)
+        return cmd[:1] + ["-r", str(int(tts.SAY_BASE_RATE * self.rate))] + cmd[1:]
+
+    def _start(self, cmd: list[str]) -> subprocess.Popen:
+        proc = _popen(cmd)
+        self._on_start()
+        return proc
+
+
+def make_speaker(on_start):
+    """選んだ音声（python -m acc.voice_settings、voice_chat.build_speaker と同じ設定）で、音声をファイルに書かない
+    経路だけで読み上げる。ローカルの HTTP エンジン（voicevox・aivisspeech）はメモリの中で合成して再生し、say は
+    直接再生する（say の合成の -o は一時ファイルを書くため使わない）。HTTP エンジンで合成できない文は、say の
+    一時ファイルに切り替えず読まない。HTTP エンジンが使えなければ say（Kyoko）で直接再生する。"""
+    import voice_chat
+    from voice import duplex
+    settings = tts.load_settings()
+    chosen = tts.engine(settings.engine)
+    if settings.engine != "say" and chosen.available()[0]:
+        def synth(sentence: str, cancel: threading.Event):
+            try:
+                return chosen.synthesize(sentence, settings, cancel)
+            except tts.TTSError:
+                return None
+        player = duplex.Player(device=voice_chat.output_device())
+        return duplex.DuplexSpeaker(player, voice=voice_chat.VOICE, synth=synth)
+    if settings.engine != "say":
+        settings = tts.VoiceSettings()
+    return SaySpeaker(settings.speaker or "Kyoko", settings.rate, voice_chat.output_device(), on_start)
+
+
 class Evaluator:
     """計測を 1 件ずつ行い、今の評価（10 件）の結果を持つ。"""
 
     def __init__(self, folder: Path | None = None):
         self.folder = folder
-        self._busy = threading.Lock()
+        self._busy = threading.Lock()      # 計測と評価の切り替えを同じロックで守る
         self._run: dict | None = None
 
     def new_run(self) -> dict:
+        """新しい評価を始める。計測の実行中は Busy（進行中の結果が別の評価に入らないように）。"""
+        if not self._busy.acquire(blocking=False):
+            raise Busy("計測の実行中です。終わってから新しい評価を始めてください")
+        try:
+            return self._start_run()
+        finally:
+            self._busy.release()
+
+    def _start_run(self) -> dict:
+        """評価ごとに一意な ID（マイクロ秒まで。同じ ID・同じファイルがあれば番号を足す）。ロックを持って呼ぶ。"""
         now = datetime.now().astimezone()
-        self._run = {"id": now.strftime("%Y%m%d_%H%M%S"), "started": now.isoformat(timespec="seconds"), "items": {}}
+        folder = self.folder or eval_dir()
+        used = {self._run["id"]} if self._run else set()
+        run_id = base = now.strftime("%Y%m%d_%H%M%S_%f")
+        n = 0
+        while run_id in used or (folder / f"{run_id}.json").exists():
+            n += 1
+            run_id = f"{base}_{n}"
+        self._run = {"id": run_id, "started": now.isoformat(timespec="seconds"), "items": {}}
         return self._run
 
     def current(self) -> dict | None:
@@ -185,7 +250,7 @@ class Evaluator:
         try:
             result = self._measure(index, mode)
             if self._run is None:
-                self.new_run()
+                self._start_run()
             self._run["items"][index] = result
             save_run(self._run, self.folder)
             return result
@@ -229,10 +294,10 @@ class Evaluator:
         if not _executable(r.skill):
             result["note"] = "実行しない（書き込みのあるスキル）"
             return
-        speaker = voice_chat.build_speaker()
+        speaker = make_speaker(on_start=lambda: "first_audio" in turn.stages or turn.mark("first_audio"))
         stop = threading.Event()
         fed = {"any": False}
-        voice_chat.track_first_audio(speaker, lambda: turn)
+        voice_chat.track_first_audio(speaker, lambda: turn)   # 再生の待ちの列のある読み上げ（HTTP エンジン）
 
         def stream(chunk: str) -> None:
             if stop.is_set():
@@ -377,7 +442,10 @@ def make_handler(token: str, port: int, evaluator: Evaluator):
                 except NoSpeech as e:
                     return self._json(422, {"error": str(e)})
             if self.path == "/api/new":
-                run = evaluator.new_run()
+                try:
+                    run = evaluator.new_run()
+                except Busy as e:
+                    return self._json(409, {"error": str(e)})
                 return self._json(200, {"id": run["id"]})
             self._json(404, {"error": "ありません"})
 

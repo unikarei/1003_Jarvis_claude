@@ -102,7 +102,6 @@ class FakeOut:
 
 @pytest.fixture
 def fake_speaker(monkeypatch):
-    import voice_chat
     said = []
 
     def synth(sentence, cancel):
@@ -114,8 +113,25 @@ def fake_speaker(monkeypatch):
         sp = duplex.DuplexSpeaker(duplex.Player(stream_factory=FakeOut), synth=synth)
         built.append(sp)
         return sp
-    monkeypatch.setattr(voice_chat, "build_speaker", build)
+    monkeypatch.setattr(voice_eval, "make_speaker", build)
     return said, built
+
+
+class FakeSay:
+    """say の代わり（0.2 秒で読み終える）。"""
+
+    def __init__(self, cmd):
+        self.cmd, self.done = cmd, threading.Event()
+        threading.Timer(0.2, self.done.set).start()
+
+    def wait(self):
+        self.done.wait()
+
+    def poll(self):
+        return 0 if self.done.is_set() else None
+
+    def terminate(self):
+        self.done.set()
 
 
 @pytest.fixture
@@ -243,6 +259,55 @@ def test_measure_full_streams_answer_and_stops_after_first_sentence(server, fake
     assert sent == []                                                            # 生成も止めた
 
 
+def test_measure_full_with_say_plays_directly_without_audio_files(server, fake_mic, index, tmpdir_watch, tmp_path,
+                                                                 monkeypatch):
+    """既定の say は -o（一時の WAV）を使わず直接再生し、say の起動で最初の声を記録する。"""
+    import voice_chat
+    from voice import tts
+    monkeypatch.setattr(tts, "SETTINGS_PATH", tmp_path / "none.json")         # 設定なし = say・Kyoko
+    monkeypatch.setattr(voice_chat, "output_device", lambda: None)
+    started = []
+
+    def fake_popen(cmd):
+        started.append(cmd)
+        return FakeSay(cmd)
+    monkeypatch.setattr(voice_eval, "_popen", fake_popen)
+    monkeypatch.setitem(orchestrator.HANDLERS, "system-status",
+                        lambda inputs, ctx, text: ("エラー 0 件・警告 1 件・情報 2 件（前回の照合結果）", []))
+    fake_mic["text"] = "システムの状態は？"
+    code, body, _ = req(server, "POST", "/api/measure", {"index": 8, "mode": "full"})
+    data = json.loads(body)
+    assert code == 200 and data["executed"] is True and "first_audio" in data["stages"]
+    assert data["stages"]["first_text"] <= data["stages"]["first_audio"]
+    assert len(started) == 1 and started[0][:2] == ["say", "-r"] and "-o" not in started[0]
+    assert "Kyoko" in started[0] and started[0][-1] == "エラー 0 件、警告 1 件です。"
+    assert list(tmpdir_watch.iterdir()) == []                                  # 音声の一時ファイルもない
+
+
+def test_make_speaker_does_not_fall_back_to_say_file(monkeypatch, tmp_path):
+    """HTTP エンジンで合成できない文は、say の一時ファイルに切り替えず読まない。"""
+    import voice_chat
+    from voice import tts
+    path = tmp_path / "settings.json"
+    tts.save_settings(tts.VoiceSettings(engine="voicevox", speaker="3"), path)
+    monkeypatch.setattr(tts, "SETTINGS_PATH", path)
+    monkeypatch.setattr(voice_chat, "output_device", lambda: None)
+    engine = tts.ENGINES["voicevox"]
+    monkeypatch.setattr(engine, "available", lambda: (True, ""))
+    monkeypatch.setattr(engine, "synthesize", lambda *a: (_ for _ in ()).throw(tts.TTSError("止まっている")))
+    monkeypatch.setattr(tts.ENGINES["say"], "synthesize", lambda *a: pytest.fail("say の一時ファイルを使った"))
+    real_player = duplex.Player
+    monkeypatch.setattr(duplex, "Player", lambda device=None: real_player(stream_factory=FakeOut))
+    sp =voice_eval.make_speaker(on_start=lambda: None)
+    try:
+        assert isinstance(sp, duplex.DuplexSpeaker)
+        sp.say("こんにちは。")
+        sp.wait()
+        assert sp.heard(sp.turn) == []
+    finally:
+        sp.close()
+
+
 def test_measure_full_does_not_run_write_skill(server, fake_mic, fake_speaker, index, monkeypatch):
     said, built = fake_speaker
     calls = []
@@ -269,6 +334,42 @@ def test_concurrent_measure_is_409_and_no_microphone_is_503(server, fake_mic, mo
     assert code == 503 and "マイク" in json.loads(body)["error"]
 
 
+def test_new_run_during_measure_is_409_and_keeps_result(server, fake_mic, monkeypatch):
+    """計測中の「新しい評価」は 409。進行中の結果は計測を始めた評価に入る。"""
+    fake_mic["text"] = "システムの状態は"
+    req(server, "POST", "/api/measure", {"index": 8, "mode": "stt"})
+    run_id = server.evaluator.current()["id"]
+    gate, entered = threading.Event(), threading.Event()
+    real = voice_eval.Evaluator._measure
+
+    def slow(self, index, mode):
+        entered.set()
+        gate.wait(10)
+        return real(self, index, mode)
+    monkeypatch.setattr(voice_eval.Evaluator, "_measure", slow)
+    t = threading.Thread(target=req, args=(server, "POST", "/api/measure", {"index": 10, "mode": "stt"}))
+    t.start()
+    assert entered.wait(10)
+    try:
+        code, body, _ = req(server, "POST", "/api/new", {})
+        assert code == 409 and "実行中" in json.loads(body)["error"]
+    finally:
+        gate.set()
+        t.join(10)
+    cur = server.evaluator.current()
+    assert cur["id"] == run_id and [i["index"] for i in cur["items"]] == [8, 10]
+
+
+def test_new_run_ids_are_unique_and_do_not_overwrite(server, fake_mic):
+    ids = []
+    for i in range(3):                                                          # 同じ秒に続けて始める
+        ids.append(server.evaluator.new_run()["id"])
+        req(server, "POST", "/api/measure", {"index": i + 1, "mode": "stt"})
+    assert len(set(ids)) == 3
+    assert len(list(server.evaluator.folder.glob("*.json"))) == 3
+    assert [r["id"] for r in voice_eval.load_runs(server.evaluator.folder)] == ids[::-1]   # 新しい順
+
+
 # ---------------------------------------------------------------- 集計と保存
 
 def test_summary_percentiles_and_targets():
@@ -291,8 +392,7 @@ def test_results_lists_runs_and_new_run(server, fake_mic):
     assert [i["index"] for i in data["current"]["items"]] == [8, 10]
     assert len(data["runs"]) == 1 and data["runs"][0]["summary"]["count"] == 2
     first_id = data["current"]["id"]
-    time.sleep(1.1)                                                              # ファイル名は秒まで
-    assert req(server, "POST", "/api/new", {})[0] == 200
+    assert req(server, "POST", "/api/new", {})[0] == 200                       # 同じ秒でも別の ID
     req(server, "POST", "/api/measure", {"index": 1, "mode": "stt"})
     data = json.loads(req(server, "GET", "/api/results")[1])
     assert data["current"]["id"] != first_id and len(data["runs"]) == 2
