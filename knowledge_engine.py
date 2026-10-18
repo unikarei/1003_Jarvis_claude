@@ -315,7 +315,7 @@ def answer(question: str, projects: list[str] | None = None, limit: int = 8,
     （番号は答えの [n] と対応する。表示する出典は cited() で絞る）。provider を省くと設定（JARVIS_LLM_PROVIDER）。"""
     hits = search(question, projects=projects, limit=limit)
     latency.mark("search")
-    context ="\n\n".join(f"[{i}] {h.title}（{', '.join(h.projects) or '-'}、{h.created_at[:10]}）\n"
+    context = "\n\n".join(f"[{i}] {h.title}（{', '.join(h.projects) or '-'}、{h.created_at[:10]}）\n"
                             f"{(get_node(h.knowledge_id)['content'] or '')[:1500]}"
                             for i, h in enumerate(hits, 1)) or "（なし）"
     prompt = ANSWER_PROMPT.format(question=question, context=context, history=format_history(history),
