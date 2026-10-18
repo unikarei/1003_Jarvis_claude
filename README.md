@@ -14,6 +14,7 @@ Mac mini では、1003 の直下の起動用ファイルでも始められる（
 
 - `run_text_chat.command`: 文字で会話する（`chat.py`）
 - 声の選択: `.venv/bin/python -m acc.voice_settings` で音声エンジン・話者・話速・抑揚を選んで試聴し、「この音声を使う」で保存する（次に起動する声の会話から使う）。「候補の比較」で、AivisSpeech・VOICEVOX・macOS の候補を同じ文で聞き比べられる
+- 実マイクの評価: `.venv/bin/python -m acc.voice_eval` で表示した URL を開き、10 の文を 1 件ずつ「測る」→ 読み上げて黙る。認識の誤り（CER）と、話し終えてから最初の声までの p50・p95 を示す（結果は `data/voice/eval/`、音声は保存しない）
   - AivisSpeech・VOICEVOX は、使うときだけ手で起動する（自動起動はしない。Mac の中だけで待ち受ける）:
     `~/Applications/AivisSpeech-Engine/run --host 127.0.0.1 --port 10101 --disable_sentry`（約 5 GB のメモリ）、
     `~/Applications/VOICEVOX-Engine/run --host 127.0.0.1 --port 50021`（約 1.3 GB）。止まっていれば say（Kyoko）で読む
