@@ -201,6 +201,17 @@ class VoicevoxEngine(Engine):
         with _OPENER.open(req, timeout=timeout) as r:
             return r.read()
 
+    def preload(self, style: str) -> bool:
+        """話者のモデルを先に読み込ませる（最初の文の合成を速くする）。失敗しても False を返すだけ。"""
+        if not self.local_ok or not str(style).isdigit():
+            return False
+        from urllib.parse import urlencode
+        try:
+            self._post("/initialize_speaker?" + urlencode({"speaker": style, "skip_reinit": "true"}), timeout=60)
+            return True
+        except (OSError, ValueError):
+            return False
+
     def available(self) -> tuple[bool, str]:
         if not self.local_ok:
             return False, f"{self.label} の接続先が Mac の中（127.0.0.1）ではありません（{self.base_url}）"
@@ -279,17 +290,42 @@ def engine(name: str) -> Engine:
     return ENGINES[name]
 
 
-def make_synth(settings: VoiceSettings, fallback: VoiceSettings | None = None, notify=print):
+RECOVER_INTERVAL_SECONDS = 30   # エンジンの起動し直しを試す間隔の下限（止まり続けるときに毎文待たない）
+
+
+def make_synth(settings: VoiceSettings, fallback: VoiceSettings | None = None, notify=print, recover=None):
     """DuplexSpeaker に渡す合成の関数（文, 取り消し）→ 音声。選んだエンジンが使えなければ say（Kyoko）にする。
-    会話の途中でエンジンが止まったときも、その文は say（Kyoko）で読む（会話を止めない）。"""
+    会話の途中でエンジンが止まったときも、その文は say（Kyoko）で読む（会話を止めない）。
+    recover（エンジンを起動し直して使えれば True を返す関数）を渡すと、止まったときに一度起動し直して、選んだ音声に戻す
+    （30 秒に 1 回まで。2026-10-18、会話の途中で声が Kyoko に変わったまま戻らなかった）。"""
     fallback = fallback or VoiceSettings()
     chosen = engine(settings.engine)
     ok, reason = chosen.available()
+    if not ok and recover is not None and settings != fallback:
+        ok = bool(recover())
     if not ok:
         notify(f"[音声] {chosen.label} は使えません（{reason}）。macOS の say（Kyoko）で読み上げます。")
         settings = fallback
         chosen = engine(settings.engine)
     warned = {"done": False}
+    tried = {"at": None}
+
+    def try_recover(sentence: str, cancel: threading.Event):
+        """エンジンを起動し直して、同じ文を選んだ音声で読む。起動し直せない・間隔が短いときは None。"""
+        now = time.monotonic()
+        if recover is None or (tried["at"] is not None and now - tried["at"] < RECOVER_INTERVAL_SECONDS):
+            return None
+        tried["at"] = now
+        notify(f"[音声] {chosen.label} が止まりました。起動し直します…")
+        try:
+            if not recover():
+                return None
+            audio = chosen.synthesize(sentence, settings, cancel)
+        except TTSError:
+            return None
+        warned["done"] = False                    # 戻ったので、次に止まったときもまた知らせる
+        notify(f"[音声] {chosen.label} に戻りました。")
+        return audio
 
     def synth(sentence: str, cancel: threading.Event):
         try:
@@ -297,6 +333,9 @@ def make_synth(settings: VoiceSettings, fallback: VoiceSettings | None = None, n
         except TTSError as e:
             if (cancel is not None and cancel.is_set()) or settings == fallback:
                 return None                       # 取り消し、または say 自体の失敗（その文は読まない）
+            audio = try_recover(sentence, cancel)
+            if audio is not None:
+                return audio
             if not warned["done"]:
                 warned["done"] = True
                 notify(f"[音声] {chosen.label} で合成できません（{e}）。say（Kyoko）で読み上げます。")

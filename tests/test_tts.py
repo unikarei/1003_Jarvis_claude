@@ -179,7 +179,7 @@ def test_voice_chat_uses_saved_settings_in_every_mode(settings_path, monkeypatch
     from voice import record as mic
     tts.save_settings(tts.VoiceSettings(engine="say", speaker="Reed (日本語（日本）)", rate=1.3))
     seen = []
-    monkeypatch.setattr(tts, "make_synth", lambda s: seen.append((s.speaker, s.rate)) or (lambda sentence, c: None))
+    monkeypatch.setattr(tts, "make_synth", lambda s, **kw: seen.append((s.speaker, s.rate)) or (lambda sentence, c: None))
 
     class FakePlayer:
         def __init__(self, device=None): pass

@@ -509,15 +509,33 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="実マイクの評価（127.0.0.1 だけ）")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args(argv)
-    server, token = make_server(args.port)
-    print(f"実マイクの評価: http://{HOST}:{server.server_address[1]}/?token={token}", flush=True)
-    print("（この URL は他人に渡さない。Ctrl-C で終了。音声は保存しません）", flush=True)
+    from voice import engine_process, tts
+    # 選んだ音声のエンジン（VOICEVOX・AivisSpeech）が止まっていれば、この画面の間だけ起動する（声の会話と同じ）
+    launcher = engine_process.for_settings(tts.load_settings())
+    restore = engine_process.stop_on_signals(launcher)
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
+        if launcher is not None:
+            launcher.start()
+            if launcher.owned:
+                launcher.wait_ready()
+            engine_process.preload(launcher, tts.load_settings())
+            if launcher.status:
+                print(f"（音声: {launcher.status}）", flush=True)
+        server, token = make_server(args.port)
+        print(f"実マイクの評価: http://{HOST}:{server.server_address[1]}/?token={token}", flush=True)
+        print("（この URL は他人に渡さない。Ctrl-C で終了。音声は保存しません）", flush=True)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
     finally:
-        server.server_close()
+        try:
+            if launcher is not None:
+                launcher.stop()                 # この画面が起動したものだけを止める
+        finally:
+            restore()
     return 0
 
 
