@@ -3,7 +3,8 @@
 Owner の発言から使うスキルと入力を決め、権限を確かめてから実行する。
   ① ルール: スキルの発言の例（phrases）に一致すれば、そのスキルを使う
   ② LLM: 一致しなければ、スキルの索引と発言を llm.complete() に渡して選ばせる（結果は索引に照らして検証）
-  どれにも当たらなければ、普通の質問として knowledge-answer で答える。
+  どれにも当たらなければ、ナレッジの質問（is_knowledge_question）は knowledge-answer（検索と待機させた Claude）、
+  それ以外の通常の会話は general-chat（検索せずローカル LLM）で答える（ADR-0027、T-1403）。
 スキルの宣言は jarvis-skills（skills.py が読む索引）が正本。ここには「スキル名 → 1003 の関数」の対応表だけを持ち、
 索引にあって active のものだけを呼ぶ。権限の段階は索引の値に従い、発言の内容で確認を省かない。
 """
@@ -19,6 +20,7 @@ import llm
 import skills
 
 DEFAULT_SKILL = "knowledge-answer"
+CHAT_SKILL = "general-chat"
 ROUTE_TIMEOUT_SECONDS = 60      # LLM での振り分けの上限（F-3）
 SKILL_TIMEOUT_SECONDS = 120     # 確認の入力を待たないスキルの実行の上限（F-3）
 _TRIM = " 　、。,.?？!！は"
@@ -34,6 +36,7 @@ class Context:
     shown: str = ""                               # stream で表示済みの部分（chat.py は残りだけを表示する）
     voice: bool = False                           # 声の会話（答えを短い話し言葉にする、ADR-0026）
     cancel: Callable[[], bool] | None = None      # True を返したら答えの生成を止める（声の割り込み、ADR-0028）
+    last_provider: str | None = None              # 直前の答えに使った LLM のプロバイダー（切り替えの記録、T-1403）
 
 
 @dataclass
@@ -172,13 +175,54 @@ def llm_candidates(active: dict[str, skills.Skill]) -> dict[str, skills.Skill]:
     return {name: s for name, s in active.items() if effective(s) == ("read", False)}
 
 
+# ナレッジの質問とみなす語（ADR-0027、T-1403）
+KNOWLEDGE_WORDS = ("ナレッジ", "知識", "資料", "メモ", "ノート", "ニュース", "記事", "出典", "Obsidian", "レポート",
+                   "調べた", "集めた", "記録", "登録した")
+PROJECT_WORDS = ("大洗", "民泊", "物件", "補助金", "ピアノ", "教室", "不動産", "株", "トレード", "製造", "タービン",
+                 "フラッタ")
+
+
+ASSISTANT_NAME = "jarvis"   # 呼びかけ（「JARVIS、おはよう」）と区別できないので、この ID だけは語に使わない
+
+
+def _project_ids() -> tuple[str, ...]:
+    """Registry のプロジェクトの ID（全件。ただし呼びかけと同じ「jarvis」は除く）。"""
+    import registry
+    try:
+        return tuple(pid for pid in registry.projects() if pid.lower() != ASSISTANT_NAME)
+    except Exception:   # Registry を読めなくても振り分けは止めない
+        return ()
+
+
+def _has_project_id(text: str) -> bool:
+    """英数字の語として ID を含むか（大文字・小文字は区別しない。「personality」は「personal」に当てない）。"""
+    lowered = text.lower()
+    return any(re.search(rf"(?<![a-z0-9_-]){re.escape(pid.lower())}(?![a-z0-9_-])", lowered) for pid in _project_ids())
+
+
+def is_knowledge_question(text: str) -> bool:
+    """ナレッジの語・プロジェクトの語を含むか、検索の最上位の点数がしきい値以上なら True。迷えば False（通常の会話）。"""
+    if any(w in text for w in KNOWLEDGE_WORDS + PROJECT_WORDS) or _has_project_id(text):
+        return True
+    import knowledge_engine as ke
+    try:
+        hits = ke.search(text, limit=1)
+    except Exception:   # DB がない・壊れているときは通常の会話にする
+        return False
+    return bool(hits) and hits[0].score >= config.KNOWLEDGE_SCORE_THRESHOLD
+
+
 def route(text: str, ctx: Context, use_llm: bool | None = None) -> Route:
-    """use_llm を省くと設定（config.ROUTE_WITH_LLM、既定は使わない。T-1212）に従う。"""
+    """use_llm を省くと設定（config.ROUTE_WITH_LLM、既定は使わない。T-1212）に従う。
+    どれにも当たらなければ、ナレッジの質問は knowledge-answer、それ以外は general-chat。索引に general-chat が
+    なければ従来どおり knowledge-answer。"""
     use_llm = config.ROUTE_WITH_LLM if use_llm is None else use_llm
     active = skills.active()
     found = route_by_rule(text, active) or (route_by_llm(text, llm_candidates(active), ctx) if use_llm else None)
     if found:
         return found
+    if CHAT_SKILL in active and not is_knowledge_question(text):
+        return Route(CHAT_SKILL, {"question": text}, "default")
     return Route(DEFAULT_SKILL, {"question": text}, "default")
 
 
@@ -194,15 +238,83 @@ def _ordinal(text: str) -> int | None:
     return int(m.group(1) or m.group(2)) if m else None
 
 
+ANSWER_PROVIDER = "claude_warm"          # ナレッジの質問（経路 B、ADR-0027）
+ANSWER_RETRY_PROVIDER = "claude_cli"     # claude_warm が失敗したときに一度だけ試す
+CHAT_PROVIDER = "ollama"                 # 通常の会話（経路 A）
+CHAT_FALLBACK_PROVIDER = "claude_warm"   # Ollama が失敗したとき（有料の API には切り替えない）
+
+
+class _SentTracker:
+    """ctx.stream に送ったかを覚える。答えの一部を表示・読み上げた後に失敗したら、別の LLM に切り替えない
+    （切り替えると、表示した途中の答えと最後の答えが混ざる）。"""
+
+    def __init__(self, stream):
+        self.stream, self.sent = stream, False
+
+    def __call__(self, chunk: str) -> None:
+        if chunk:
+            self.sent = True
+        self.stream(chunk)
+
+
+def _with_fallback(run, ctx, first: str, second: str):
+    """first で run を呼び、LLMError（取り消しを除く）で、まだ何も送っていなければ second でもう一度だけ試す。"""
+    tracker = _SentTracker(ctx.stream) if ctx.stream is not None else None
+    try:
+        return run(first, tracker)
+    except llm.LLMCancelled:
+        raise
+    except llm.LLMError:
+        if tracker is not None and tracker.sent:
+            raise
+        return run(second, ctx.stream)
+
+
 def _answer(inputs, ctx, text):
     import knowledge_engine as ke
-    answer, hits = ke.answer(inputs.get("question") or text, projects=_projects(inputs), on_text=ctx.stream,
-                             history=ctx.history, voice=ctx.voice, cancel=ctx.cancel)
+
+    def ask(provider, stream):
+        ctx.last_provider = provider
+        return ke.answer(inputs.get("question") or text, projects=_projects(inputs), on_text=stream,
+                         history=ctx.history, voice=ctx.voice, cancel=ctx.cancel, provider=provider)
+    answer, hits = _with_fallback(ask, ctx, ANSWER_PROVIDER, ANSWER_RETRY_PROVIDER)
     if ctx.stream is not None:
         ctx.shown = answer        # 答えの本文は表示済み。出典だけが残り
     used = ke.cited(answer, hits)  # 出典は答えで使ったものだけ示す（LLM の知識で答えたときは出さない）
     lines = [answer, ""] + [f"[{i}] {h.title}  {h.url or h.knowledge_id}" for i, h in enumerate(hits, 1) if i in used]
     return "\n".join(lines).strip(), (_hit_items(hits) if used else [])   # 番号は [n] と対応させる
+
+
+CHAT_PROMPT = """あなたは Owner の個人アシスタント「JARVIS」です。落ち着いた丁寧な話し言葉で、会話として自然に答えてください。
+- 名前を聞かれたら JARVIS と答える。モデルの名前（Gemma・Claude など）を名乗らない。
+- 最新の情報や確かでないことは、そう断る。
+- 「これまでの会話」は話の流れを知るために使う。
+{style}
+# これまでの会話
+{history}
+
+# Owner の発言
+{question}
+"""
+
+
+def _chat_complete(prompt, ctx, provider, stream):
+    ctx.last_provider = provider
+    if stream is not None:
+        return llm.complete_stream(prompt, stream, provider=provider, cancel=ctx.cancel)
+    return llm.complete(prompt, provider=provider)
+
+
+def _chat(inputs, ctx, text):
+    """通常の会話（経路 A、ADR-0027）。検索せず、ローカル LLM で答える。Ollama が失敗したら claude_warm。"""
+    import knowledge_engine as ke
+    prompt = CHAT_PROMPT.format(question=inputs.get("question") or text, history=ke.format_history(ctx.history),
+                                style=ke.VOICE_STYLE if ctx.voice else "")
+    answer = _with_fallback(lambda provider, stream: _chat_complete(prompt, ctx, provider, stream), ctx,
+                            CHAT_PROVIDER, CHAT_FALLBACK_PROVIDER)
+    if ctx.stream is not None:
+        ctx.shown = answer        # 答えは表示済み（出典はない）
+    return answer.strip(), []
 
 
 def _projects(inputs) -> list[str] | None:
@@ -377,7 +489,7 @@ def _code(inputs, ctx, text):
 
 # スキル名 → 1003 の関数（inputs, ctx, 発言）→ (表示する文章, 文脈に覚える知識)
 HANDLERS: dict[str, Callable] = {
-    "knowledge-answer": _answer, "knowledge-search": _search, "knowledge-trace": _trace,
+    "knowledge-answer": _answer, "general-chat": _chat, "knowledge-search": _search, "knowledge-trace": _trace,
     "knowledge-audit": _audit, "knowledge-stats": _stats, "system-status": _system_status, "dev-board": _dev_board,
     "improvement-review": _improvement, "control-center": _control_center,
     "knowledge-capture": _capture, "theme-register": _theme, "code-task": _code,
@@ -387,6 +499,7 @@ HANDLERS: dict[str, Callable] = {
 # 1003 が持つ最低限の権限（F-2）: スキル名 → (最低限の段階, 確認が必須か, 対話で入力を待つか)。
 # 実際の段階と確認は、索引の値とこの表のうち厳しい方。索引の書き換えで確認が外れないようにする
 FLOOR = {
+    "general-chat": ("read", False, False),       # 検索せずローカル LLM で答える（ADR-0027）
     "knowledge-capture": ("local_write", True, True),
     "theme-register": ("local_write", True, True),
     "control-center": ("local_write", True, False),
@@ -462,6 +575,7 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
 def handle(text: str, ctx: Context, ask: Callable[[str], str] | None = None, use_llm: bool | None = None) -> Outcome:
     """発言を振り分けて実行し、文脈を更新する。"""
     ctx.shown = ""
+    ctx.last_provider = None
     r = route(text, ctx, use_llm=use_llm)
     outcome = execute(r, ctx, text, ask)
     if outcome.ok and outcome.items is not None and outcome.error != "declined":
