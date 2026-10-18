@@ -17,7 +17,7 @@ import orchestrator
 from ckc.models import Speaker as Who, Turn
 from db import init_db
 from run_task import record
-from voice import duplex
+from voice import duplex, tts
 from voice import record as mic
 from voice.speak import Speaker, speech_summary
 
@@ -262,6 +262,14 @@ def _end(speaker, session) -> int:
     return 0
 
 
+def build_speaker(settings: "tts.VoiceSettings | None" = None, player=None) -> "duplex.DuplexSpeaker":
+    """保存した音声の設定（python -m acc.voice_settings で選ぶ）で読み上げる。どの起動の形でも使う（ADR-0029）。"""
+    settings = settings or tts.load_settings()
+    print(f"（音声: {tts.engine(settings.engine).label}・{settings.speaker}・話速 {settings.rate}）")
+    player = player or duplex.Player(device=output_device())
+    return duplex.DuplexSpeaker(player, voice=VOICE, synth=tts.make_synth(settings))
+
+
 def main(listen=None, transcribe=None, speaker: Speaker | None = None, push_to_talk: bool = False,
          keys: "queue.Queue[str] | None" = None, barge_in: bool | None = None) -> int:
     """既定はハンズフリー（JARVIS が話し終えたら自動で聞く、ADR-0026）。push_to_talk で Enter を押してから話す。
@@ -276,11 +284,11 @@ def main(listen=None, transcribe=None, speaker: Speaker | None = None, push_to_t
         if barge_in is None:
             barge_in = duplex.barge_in_enabled()
         if barge_in and not push_to_talk:     # 割り込みのある会話（ADR-0028）
-            player = duplex.Player(device=output_device())
-            session = duplex.Session(player, duplex.DuplexSpeaker(player, voice=VOICE))
+            speaker = build_speaker()
+            session = duplex.Session(speaker.player, speaker)
             return run_barge_in(session, transcribe_array, keys if keys is not None else keyboard())
         listen, transcribe = mic.record_utterance, transcribe_array
-    speaker = speaker or Speaker(voice=VOICE, device=output_device())
+    speaker = speaker or build_speaker()      # 割り込みなし・押してから話す形でも、選んだ音声で読む
     keys = keys if keys is not None else keyboard()
     init_db()
 

@@ -53,6 +53,7 @@
 
 - 入力: 音声認識（faster-whisperでローカル推論）
 - 出力: 音声合成（VOICEVOX ENGINE のローカルHTTP API、既定 `http://127.0.0.1:50021`）
+  - 2026-10-18 から（`../docs/decisions.md` ADR-0029）: 声の会話（`voice_chat.py`）の読み上げは、音声エンジン（macOS の say〔既定〕・AivisSpeech・VOICEVOX。有料の ElevenLabs・OpenAI TTS は Owner の承認まで未接続）・話者・話速・抑揚を選べる。設定と試聴の画面は `python -m acc.voice_settings`（127.0.0.1 だけ）で、設定は `data/voice/settings.json`。HTTP エンジンの接続先は Mac の中だけ（転送は追わない）。選んだエンジンが使えないとき・途中で止まったときは say（Kyoko）で読む。長い文は読点の切れ目で先に読む
 - Phase 2の質問応答窓口（`ask.answer()`）の前後に入出力を付けるだけの構成にする（`talk.py` / `live_talk.py`）
 - 動作検証はWindows開発機の実機マイク/スピーカーで行う（Mac miniへの移行はMVPがWindowsで十分に検証できた後）
 - 2種類の入出力モードを用意する:

@@ -13,6 +13,7 @@ python chat.py
 Mac mini では、1003 の直下の起動用ファイルでも始められる（Finder でダブルクリック、またはターミナルで実行）。
 
 - `run_text_chat.command`: 文字で会話する（`chat.py`）
+- 声の選択: `.venv/bin/python -m acc.voice_settings` で音声エンジン・話者・話速・抑揚を選んで試聴し、「この音声を使う」で保存する（次に起動する声の会話から使う）
 - `run_voice_chat.command`: 声で会話する（`voice_chat.py`。ハンズフリー: そのまま話しかける。JARVIS が話している途中でも、話し始めれば止まって聞く（割り込み。`--no-barge-in` で無効）。終了は「終了」と話すか q と Enter。Enter を押してから話す従来の形は `.venv/bin/python voice_chat.py --push-to-talk`）
 
 継続的な対話型CLI。入力内容に応じてナレッジ検索（`ask.py`と同じ検索対象: ニュース・民泊ノート・大洗Project OS等すべてのcategory）またはコード実行サブエージェントに自動で振り分けられる（`run_task.py`と同じ分類ロジック）。終了は `exit` / `quit` / Ctrl+C。
