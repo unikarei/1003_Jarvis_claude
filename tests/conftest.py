@@ -15,6 +15,9 @@ os.environ["JARVIS_VAULT_ROOT"] = str(_TMP_ROOT / "vaults")
 os.environ["JARVIS_CKC_DATA_DIR"] = str(_TMP_ROOT / "ckc")
 os.environ["JARVIS_REGISTRY_JSON"] = str(_TMP_ROOT / "registry.json")
 os.environ["JARVIS_SKILLS_JSON"] = str(_TMP_ROOT / "skills.json")   # 置かない（テストごとに作る）
+# 本物の LLM を呼ばない（2026-10-18、チャットのテストが本物の claude を起動していた）。使うテストは偽物に差し替える
+os.environ["CLAUDE_BIN"] = str(_TMP_ROOT / "no-claude")
+os.environ["JARVIS_OLLAMA_URL"] = "http://127.0.0.1:9"
 
 import config  # noqa: E402
 
