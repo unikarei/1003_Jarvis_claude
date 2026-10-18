@@ -155,7 +155,8 @@ def _executable(skill_name: str) -> bool:
     import orchestrator
     import skills
     skill = skills.active().get(skill_name)
-    return skill is not None and orchestrator.effective(skill) == ("read", False)
+    return (skill is not None and orchestrator.effective(skill) == ("read", False)
+            and skill_name in orchestrator.HANDLERS and skill.entry.get("repo") == "repo-1003-jarvis-claude")
 
 
 # ---------------------------------------------------------------- 読み上げ（ファイルを使わない）
@@ -348,9 +349,13 @@ class Evaluator:
         box: dict = {}
 
         def work() -> None:
+            # 権限を確かめた振り分け r のハンドラーを、このスレッドで直接呼ぶ（振り分け直さない。orchestrator.execute の
+            # 打ち切りのスレッドを使わないので、スキルが動いている間はこのスレッドが生きている → 次の計測は 409）
             latency.use(turn)
-            try:   # 権限を確かめた振り分け r をそのまま実行する（振り分け直さない）。確認には常に「いいえ」
-                box["outcome"] = orchestrator.execute(r, ctx, text, ask=lambda prompt: "n")
+            try:
+                box["started"] = True
+                message, items = orchestrator.HANDLERS[r.skill](r.inputs, ctx, text)
+                box["outcome"] = orchestrator.Outcome(r.skill, r.method, r.inputs, message, True, 0.0, items or [], None)
             except Exception as e:  # noqa: BLE001  取り消し・失敗でも計測は続ける
                 box["error"] = f"{type(e).__name__}: {e}"
         worker = threading.Thread(target=work, name="jarvis-voice-eval", daemon=True)
@@ -387,9 +392,7 @@ class Evaluator:
             speaker.close()
         outcome = box.get("outcome")
         # 実際にスキルを動かしたときだけ「実行した」（確認を断った・使えないスキルは実行していない）
-        # 答えの完了を待たずに止めたとき（outcome なし）は、答えの文字を受け取っていれば実行した
-        result["executed"] = (outcome.error not in ("declined", "inactive", "no_handler", "external")
-                              if outcome is not None else fed["any"])
+        result["executed"] = bool(box.get("started"))     # 読み取りのスキルのハンドラーを動かした
         result["provider"] = turn.attrs.get("provider") or ctx.last_provider
 
 

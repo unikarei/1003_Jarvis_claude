@@ -475,16 +475,29 @@ def test_measure_full_executes_the_checked_route_without_rerouting(server, fake_
     assert data["skill"] == "system-status" and data["executed"] is True
 
 
-def test_measure_full_declined_confirmation_is_not_executed(server, fake_mic, fake_speaker, index, monkeypatch):
-    """実行の時に確認を断ったスキルは「実行した」にしない。"""
-    monkeypatch.setattr(voice_eval, "_executable", lambda name: True)   # 判定を通っても、実行時の確認は断る
-    calls = []
-    monkeypatch.setitem(orchestrator.HANDLERS, "knowledge-capture",
-                        lambda inputs, ctx, text: calls.append(text) or ("ナレッジ化を終えました。", []))
-    fake_mic["text"] = "今の会話をナレッジ化して"
-    code, body, _ = req(server, "POST", "/api/measure", {"index": 9, "mode": "full"})
+def test_measure_full_long_skill_blocks_next_measure_until_it_ends(server, fake_mic, fake_speaker, index, monkeypatch):
+    """答えを待つ上限で計測を諦めても、スキルが動いている間は次の計測を受け付けない（並行させない）。"""
+    monkeypatch.setattr(voice_eval, "MEASURE_TIMEOUT_SECONDS", 0.3)
+    release = threading.Event()
+    monkeypatch.setitem(orchestrator.HANDLERS, "system-status",
+                        lambda inputs, ctx, text: release.wait(10) and ("エラー 0 件です。", []))
+    fake_mic["text"] = "システムの状態は？"
+    code, body, _ = req(server, "POST", "/api/measure", {"index": 8, "mode": "full"})
     data = json.loads(body)
-    assert code == 200 and calls == [] and data["executed"] is False
+    assert code == 200 and data["executed"] is True and "時間切れ" in data["note"]
+    code, body, _ = req(server, "POST", "/api/measure", {"index": 8, "mode": "stt"})
+    assert code == 409 and "まだ終わっていません" in json.loads(body)["error"]
+    release.set()
+    server.evaluator._lingering.join(timeout=5)
+    assert req(server, "POST", "/api/measure", {"index": 8, "mode": "stt"})[0] == 200
+
+
+def test_executable_requires_a_1003_handler(index, monkeypatch):
+    """読み取りでも、1003 のハンドラーがないスキルは評価の画面から動かさない。"""
+    assert voice_eval._executable("system-status")
+    monkeypatch.delitem(orchestrator.HANDLERS, "system-status")
+    assert not voice_eval._executable("system-status")
+    assert not voice_eval._executable("knowledge-capture")
 
 
 def test_measure_full_counts_streamed_skill_as_executed_even_if_worker_outlives_the_stop(
