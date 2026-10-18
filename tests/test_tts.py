@@ -443,3 +443,32 @@ def test_odd_speakers_response_is_handled(fake_voicevox, monkeypatch):
     monkeypatch.setitem(tts.ENGINES, "voicevox", engine)
     info = {e["name"]: e for e in voice_settings.engines_info()}["voicevox"]
     assert not info["available"] and "話者の一覧を読めません" in info["reason"]
+
+
+def test_candidates_resolve_installed_voices_and_mark_missing():
+    """候補の比較: 入っている話者・スタイルは番号に、入っていない声は理由付きで使えないとする（2026-10-18）。"""
+    from acc import voice_settings
+    engines = [
+        {"name": "aivisspeech", "label": "AivisSpeech", "available": True, "reason": "",
+         "speakers": [{"id": "u1", "name": "阿井田 茂", "styles": [{"id": "1310138977", "name": "Calm"}]},
+                      {"id": "u2", "name": "まお", "styles": [{"id": "None", "name": "おちつき"}]}]},
+        {"name": "voicevox", "label": "VOICEVOX", "available": False, "reason": "VOICEVOX が起動していません", "speakers": []},
+        {"name": "say", "label": "say", "available": True, "reason": "",
+         "speakers": [{"id": "Kyoko", "name": "Kyoko", "styles": []},
+                      {"id": "Otoya（拡張）", "name": "Otoya（拡張）", "styles": []}]},
+    ]
+    info = {c["label"]: c for c in voice_settings.candidates_info(engines)}
+    assert info["AivisSpeech 阿井田 茂（Calm）"]["speaker"] == "1310138977" and info["AivisSpeech 阿井田 茂（Calm）"]["available"]
+    assert not info["AivisSpeech まお（おちつき）"]["available"] and "ありません" in info["AivisSpeech まお（おちつき）"]["reason"]
+    assert info["VOICEVOX 青山龍星（しっとり）"]["reason"] == "VOICEVOX が起動していません"
+    assert info["macOS Otoya（拡張）"]["speaker"] == "Otoya（拡張）"
+    assert not info["macOS Kyoko（拡張）"]["available"] and info["macOS Kyoko"]["speaker"] == "Kyoko"
+    assert all(not c["engine"] in ("elevenlabs", "openai") for c in voice_settings.candidates_info(engines))
+
+
+def test_candidates_api_requires_token(server, monkeypatch):
+    monkeypatch.setattr(tts.ENGINES["say"], "available", lambda: (True, ""))   # macOS 以外でも同じ結果にする
+    assert req(server, "GET", "/api/candidates", cookie=False)[0] == 401
+    code, body, _ = req(server, "GET", "/api/candidates")
+    cands = json.loads(body)["candidates"]
+    assert code == 200 and any(c["label"] == "macOS Kyoko" and c["available"] for c in cands)
