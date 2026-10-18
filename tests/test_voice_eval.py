@@ -485,3 +485,17 @@ def test_measure_full_declined_confirmation_is_not_executed(server, fake_mic, fa
     code, body, _ = req(server, "POST", "/api/measure", {"index": 9, "mode": "full"})
     data = json.loads(body)
     assert code == 200 and calls == [] and data["executed"] is False
+
+
+def test_measure_full_counts_streamed_skill_as_executed_even_if_worker_outlives_the_stop(
+        server, fake_mic, fake_speaker, index, db_path, monkeypatch):
+    """最初の声で止めた後も生成が終わらない（取り消しを確かめない）ときも、答えを受け取っていれば「実行した」。"""
+    def fake_stream(prompt, on_text, provider=None, timeout=None, cancel=None):
+        on_text("こんにちは。")
+        time.sleep(7)                             # 取り消しを確かめずに長く続く（計測は 5 秒待って諦める）
+        return "こんにちは。"
+    monkeypatch.setattr(llm, "complete_stream", fake_stream)
+    fake_mic["text"] = "ジャービス、今日のAIニュースで重要なものを三つ教えて"
+    code, body, _ = req(server, "POST", "/api/measure", {"index": 1, "mode": "full"})
+    data = json.loads(body)
+    assert code == 200 and data["executed"] is True and "first_audio" in data["stages"]

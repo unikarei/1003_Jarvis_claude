@@ -376,8 +376,9 @@ class Evaluator:
             speaker.close()
         outcome = box.get("outcome")
         # 実際にスキルを動かしたときだけ「実行した」（確認を断った・使えないスキルは実行していない）
-        result["executed"] = outcome is not None and outcome.error not in ("declined", "inactive", "no_handler",
-                                                                             "external")
+        # 答えの完了を待たずに止めたとき（outcome なし）は、答えの文字を受け取っていれば実行した
+        result["executed"] = (outcome.error not in ("declined", "inactive", "no_handler", "external")
+                              if outcome is not None else fed["any"])
         result["provider"] = turn.attrs.get("provider") or ctx.last_provider
 
 
