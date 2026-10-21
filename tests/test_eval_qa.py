@@ -123,6 +123,17 @@ def test_generate_unreadable_json_is_rejected():
     assert qa.validate(item, "c", echo_answer) == "invalid_json"
 
 
+@pytest.mark.parametrize("facts, reason", [
+    (["茨城県東茨城郡大洗町", 1, None, "木造"], "key_facts_count"),     # 元の配列は 4 個
+    (["茨城県東茨城郡大洗町", 1], "key_facts_invalid"),               # 文字列でない要素
+    ("茨城県東茨城郡大洗町", "key_facts_invalid"),                    # 配列でない
+])
+def test_generate_keeps_malformed_key_facts_for_rejection(facts, reason):
+    text = json.dumps({"question": "大洗の物件の住所は？", "key_facts": facts}, ensure_ascii=False)
+    it = qa.generate({"id": "k", "title": "t", "content": CONTENT}, lambda p: text, 0)
+    assert qa.validate(it, CONTENT, echo_answer) == reason
+
+
 # --- 検証 ---
 
 CONTENT = "大洗_物件概要\n所在地: 茨城県東茨城郡大洗町 磯浜町１２３\n構造: 木造２階建て"
@@ -166,6 +177,11 @@ def test_validate_answer_check_and_ambiguity():
     assert qa.validate(item(), CONTENT, echo_answer, others[:-1]) is None
     # 要点の 1 つでもほかに少なければ残す
     assert qa.validate(item(facts=("茨城県東茨城郡大洗町", "木造")), CONTENT, echo_answer, others) is None
+    # 要点ごとに別の知識が多くても、すべてを含む知識が少なければ残す
+    split_others = others + [qa.normalize(f"別の知識 木造 {i}") for i in range(qa.AMBIGUOUS_SOURCES)]
+    assert qa.validate(item(facts=("茨城県東茨城郡大洗町", "木造")), CONTENT, echo_answer, split_others) is None
+    both = [qa.normalize(f"別の知識 {i} 茨城県東茨城郡大洗町 木造") for i in range(qa.AMBIGUOUS_SOURCES)]
+    assert qa.validate(item(facts=("茨城県東茨城郡大洗町", "木造")), CONTENT, echo_answer, both) == "ambiguous"
 
 
 def test_build_counts_reject_reasons(db_path):

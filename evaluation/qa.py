@@ -68,6 +68,7 @@ REJECT_REASONS = {
     "question_empty": "質問が空",
     "question_too_long": f"質問が {MAX_QUESTION_CHARS} 字超",
     "key_facts_count": f"要点が 0 個または {MAX_KEY_FACTS + 1} 個以上",
+    "key_facts_invalid": "要点が文字列の配列でない",
     "fact_not_in_content": "要点が本文にない",
     "fact_in_question": "要点が質問に書いてある",
     "ambiguous": "どの知識の答えか決まらない",
@@ -155,7 +156,12 @@ def generate(knowledge: dict, llm_complete=None, seed: int = 0) -> dict:
         question = data.get("question")
         facts = data.get("key_facts")
         item["question"] = question.strip() if isinstance(question, str) else ""
-        item["key_facts"] = [f.strip() for f in facts if isinstance(f, str)] if isinstance(facts, list) else []
+        # 文字列以外を含む・配列でない応答は元のまま残し、validate で捨てる（黙って除くと数の検証をすり抜ける）
+        if facts is None:
+            facts = []
+        elif isinstance(facts, list) and all(isinstance(f, str) for f in facts):
+            facts = [f.strip() for f in facts]
+        item["key_facts"] = facts
     return item
 
 
@@ -169,16 +175,21 @@ def validate(item: dict, content: str, answer_check=None, others: list[str] | No
         return "question_empty"
     if len(question) > MAX_QUESTION_CHARS:
         return "question_too_long"
-    norm_facts = [normalize(f) for f in facts]
+    if not isinstance(facts, list):
+        return "key_facts_invalid"
     if not 1 <= len(facts) <= MAX_KEY_FACTS:
         return "key_facts_count"
+    if any(not isinstance(f, str) for f in facts):
+        return "key_facts_invalid"
+    norm_facts = [normalize(f) for f in facts]
     norm_content = normalize(content)
     if any(not f or f not in norm_content for f in norm_facts):
         return "fact_not_in_content"
     norm_question = normalize(question)
     if any(f in norm_question for f in norm_facts):
         return "fact_in_question"
-    if others is not None and all(sum(1 for o in others if f in o) >= AMBIGUOUS_SOURCES for f in norm_facts):
+    # 要点のすべてを含むほかの知識が AMBIGUOUS_SOURCES 件以上なら捨てる（要点ごとに別の知識を数えない）
+    if others is not None and sum(1 for o in others if all(f in o for f in norm_facts)) >= AMBIGUOUS_SOURCES:
         return "ambiguous"
     answer = normalize((answer_check or _default_answer_check)(question, content))
     if not any(f in answer for f in norm_facts):
