@@ -2,6 +2,8 @@
 
 - qa: 評価セット（疑似 Q&A）の作成・検証・保存（T-1410）
 - isolate: 本番の DB のコピーを読む子のプロセスで動かす仕組み
+- runner: 評価の実行と指標（振り分け・順位・要点の一致・時間、T-1411。調整できる値は ../tuning.py）
+- report: 評価のレポート（JSON と Markdown）
 
 成果物は EVAL_DIR（既定 data/eval/、Git の対象外）の下に置く。
 """
