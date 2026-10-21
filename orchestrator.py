@@ -22,6 +22,7 @@ import config
 import latency
 import llm
 import skills
+import tuning
 
 DEFAULT_SKILL = "knowledge-answer"
 CHAT_SKILL = "general-chat"
@@ -218,19 +219,22 @@ GENERAL_QUESTION = re.compile(r"って(何|なに|なん)|(?<![こあも])とは
 def is_knowledge_question(text: str) -> bool:
     """ナレッジの語・プロジェクトの語を含むなら True。一般知識の質問の形なら False。それ以外は、検索の最上位の
     点数がしきい値以上なら True（最近の出来事を聞く語があれば、その語を除いて検索し、しきい値は RECENT_SCORE_FACTOR 倍）。
-    迷えば False（通常の会話）。"""
-    if any(w in text for w in KNOWLEDGE_WORDS + PROJECT_WORDS) or _has_project_id(text):
+    迷えば False（通常の会話）。しきい値・加える語・検索の同義語は tuning.current()（既定は今の値、T-1411）。"""
+    t = tuning.current()
+    if any(w in text for w in KNOWLEDGE_WORDS + PROJECT_WORDS + tuple(t.extra_knowledge_words)) \
+            or _has_project_id(text):
         return True
     if GENERAL_QUESTION.search(text):
         return False
-    query, threshold = text, config.KNOWLEDGE_SCORE_THRESHOLD
+    query = text
+    threshold = config.KNOWLEDGE_SCORE_THRESHOLD if t.score_threshold is None else t.score_threshold
     if any(w in text for w in RECENT_WORDS):
         for w in RECENT_WORDS:
             query = query.replace(w, " ")
         threshold *= RECENT_SCORE_FACTOR
     import knowledge_engine as ke
     try:
-        hits = ke.search(query, limit=1) if query.strip() else []
+        hits = ke.search(query, limit=1) if query.strip() else []   # 同義語も tuning.current() から
     except Exception:   # DB がない・壊れているときは通常の会話にする
         return False
     return bool(hits) and hits[0].score >= threshold

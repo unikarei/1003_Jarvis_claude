@@ -291,6 +291,7 @@
 ## ナレッジ回答の評価部門（`../docs/spec.md` §3.4.10、ADR-0030、`../docs/tasks.md` §15）
 
 - [x] T-1410 評価セット（疑似 Q&A）の作成と検証: `evaluation/`（`qa.py`・`isolate.py`・`python -m evaluation build`）、`knowledge_engine.source_by_knowledge()`（`stats()` と共有）。本番 DB のコピーでの作成は T-1413
+- [x] T-1411 評価の実行・指標・レポート: `tuning.py`（調整できる値。本番のコードが読み、既定は今の動き）、`evaluation/runner.py`（振り分け・順位・recall・MRR・要点の一致・「ない」・段階ごとの時間・落ちた段階、総合点 score / score_retrieval）、`evaluation/report.py`（JSON・Markdown）、`python -m evaluation run`。本番 DB のコピーでの計測は T-1413
 
 ## Project OS API の再開（`../docs/tasks.md` T-1216・`../docs/project-os-api-restart-plan.md` 案 A、2026-10-16 Owner 承認）
 
