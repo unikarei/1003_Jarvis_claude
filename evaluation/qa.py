@@ -248,10 +248,29 @@ def assign_splits(items: list[dict], contents: dict[str, str], split: tuple[int,
     order = list(range(len(groups)))
     random.Random(seed).shuffle(order)
     order.sort(key=lambda gi: -len(groups[gi]))   # 大きい群を先に（小さい群で件数を合わせる）
-    for gi in order:
+    # reach[p]: order[p:] の群で埋められる各組の件数（最後の組は残りで決まるので除く）。
+    # 群を分けずに組別の件数をちょうど満たせる割り振りがあれば、それを外れない選び方だけをする
+    reach = [set() for _ in range(len(order) + 1)]
+    reach[-1].add((0,) * (len(split) - 1))
+    for p in range(len(order) - 1, -1, -1):
+        size = len(groups[order[p]])
+        for state in reach[p + 1]:
+            reach[p].add(state)
+            for k in range(len(split) - 1):
+                nxt = state[:k] + (state[k] + size,) + state[k + 1:]
+                if nxt[k] <= targets[k]:
+                    reach[p].add(nxt)
+    exact = tuple(targets[:-1]) in reach[0]
+    for p, gi in enumerate(order):
         members = groups[gi]
         room = [targets[k] - filled[k] for k in range(len(split))]
-        fits = [k for k in range(len(split)) if room[k] >= len(members)] or \
+
+        def keeps_exact(k):
+            rest = [room[j] - (len(members) if j == k else 0) for j in range(len(split))]
+            return rest[k] >= 0 and tuple(rest[:-1]) in reach[p + 1]
+
+        fits = (exact and [k for k in range(len(split)) if keeps_exact(k)]) or \
+               [k for k in range(len(split)) if room[k] >= len(members)] or \
                [k for k in range(len(split)) if room[k] > 0] or list(range(len(split)))
 
         def need(k):

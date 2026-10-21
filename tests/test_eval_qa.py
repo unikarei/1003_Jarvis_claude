@@ -270,6 +270,29 @@ def test_build_keeps_same_fact_groups_in_one_split(db_path):
         assert Counter(i["split"] for i in result.items) == {"dev": 8, "val": 3, "test": 3}
 
 
+@pytest.mark.parametrize("sizes, split", [
+    ((4, 4, 3, 2, 2), (7, 4, 4)),            # 大きい順の貪欲では 8・4・3 になる例
+    ((5, 3, 3, 2, 2), (5, 5, 5)),
+    ((3, 3, 3, 3, 1, 1, 1), (9, 3, 3)),
+])
+def test_assign_splits_matches_counts_when_possible(sizes, split):
+    items = []
+    for g, size in enumerate(sizes):
+        for m in range(size):
+            items.append({"knowledge_id": f"k{g}_{m}", "title": f"群{g}", "key_facts": [f"F{g}_{m}"],
+                          "source": "src"})
+    contents = {i["knowledge_id"]: "無関係な本文" for i in items}
+    for seed in range(10):
+        for i in items:
+            i.pop("split", None)
+        qa.assign_splits(items, contents, split, seed)
+        assert Counter(i["split"] for i in items) == dict(zip(qa.SPLITS, split))
+        by_group = {}
+        for i in items:
+            by_group.setdefault(i["group"], set()).add(i["split"])
+        assert len(by_group) == len(sizes) and all(len(s) == 1 for s in by_group.values())
+
+
 def test_build_rejects_split_not_matching_n(db_path):
     with pytest.raises(ValueError):
         qa.build(n=10, split=(5, 2, 2), llm_complete=fake_llm, answer_check=echo_answer)
