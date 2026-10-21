@@ -249,6 +249,15 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
 - 実行のたびに Task ノード、使ったスキルの Skill ノードへの `uses` エッジ、`meta` に成否・所要時間・振り分けの方法（rule / llm）を記録する。Skill ノードはスキルの `name` と対応させ、既存の 2 件（「ナレッジ質問応答」「コードタスク実行」）は `knowledge-answer`・`code-task` に結び付ける
 - 受け入れ条件: 会話で「民泊の補助金について知ってることは？」→「その出典は？」→「システムの状態は？」→「次にやることは？」に、それぞれ想定したスキルで答える。`local_write` のスキルは確認してから実行する
 
+#### 4-12. ナレッジ回答の評価部門（Evaluation Unit）
+
+全体仕様 `../docs/spec.md` §3.4.10（ADR-0030）を正とし、受け入れ基準は `../docs/testing.md` §12。ここには本リポジトリでの実装の要点だけを書く。
+
+- `evaluation/`（`python -m evaluation build`）: 本番の DB をバックアップの機能で `data/eval/tmp/` に写し、`JARVIS_DB_PATH` をコピーにした子のプロセス（`JARVIS_EVAL_ISOLATED=1`）で処理する。子は本番の場所を指していたら始めない。終わったらコピーを消す（`--keep-copy` で残す）
+- 評価セット（`evaluation/qa.py`、T-1410）: データソース（`knowledge_engine.source_by_knowledge()`、`stats()` と同じ判定）ごとに均等に知識を選び（本文 80 字未満は除く）、ローカル LLM（Ollama）で質問と要点（本文にそのままある語句 1〜3 個）を作る。質問の形は direct・paraphrase・asr・conversational を乱数の種で混ぜる
+- 作問の検証: JSON でない・質問が空や 200 字超・要点の数が違う・要点が本文にない・要点が質問にある・要点がすべてほかの知識 3 件以上にもある・本文と質問だけで Ollama が要点を答えられない、を捨てて理由ごとに数える（比べるときは全角半角・空白・句読点を正規化）。試行は必要数の 3 倍まで
+- 同じ事実の知識（題名の正規化が同じ、または要点の半分以上が相手の本文にある）を 1 つの群にし、群ごとにデータソースの割合を保って dev・val・test（既定 30:15:15）に分ける。`data/eval/qa/<版>.jsonl` と `<版>.meta.json` に保存し、同じ版は上書きしない
+
 ## 4. データモデル
 
 - ノード型: Category / Task / Knowledge / Source / Skill / Agent
