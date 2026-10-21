@@ -286,6 +286,21 @@ def test_claude_estimate_over_limit_does_not_start(env, kids, fake_llm, monkeypa
     assert runner.run(items, provider="claude_warm", max_llm_calls=3, log=logs.append)["llm_calls"] == 3
 
 
+def test_estimate_counts_only_questions_routed_to_answer(env, kids, fake_llm, monkeypatch):
+    fake_search(monkeypatch, {})
+    # 3 問は knowledge-answer、198 問はほかのスキル（雑談）に振り分けられる → 見込みは 3 回で上限 200 の中
+    items = [item(f"q{i}", f"大洗の問{i}", kids[0]) for i in range(3)]
+    items += [item(f"c{i}", "こんにちは", kids[0]) for i in range(198)]
+    logs = []
+    result = runner.run(items, provider="claude_warm", max_llm_calls=200, log=logs.append)
+    assert "見込み: 3 回" in logs[0]
+    assert result["llm_calls_estimate"] == 3 and result["llm_calls"] == 3 and len(fake_llm.prompts) == 3
+    assert len(result["items"]) == 201 and result["stopped"] is None
+    # 見込みの振り分けは評価と同じ設定（tuning）で行う
+    words = Tuning(extra_knowledge_words=("こんにちは",))
+    assert runner.run(items[:4], tuning=words, answer=True, log=logs.append)["llm_calls_estimate"] == 4
+
+
 def test_claude_stops_at_limit_during_run(env, kids, fake_llm, monkeypatch):
     fake_search(monkeypatch, {})
     monkeypatch.setattr(runner, "estimate_llm_calls", lambda items, answer: 0)   # 見込みを外して実行中の上限を試す
@@ -361,8 +376,18 @@ def test_summary_groups_and_report(env, kids, fake_llm, monkeypatch, tmp_path):
                  "## 失敗の多い形", "## 失敗した問（2 問）", "| q3 | 答え |", "| q4 | 検索 |", "## 設定の値",
                  '"search_limit": 8', "段階ごとの時間"):
         assert text in md, text
-    with pytest.raises(FileExistsError):
-        report.write(result, stamp="20261022-120000")      # 上書きしない
+    first_json = json_path.read_text(encoding="utf-8")
+    json2, md2 = report.write(result, stamp="20261022-120000")   # 同じ日時でも上書きせず別名で残す
+    assert (json2.name, md2.name) == ("20261022-120000-2.json", "20261022-120000-2.md")
+    assert json_path.read_text(encoding="utf-8") == first_json and md2.exists()
+    json3, _ = report.write(result, stamp="20261022-120000")
+    assert json3.name == "20261022-120000-3.json"
+
+
+def test_report_default_names_differ_within_same_second(env):
+    result = {"summary": runner.summarize([], False), "items": [], "answer": False}
+    paths = [report.write(result)[0] for _ in range(3)]          # 同じ秒に続けて書いても失敗しない
+    assert len({p.name for p in paths}) == 3 and all(p.exists() for p in paths)
 
 
 def test_two_runs_give_same_retrieval_metrics(env):

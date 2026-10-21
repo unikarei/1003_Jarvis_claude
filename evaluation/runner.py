@@ -52,8 +52,26 @@ def said_none(answer: str) -> bool:
 
 
 def estimate_llm_calls(items: list[dict], answer: bool) -> int:
-    """LLM を呼ぶ回数の見込み（答えを作る問の数。振り分けで外れる問も数える上限の見積もり）。"""
-    return len(items) if answer else 0
+    """LLM を呼ぶ回数の見込み（答えを作る問の数）。
+
+    LLM を使わずに先に振り分け（orchestrator.route(use_llm=False)）、knowledge-answer に進む問だけを数える。
+    振り分けは評価と同じ設定で行うため、tuning.use(t) の中で呼ぶ。振り分けで例外が出る問は答えを作らないので数えない。
+    """
+    if not answer:
+        return 0
+    previous = latency.current()
+    latency.use(None)                                   # 見込みの振り分けは段階の時間に記録しない
+    try:
+        count = 0
+        for item in items:
+            try:
+                skill = orchestrator.route(item["question"], orchestrator.Context(), use_llm=False).skill
+            except Exception:  # noqa: BLE001  本番の振り分けでも落ちる問（答えを作らない）
+                continue
+            count += skill == ANSWER_SKILL
+        return count
+    finally:
+        latency.use(previous)
 
 
 def latency_dir() -> Path:
@@ -128,7 +146,8 @@ def run(items: list[dict], tuning: Tuning = Tuning(), provider: str = "ollama", 
         raise EvalError(f"評価に使えないプロバイダーです: {provider}（{' / '.join(PROVIDERS)} だけ。有料の API は使わない）")
     log = log or (lambda msg: print(msg, file=sys.stderr))
     limited = answer and provider in LIMITED_PROVIDERS
-    estimate = estimate_llm_calls(items, answer)
+    with tuning_lib.use(tuning):                        # 見込みの振り分けも評価と同じ設定で行う
+        estimate = estimate_llm_calls(items, answer)
     log(f"LLM の呼び出しの見込み: {estimate} 回（{provider}"
         + (f"、上限 {max_llm_calls} 回）" if limited else "、上限なし）" if answer else "、答えを作らない）"))
     if limited and estimate > max_llm_calls:

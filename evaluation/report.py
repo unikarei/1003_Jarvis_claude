@@ -97,12 +97,26 @@ def to_markdown(result: dict) -> str:
 
 
 def write(result: dict, out_dir: Path | None = None, stamp: str | None = None) -> tuple[Path, Path]:
-    """<日時>.json と <日時>.md を書いて、そのパスを返す。"""
+    """<日時>.json と <日時>.md を書いて、そのパスを返す。
+
+    日時はマイクロ秒まで。同じ名前がすでにあれば -2, -3 … を付けて別名にする（上書きしない。各実行を別に残す）。
+    """
     out_dir = Path(out_dir or reports_dir())
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = stamp or datetime.now().strftime("%Y%m%d-%H%M%S")
-    json_path, md_path = out_dir / f"{stamp}.json", out_dir / f"{stamp}.md"
-    with open(json_path, "x", encoding="utf-8") as f:
+    stamp = stamp or datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    n = 1
+    while True:
+        name = stamp if n == 1 else f"{stamp}-{n}"
+        json_path, md_path = out_dir / f"{name}.json", out_dir / f"{name}.md"
+        if not md_path.exists():
+            try:
+                f = open(json_path, "x", encoding="utf-8")      # 名前の確保（同時の実行とも衝突しない）
+            except FileExistsError:
+                pass
+            else:
+                break
+        n += 1
+    with f:
         json.dump(for_json(result), f, ensure_ascii=False, indent=2)
         f.write("\n")
     with open(md_path, "x", encoding="utf-8") as f:
