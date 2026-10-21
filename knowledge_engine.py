@@ -237,10 +237,8 @@ def _fetchall_readonly(query: str) -> list[sqlite3.Row]:
         conn.close()
 
 
-def stats(now: datetime | None = None) -> dict:
-    """データソース別・分野別の Knowledge の件数（読み取りだけ）。件数は jarvis.db の Knowledge の数。"""
-    data = registry.load()
-    resources = (data or {}).get("resources") or {}
+def _knowledge_sources(resources: dict) -> list[tuple[sqlite3.Row, str]]:
+    """(Knowledge の行, データソースの ID) の一覧（読み取りだけ）。根拠の Source の URL を優先する。"""
     prefixes = _source_prefixes(resources)
     rows = _fetchall_readonly(
         "SELECT k.id, k.category, k.created_at, k.url AS k_url, "
@@ -248,10 +246,23 @@ def stats(now: datetime | None = None) -> dict:
         " WHERE e.src_id = k.id AND e.type = 'derived_from' ORDER BY s.created_at LIMIT 1) AS s_url, "
         "EXISTS (SELECT 1 FROM edges e WHERE e.src_id = k.id AND e.type = 'derived_from') AS has_source "
         "FROM nodes k WHERE k.type = 'Knowledge'")
+    return [(row, _source_of(row["s_url"] if row["has_source"] else row["k_url"], prefixes)) for row in rows]
+
+
+def source_by_knowledge() -> dict[str, str]:
+    """知識 ID → データソースの ID（stats() と同じ判定。評価部門の層化に使う、T-1410）。"""
+    resources = (registry.load() or {}).get("resources") or {}
+    return {row["id"]: sid for row, sid in _knowledge_sources(resources)}
+
+
+def stats(now: datetime | None = None) -> dict:
+    """データソース別・分野別の Knowledge の件数（読み取りだけ）。件数は jarvis.db の Knowledge の数。"""
+    data = registry.load()
+    resources = (data or {}).get("resources") or {}
+    rows = _knowledge_sources(resources)
     by_source, by_category = {}, {}
-    for row in rows:
-        url = row["s_url"] if row["has_source"] else row["k_url"]
-        for key, table in ((_source_of(url, prefixes), by_source), (row["category"] or NO_CATEGORY, by_category)):
+    for row, sid in rows:
+        for key, table in ((sid, by_source), (row["category"] or NO_CATEGORY, by_category)):
             count, last = table.get(key, (0, None))
             created = row["created_at"]
             table[key] = (count + 1, created if last is None or (created and created > last) else last)

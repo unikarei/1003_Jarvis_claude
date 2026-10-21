@@ -288,6 +288,10 @@
 - [x] T-1405 遅延の記録と起動時の読み込み（ADR-0027、`../docs/testing.md` §11）: `latency.py`（発言ごとに段階 segment・stt・route・search・llm_ready・first_text・first_audio・done の経過ミリ秒と、決まった属性 mode・skill・provider・warm・fallback・ok を `JARVIS_LATENCY_LOG`（既定 `data/latency/latency.jsonl`、5 MB で 1 世代に回す）に 1 行の JSON。本文・音声は記録しない。集計 `python -m latency report`、p50・p95 は最近傍順位法）。`chat.py`・`voice_chat.py`（3 つの形、割り込まれた発言は ok=False）・`orchestrator`・`knowledge_engine`・`llm` から記録。`orchestrator.warm_up()` を会話の起動時に裏のスレッドで呼ぶ（Ollama のモデル・待機させる claude）。実機の計測は PR の後
 - [x] T-1406 実マイクの評価の画面（ADR-0027、`../docs/testing.md` §11）: `python -m acc.voice_eval [--port 8773]`（`acc/voice_settings.py` と同じ守り）。決まった 10 の文を 1 件ずつ録って文字にし、CER（NFKC・空白と句読点・記号を除く編集距離 ÷ 正解の文字数）と段階 segment・stt を返す。`mode="full"` は振り分け・読み取りのスキルだけ実行・最初の 1 文の読み上げで first_audio まで測る（書き込み・確認のいるスキルは実行しない）。結果を `data/voice/eval/<日時>.json`（音声なし）に保存し、CER の平均と first_audio の p50・p95（目標 2 秒・5 秒）の達否を示す。Owner の実マイクでの計測は PR の後
 
+## ナレッジ回答の評価部門（`../docs/spec.md` §3.4.10、ADR-0030、`../docs/tasks.md` §15）
+
+- [x] T-1410 評価セット（疑似 Q&A）の作成と検証: `evaluation/`（`qa.py`・`isolate.py`・`python -m evaluation build`）、`knowledge_engine.source_by_knowledge()`（`stats()` と共有）。本番 DB のコピーでの作成は T-1413
+
 ## Project OS API の再開（`../docs/tasks.md` T-1216・`../docs/project-os-api-restart-plan.md` 案 A、2026-10-16 Owner 承認）
 
 - [x] 送信先を `JARVIS_OARAI_API_BASE`（既定 `http://127.0.0.1:8010`）に。`submit_or_hold()` が API の応答の status で "submitted" を上書きしていた不具合を修正（API の状態は `api_status`）。保留・再送・送信のテスト
