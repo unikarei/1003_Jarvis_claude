@@ -115,6 +115,14 @@ def tuning_from_dict(data: dict) -> Tuning:
     return Tuning(**values)
 
 
+def check_space(t: Tuning) -> None:
+    """設定の全軸が SPACE の中にあることを確かめる（外の値を候補に持ち込まないため）。"""
+    outside = [f"{axis}={label(axis, axis_value(t, axis))!r}" for axis in SPACE
+               if axis_value(t, axis) not in SPACE[axis]]
+    if outside:
+        raise ImproveError(f"始めの設定に探す空間（SPACE）の外の値があります: {', '.join(outside)}")
+
+
 def load_start(path: str | Path) -> Tuning:
     return tuning_from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
@@ -244,6 +252,8 @@ def improve(qa_version: str, max_iterations: int = DEFAULT_MAX_ITERATIONS, *,
             evaluate=None, items: list[dict] | None = None, log=None, write: bool = True) -> dict:
     """改善のループを回し、結果（と書いたファイルのパス）を返す。evaluate を省くと runner.run で評価する。"""
     check_settings(max_iterations, candidates, provider, max_llm_calls)
+    start = start or Tuning()
+    check_space(start)
     log = log or (lambda msg: print(msg, file=sys.stderr))
     items = qa.load(qa_version) if items is None else items
     by_split = {s: [i for i in items if i.get("split") == s] for s in SPLITS}
@@ -277,7 +287,6 @@ def improve(qa_version: str, max_iterations: int = DEFAULT_MAX_ITERATIONS, *,
 
     started = datetime.now()
     rng = random.Random(seed)
-    start = start or Tuning()
     dev, val = tracked(start, "dev"), tracked(start, "val")
     key = score_key(dev)
     start_dev, start_val = dev, val

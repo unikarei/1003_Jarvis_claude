@@ -351,14 +351,26 @@ def test_does_not_change_production_files(eval_dir, tmp_path):
 
 def test_start_setting_from_file(eval_dir, tmp_path):
     path = tmp_path / "start.json"
-    path.write_text(json.dumps({"search_limit": 12, "extra_knowledge_words": ["物件"]}), encoding="utf-8")
+    words = list(improve.EXTRA_KNOWLEDGE_WORDS)
+    path.write_text(json.dumps({"search_limit": 12, "extra_knowledge_words": words}), encoding="utf-8")
     start = improve.load_start(path)
-    assert start == Tuning(search_limit=12, extra_knowledge_words=("物件",))
+    assert start == Tuning(search_limit=12, extra_knowledge_words=tuple(words))
     fake = FakeEval()
     run(fake, start=start, max_iterations=1)
     assert fake.calls[0] == (start, "dev")
     with pytest.raises(ValueError):
         improve.tuning_from_dict({"unknown": 1})
+
+
+@pytest.mark.parametrize("values", [{"search_limit": 99}, {"context_chars": 2000}, {"score_threshold": 7.0},
+                                    {"extra_knowledge_words": ["物件"]}, {"synonyms": {"a": ["b"]}},
+                                    {"answer_prompt": "other"}])
+def test_start_outside_space_is_error(eval_dir, values):
+    # 開始の設定に SPACE の外の値があれば評価を始めない（外の値を候補に持ち込まない）
+    fake = FakeEval()
+    with pytest.raises(improve.ImproveError):
+        run(fake, start=improve.tuning_from_dict(values))
+    assert fake.calls == []
 
 
 # ---------------------------------------------------------------- 同義語の辞書
@@ -436,6 +448,9 @@ def test_cli_checks_arguments_before_copying(cli_env, monkeypatch, tmp_path):
     assert cli.main(["improve", "--qa", "qa-e", "--candidates", "5"]) == 2
     assert cli.main(["improve", "--qa", "qa-e", "--provider", "anthropic_api"]) == 2
     assert cli.main(["improve", "--qa", "qa-e", "--start", str(tmp_path / "none.json")]) == 2
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps({"search_limit": 99}), encoding="utf-8")
+    assert cli.main(["improve", "--qa", "qa-e", "--start", str(outside)]) == 2
     assert copied == []
     start = tmp_path / "s.json"
     start.write_text(json.dumps({"search_limit": 6}), encoding="utf-8")

@@ -105,9 +105,13 @@ def _check(args) -> str | None:
             return str(e)
         if args.start:
             try:
-                improve.load_start(args.start)
+                start = improve.load_start(args.start)
             except (OSError, ValueError, TypeError) as e:
                 return f"--start の設定を読めません: {e}"
+            try:
+                improve.check_space(start)
+            except improve.ImproveError as e:
+                return str(e)
     return None
 
 
