@@ -292,6 +292,7 @@
 
 - [x] T-1410 評価セット（疑似 Q&A）の作成と検証: `evaluation/`（`qa.py`・`isolate.py`・`python -m evaluation build`）、`knowledge_engine.source_by_knowledge()`（`stats()` と共有）。本番 DB のコピーでの作成は T-1413
 - [x] T-1411 評価の実行・指標・レポート: `tuning.py`（調整できる値。本番のコードが読み、既定は今の動き）、`evaluation/runner.py`（振り分け・順位・recall・MRR・要点の一致・「ない」・段階ごとの時間・落ちた段階、総合点 score / score_retrieval）、`evaluation/report.py`（JSON・Markdown）、`python -m evaluation run`。本番 DB のコピーでの計測は T-1413
+- [x] T-1412 改善のループ: `evaluation/improve.py`（決めた設定の空間 `SPACE`、dev の失敗の傾向から 1 つの軸だけを変えた候補を最大 4 個、dev で `MIN_GAIN` 0.01 以上の最良を val で確かめ `VAL_TOLERANCE` 0.01 を超えて下がれば不採用、既定 3 回・上限 5 回・採用のない回で停止、test はループの後に 1 度だけ）、`evaluation/synonyms.json`（同義語の辞書）、`python -m evaluation improve`。結果は `data/eval/tuned/<日時>.json` と `data/eval/reports/<日時>-improve.md`（本番の設定は変えない）。本番 DB のコピーでの実行と反映の PR は T-1413
 
 ## Project OS API の再開（`../docs/tasks.md` T-1216・`../docs/project-os-api-restart-plan.md` 案 A、2026-10-16 Owner 承認）
 
