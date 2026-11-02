@@ -34,7 +34,20 @@ def eval_dir(tmp_path, monkeypatch):
     return path
 
 
+@pytest.fixture(autouse=True)
+def subject_ok(monkeypatch):
+    """対象の名前の確認（T-1414）の既定の LLM を「はい」と答える偽物にする（本物の Ollama を呼ばない）。"""
+    asked = []
+    monkeypatch.setattr(qa, "_default_subject_check", lambda question: asked.append(question) or "はい")
+    return asked
+
+
 _seq = iter(range(1, 10 ** 6))
+
+
+def title(i: int) -> str:
+    """数字を含まない題名（数字を除くと同じになる題名は、繰り返し作られる系列として選ばれないため）。"""
+    return "題名" + "".join("abcdefghij"[int(c)] for c in str(i))
 
 
 def add(title, content, url):
@@ -55,7 +68,7 @@ def populate(counts):
     for prefix, count in counts.items():
         for _ in range(count):
             i += 1
-            ids.append(add(f"題名{i}", body(f"KEY{i:03d}"), f"{prefix}{i}.md"))
+            ids.append(add(title(i), body(f"KEY{i:03d}"), f"{prefix}{i}.md"))
     return ids
 
 
@@ -191,9 +204,9 @@ def test_build_counts_reject_reasons(db_path):
 
     def fake(prompt):
         for kid, text in bad.items():
-            if f"題名{ids.index(kid) + 1}\n" in prompt:
+            if f"{title(ids.index(kid) + 1)}\n" in prompt:
                 return text
-        if "題名4\n" in prompt:
+        if f"{title(4)}\n" in prompt:
             raise llm.LLMError("落ちた")
         return fake_llm(prompt)
 
@@ -209,7 +222,7 @@ def test_build_counts_reject_reasons(db_path):
 
 def test_build_rejects_ambiguous_facts(db_path):
     for i in range(qa.AMBIGUOUS_SOURCES + 1):
-        add(f"共通{i}", body("KEY900"), f"{WEB}{i}")
+        add(f"共通{'abcdefghij'[i]}", body("KEY900"), f"{WEB}{i}")
     result = qa.build(n=3, seed=0, split=(1, 1, 1), llm_complete=fake_llm, answer_check=echo_answer)
     assert result.items == []
     assert result.info["rejected"] == {"ambiguous": qa.AMBIGUOUS_SOURCES + 1}
@@ -250,19 +263,19 @@ def test_build_stops_at_attempt_limit(db_path):
 
 
 def test_build_keeps_same_fact_groups_in_one_split(db_path):
-    populate({WEB: 5, OBSIDIAN: 5})
+    populate({WEB: 6, OBSIDIAN: 6})
+    # 題名の正規化が同じ知識は、繰り返し作られる系列として選ばない（T-1414）。題名による群は下の assign_splits で確かめる
     same_a = add("大洗_物件概要", body("KEY101"), OBSIDIAN + "a.md")
-    same_b = add("大洗 物件概要", body("KEY102"), JK + "b.md")                  # 題名の正規化が同じ
+    same_b = add("大洗 物件概要", body("KEY102"), JK + "b.md")
     over_a = add("物件の価格", body("KEY201"), WEB + "p")
     over_b = add("物件の価格の記録", body("KEY201", "KEY202"), JK + "q.md")      # 要点が重なる
     for seed in range(5):
         result = qa.build(n=14, seed=seed, split=(8, 3, 3), llm_complete=fake_llm, answer_check=echo_answer)
         by_k = {i["knowledge_id"]: i for i in result.items}
         assert len(result.items) == 14
-        for a, b in ((same_a, same_b), (over_a, over_b)):
-            assert by_k[a]["group"] == by_k[b]["group"]
-            assert by_k[a]["split"] == by_k[b]["split"]
-        assert by_k[same_a]["group"] != by_k[over_a]["group"]
+        assert same_a not in by_k and same_b not in by_k
+        assert by_k[over_a]["group"] == by_k[over_b]["group"]
+        assert by_k[over_a]["split"] == by_k[over_b]["split"]
         splits = {}
         for i in result.items:
             splits.setdefault(i["group"], set()).add(i["split"])
@@ -291,6 +304,15 @@ def test_assign_splits_matches_counts_when_possible(sizes, split):
         for i in items:
             by_group.setdefault(i["group"], set()).add(i["split"])
         assert len(by_group) == len(sizes) and all(len(s) == 1 for s in by_group.values())
+
+
+def test_assign_splits_groups_same_title():
+    items = [{"knowledge_id": "a", "title": "大洗_物件概要", "key_facts": ["F1"], "source": "s"},
+             {"knowledge_id": "b", "title": "大洗 物件概要", "key_facts": ["F2"], "source": "s"},   # 題名の正規化が同じ
+             {"knowledge_id": "c", "title": "別の題名", "key_facts": ["F3"], "source": "s"}]
+    qa.assign_splits(items, {i["knowledge_id"]: "無関係な本文" for i in items}, (2, 1, 0), 0)
+    a, b, c = items
+    assert a["group"] == b["group"] != c["group"] and a["split"] == b["split"] == "dev" and c["split"] == "val"
 
 
 def test_build_rejects_split_not_matching_n(db_path):
@@ -423,3 +445,121 @@ def test_cli_build_end_to_end_in_child(db_path, eval_dir, capfd):
     assert meta["llm"]["generate"].startswith("ollama:")
     assert list((eval_dir / "tmp").iterdir()) == []         # コピーは消えた
     assert _snapshot(db_path) == before
+
+
+# --- 作問の規則の版 2（T-1414） ---
+
+def test_prompt_asks_for_subject_and_short_facts():
+    assert "何についての質問か" in qa.PROMPT and "「この〜」「その〜」「例の〜」「あの〜」だけで指さない" in qa.PROMPT
+    assert "30 字以内" in qa.PROMPT
+
+
+def test_validate_rejects_too_long_fact():
+    long_fact = "あ" * (qa.MAX_FACT_CHARS + 1)
+    exact = "い" * qa.MAX_FACT_CHARS
+    content = CONTENT + exact
+    assert qa.validate(item(facts=(long_fact,)), content, echo_answer) == "fact_too_long"
+    assert qa.validate(item(facts=(exact,)), content, echo_answer) is None             # ちょうど 30 字は残す
+    # 正規化の前の文字数で数える（空白・句読点も数える）
+    assert qa.validate(item(facts=("い " * 16,)), content + "い " * 16, echo_answer) == "fact_too_long"
+    # 数の検証が先、本文にあるかの検証より前
+    assert qa.validate(item(facts=("大洗町", "木造", "所在地", long_fact)), content, echo_answer) == "key_facts_count"
+    assert qa.validate(item(facts=("千葉県", long_fact)), content, echo_answer) == "fact_too_long"
+
+
+def test_validate_rejects_question_without_subject(subject_ok):
+    asked = []
+
+    def check(answer):
+        def f(question):
+            asked.append(question)
+            return answer
+        return f
+
+    assert qa.validate(item(), CONTENT, echo_answer, subject_check=check("いいえ")) == "no_subject"
+    assert asked == ["大洗の物件の住所は？"]                       # 質問だけを渡す
+    assert qa.validate(item(), CONTENT, echo_answer, subject_check=check("わかりません。はい")) == "no_subject"
+    assert qa.validate(item(), CONTENT, echo_answer, subject_check=check(" はい、大洗の物件です")) is None
+    # ambiguous の後、not_answerable の前
+    others = [qa.normalize(f"別の知識 {i} 茨城県東茨城郡大洗町") for i in range(qa.AMBIGUOUS_SOURCES)]
+    assert qa.validate(item(), CONTENT, echo_answer, others, subject_check=check("いいえ")) == "ambiguous"
+    answered = []
+    unsure = lambda q, c: answered.append(q) or "不明"   # noqa: E731
+    assert qa.validate(item(), CONTENT, unsure, subject_check=check("いいえ")) == "no_subject" and answered == []
+    # 省くと既定の確認（テストでは偽物）を使う
+    assert qa.validate(item(), CONTENT, echo_answer) is None and subject_ok == ["大洗の物件の住所は？"]
+
+
+def test_build_counts_too_long_and_no_subject(db_path):
+    ids = populate({WEB: 4})
+
+    def fake(prompt):
+        if f"{title(1)}\n" in prompt:
+            return json.dumps({"question": "大洗の件は？", "key_facts": ["KEY001" + "あ" * 30]}, ensure_ascii=False)
+        return fake_llm(prompt)
+
+    def subject(question):
+        return "いいえ" if question == "あの件はどうなっていたっけ" else "はい"   # 対象の名前がない
+
+    result = qa.build(n=3, seed=0, split=(1, 1, 1), llm_complete=fake, answer_check=echo_answer, subject_check=subject)
+    assert result.items == [] and result.info["attempts"] == len(ids)
+    assert result.info["rejected"] == {"fact_too_long": 1, "no_subject": 3}
+    assert "no_subject" in qa.REJECT_REASONS and "fact_too_long" in qa.REJECT_REASONS
+
+
+def test_select_excludes_repeated_series(db_path):
+    weekly = [add(f"週次の集客レポート {d}", body(f"KEY80{i}"), f"{WEB}w{i}")
+              for i, d in enumerate(("2026-10-05", "2026-10-12T06:00:00+09:00", "2026.10.19"))]
+    pair = [add("決算の要約 第1回", body("KEY901"), f"{WEB}p1"), add("決算の要約 第2回", body("KEY902"), f"{WEB}p2")]
+    single = add("月次の売上 2026-10", body("KEY950"), f"{WEB}s")      # 1 件だけなら選ぶ
+    other = add("大洗の物件概要", body("KEY960"), f"{WEB}o")
+    short = add("短い本文 2026-10-01", "短い", f"{WEB}x1")              # 本文が短い知識も系列の数には入る
+    add("短い本文 2026-10-08", body("KEY970"), f"{WEB}x2")
+    stats = {}
+    picked = {k["id"] for k in qa.select_knowledge(100, seed=0, stats=stats)}
+    assert picked == {single, other}
+    assert not picked & set(weekly + pair) and short not in picked
+    assert stats["excluded_series"] == 6                                # 本文が短くて元々選ばない 1 件は数えない
+    assert qa.series_key("週次 2026-10-12T06:00:00+09:00") == qa.series_key("週次 2026/10/05") == "週次"
+    assert qa.series_key("GPT の T 型") == qa.normalize("GPT の T 型")      # 数字に挟まれない T は残す
+    assert qa.select_knowledge(100, seed=0) == qa.select_knowledge(100, seed=0)   # stats を省いてもよい
+
+
+def test_meta_has_rules_and_excluded_series(db_path, eval_dir):
+    populate({WEB: 3, OBSIDIAN: 3})
+    add("週次レポート 2026-10-05", body("KEY801"), f"{WEB}w1")
+    add("週次レポート 2026-10-12", body("KEY802"), f"{WEB}w2")
+    result = qa.build(n=6, seed=0, split=(2, 2, 2), llm_complete=fake_llm, answer_check=echo_answer)
+    assert (result.info["rules"], result.info["excluded_series"]) == (2, 2) and qa.RULES == 2
+    qa.save(result.items, "qa-rules2", result.info)
+    meta = qa.load_meta("qa-rules2")
+    assert (meta["rules"], meta["excluded_series"], meta["count"]) == (2, 2, 6)
+
+
+def test_old_version_without_rules_still_loads(eval_dir):
+    folder = eval_dir / "qa"
+    folder.mkdir(parents=True)
+    old = {"id": "q001", "question": "あの件は？", "key_facts": ["KEY1"], "knowledge_id": "k1", "title": "t",
+           "source": "web", "style": "direct", "group": "g000", "split": "dev"}
+    (folder / "qa-old.jsonl").write_text(json.dumps(old, ensure_ascii=False) + "\n", encoding="utf-8")
+    (folder / "qa-old.meta.json").write_text(json.dumps({"version": "qa-old", "count": 1}), encoding="utf-8")
+    assert qa.exists("qa-old") and qa.load("qa-old") == [old]
+    assert "rules" not in qa.load_meta("qa-old")
+
+
+def test_build_calls_ollama_with_fixed_options(db_path):
+    populate({WEB: 3})
+    seen = []
+
+    def fake(prompt):
+        seen.append(llm._ollama_chat_payload("x", stream=False).get("options"))
+        return fake_llm(prompt)
+
+    def answer(question, content):
+        seen.append(llm._ollama_chat_payload("x", stream=False).get("options"))
+        return content
+
+    qa.build(n=3, seed=0, split=(1, 1, 1), llm_complete=fake, answer_check=answer)
+    assert seen and all(o == {"temperature": 0, "seed": evaluation.EVAL_LLM_SEED} for o in seen)
+    assert evaluation.EVAL_LLM_SEED == 0
+    assert "options" not in llm._ollama_chat_payload("x", stream=False)      # 終わったら元に戻る

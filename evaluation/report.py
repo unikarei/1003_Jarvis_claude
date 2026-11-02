@@ -15,7 +15,7 @@ ANSWER_CHARS = 300
 FAILED_AT = {"route": "振り分け", "search": "検索", "answer": "答え"}
 COLUMNS = (("件数", "count"), ("振り分け", "route_acc"), ("recall@1", "recall@1"), ("recall@3", "recall@3"),
            ("recall@8", "recall@8"), ("recall_eff", "recall_eff"), ("MRR", "mrr"), ("要点", "facts_hit"),
-           ("「ない」", "none_rate"), ("秒 p50", "seconds_p50"), ("秒 p95", "seconds_p95"),
+           ("facts_hit_strict", "facts_hit_strict"), ("「ない」", "none_rate"), ("秒 p50", "seconds_p50"), ("秒 p95", "seconds_p95"),
            ("score", "score"), ("score_retrieval", "score_retrieval"))
 
 
@@ -48,6 +48,18 @@ def _table(rows: dict[str, dict], label: str) -> list[str]:
     return lines
 
 
+def _escape(text) -> str:
+    return (text or "").replace("|", "｜").replace("\n", " ")
+
+
+def _fact_matches(r: dict) -> str:
+    """要点ごとの一致の方法（「要点: exact」の形。外れた要点は「×」）。答えを作っていなければ「-」。"""
+    matches = r.get("fact_match")
+    if not matches:
+        return "-"
+    return "<br>".join(f"{_escape(f)}: {m or '×'}" for f, m in zip(r.get("key_facts") or [], matches))
+
+
 def _worst(rows: dict[str, dict], key: str) -> list[str]:
     """失敗の多い順（総合点の低い順）。"""
     ranked = sorted(rows.items(), key=lambda kv: (kv[1].get(key) if kv[1].get(key) is not None else 0, kv[0]))
@@ -63,13 +75,16 @@ def to_markdown(result: dict) -> str:
              f"- 答え: {'作る' if result.get('answer') else '作らない（振り分けと検索だけ）'}、"
              f"プロバイダー: {result.get('provider')}",
              f"- LLM の呼び出し: {result.get('llm_calls')} 回（見込み {result.get('llm_calls_estimate')} 回"
-             + (f"、上限 {result['max_llm_calls']} 回" if result.get("max_llm_calls") else "") + "）"]
+             + (f"、上限 {result['max_llm_calls']} 回" if result.get("max_llm_calls") else "") + "）"
+             + (f"、判定 {result.get('judge_calls', 0)} 回（{result['judge']}）" if result.get("judge") else "")]
     if result.get("stopped"):
         lines.append(f"- **途中で止めました**（{result['stopped']}）。集計は終わった問だけ")
     if result.get("source_db"):
         lines.append(f"- 元の DB: {result['source_db']}（コピー {result.get('copied_at') or '-'}）")
     lines += ["", f"採否に使う点: `{key}`（score = 0.2×振り分け + 0.3×recall_eff + 0.5×要点、"
                   "score_retrieval = 0.4×振り分け + 0.6×recall_eff。recall@8 は診断用）", "",
+              "要点の一致: 文字の一致（exact）→ 2 文字の組の重なり（bigram）→ ローカル LLM の判定（judge）。"
+              "facts_hit_strict は文字の一致だけの割合", "",
               "## 集計", ""]
     lines += _table({"全体": s["overall"]}, "")
     for title, name in (("組別", "by_split"), ("データソース別", "by_source"), ("形別", "by_style")):
@@ -83,12 +98,14 @@ def to_markdown(result: dict) -> str:
     failed = [r for r in result["items"] if r.get("failed_at")]
     lines += ["", f"## 失敗した問（{len(failed)} 問）", ""]
     if failed:
-        lines += ["| ID | 落ちた段階 | 振り分け先 | 順位 | 要点 | データソース | 形 | 質問 |", "|---|---|---|---|---|---|---|---|"]
+        lines += ["| ID | 落ちた段階 | 振り分け先 | 順位 | 要点 | 要点ごとの一致 | データソース | 形 | 質問 |",
+                  "|---|---|---|---|---|---|---|---|---|"]
         for r in failed:
             stage = FAILED_AT.get(r["failed_at"], r["failed_at"]) + (f"（{r['error']}）" if r.get("error") else "")
-            question = (r.get("question") or "").replace("|", "｜").replace("\n", " ")
+            question = _escape(r.get("question"))
             lines.append(f"| {r['id']} | {stage} | {r.get('skill') or '-'} | {_cell(r.get('rank'))} | "
-                         f"{_cell(r.get('facts_hit'))} | {r['source']} | {r['style']} | {question} |")
+                         f"{_cell(r.get('facts_hit'))} | {_fact_matches(r)} | {r['source']} | {r['style']} | "
+                         f"{question} |")
     else:
         lines.append("なし")
     lines += ["", "## 設定の値", "", "```json", json.dumps(result.get("tuning", {}), ensure_ascii=False, indent=2),

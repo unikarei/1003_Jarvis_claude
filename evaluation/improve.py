@@ -31,7 +31,7 @@ EXTRA_KNOWLEDGE_WORDS = ("住所", "所在地", "物件", "図面", "Obsidian", 
 DEFAULT_MAX_ITERATIONS = 3
 MAX_ITERATIONS_LIMIT = 5
 CANDIDATES_PER_ITERATION = 4
-MIN_GAIN = 0.01          # dev の総合点がこれ以上上がった候補だけを選ぶ
+MIN_GAIN = 0.03          # dev の総合点がこれ以上上がった候補だけを選ぶ（答えの揺れ 0.029 より大きく、T-1414）
 VAL_TOLERANCE = 0.01     # val の総合点がこれを超えて下がるなら採用しない
 EPS = 1e-9               # 浮動小数の比較の誤差
 # 落ちた段階 → 優先して変える軸（dev の失敗の多い段階から順に）
@@ -249,8 +249,9 @@ def check_settings(max_iterations: int, candidates: int, provider: str, max_llm_
 def improve(qa_version: str, max_iterations: int = DEFAULT_MAX_ITERATIONS, *,
             candidates: int = CANDIDATES_PER_ITERATION, answer: bool = True, provider: str = "ollama",
             max_llm_calls: int = runner.DEFAULT_MAX_LLM_CALLS, start: Tuning | None = None, seed: int = 0,
-            evaluate=None, items: list[dict] | None = None, log=None, write: bool = True) -> dict:
-    """改善のループを回し、結果（と書いたファイルのパス）を返す。evaluate を省くと runner.run で評価する。"""
+            evaluate=None, items: list[dict] | None = None, log=None, write: bool = True, judge=False) -> dict:
+    """改善のループを回し、結果（と書いたファイルのパス）を返す。evaluate を省くと runner.run で評価する。
+    judge は runner.run と同じ（要点の LLM の判定。常に Ollama で、Claude の上限に数えない。CLI の既定は判定する）。"""
     check_settings(max_iterations, candidates, provider, max_llm_calls)
     start = start or Tuning()
     check_space(start)
@@ -260,26 +261,29 @@ def improve(qa_version: str, max_iterations: int = DEFAULT_MAX_ITERATIONS, *,
     counts = {s: len(v) for s, v in by_split.items()}
     limited = answer and provider in runner.LIMITED_PROVIDERS
     estimate = estimate_llm_calls(counts, max_iterations, candidates, answer)
+    judging = bool(judge) and answer
     log(f"LLM の呼び出しの見込み: 最大 {estimate} 回（dev {counts['dev']}・val {counts['val']}・test {counts['test']} 問、"
         f"{max_iterations} 回 × 候補 {candidates} 個、{provider}"
-        + (f"、上限 {max_llm_calls} 回）" if limited else "、上限なし）" if answer else "、答えを作らない）"))
+        + (f"、上限 {max_llm_calls} 回）" if limited else "、上限なし）" if answer else "、答えを作らない）")
+        + (f"、判定 最大 {estimate} 回（{runner.JUDGE_PROVIDER}）" if judging else ""))
     if limited and estimate > max_llm_calls:
         raise ImproveError(f"LLM の呼び出しの見込み（{estimate} 回）が上限（{max_llm_calls} 回）を超えるため始めません。"
                            "--max-iterations・--candidates を減らすか、--no-answer（振り分けと検索だけ）、"
                            "または --provider ollama を使ってください")
 
-    calls = {"total": 0, "evaluations": 0}
+    calls = {"total": 0, "evaluations": 0, "judge": 0}
 
     def run_split(t: Tuning, split: str) -> dict:
         remaining = max(max_llm_calls - calls["total"], 0) if limited else max_llm_calls
         return runner.run(by_split[split], tuning=t, provider=provider, answer=answer,
-                          max_llm_calls=remaining, log=lambda msg: None)
+                          max_llm_calls=remaining, log=lambda msg: None, judge=judge)
 
     base_evaluate = evaluate or run_split
 
     def tracked(t: Tuning, split: str) -> dict:
         r = base_evaluate(t, split)
-        calls["total"] += r.get("llm_calls") or 0
+        calls["total"] += r.get("llm_calls") or 0          # 判定の呼び出しは Claude の上限に数えない
+        calls["judge"] += r.get("judge_calls") or 0
         calls["evaluations"] += 1
         if r.get("stopped"):
             raise ImproveError(f"評価が途中で止まりました（{r['stopped']}）")
@@ -325,7 +329,8 @@ def improve(qa_version: str, max_iterations: int = DEFAULT_MAX_ITERATIONS, *,
                       "final": {"dev": dev.get("summary"), "val": val.get("summary"), "test": test_final.get("summary")}},
         "iterations": iterations, "iterations_run": len(iterations), "stopped": stopped,
         "evaluations": calls["evaluations"], "llm_calls": calls["total"], "llm_calls_estimate": estimate,
-        "max_llm_calls": max_llm_calls if limited else None, **isolate.source_info(),
+        "max_llm_calls": max_llm_calls if limited else None,
+        "judge": runner.JUDGE_PROVIDER if judging else None, "judge_calls": calls["judge"], **isolate.source_info(),
     }
     if write:
         json_path, md_path = write_result(result)
@@ -407,14 +412,15 @@ def to_markdown(result: dict) -> str:
              f"MIN_GAIN {st['min_gain']}、VAL_TOLERANCE {st['val_tolerance']}、seed {st['seed']}",
              f"- LLM の呼び出し: {result['llm_calls']} 回（見込み 最大 {result['llm_calls_estimate']} 回"
              + (f"、上限 {result['max_llm_calls']} 回" if result.get("max_llm_calls") is not None else "") + "）、"
-             f"評価 {result['evaluations']} 回",
+             + (f"判定 {result.get('judge_calls', 0)} 回（{result['judge']}）、" if result.get("judge") else "")
+             + f"評価 {result['evaluations']} 回",
              f"- 問の数: " + "・".join(f"{s} {result['counts'].get(s, 0)}" for s in SPLITS)]
     if result.get("source_db"):
         lines.append(f"- 元の DB: {result['source_db']}（コピー {result.get('copied_at') or '-'}）")
     lines += ["", "過学習の防止: 評価セットは同じ版を使い、候補の手がかりは dev の失敗の傾向だけ。val は各回の採否に 1 度だけ、"
                   "test はループの後に 1 度だけ測り、設定の選択に使わない。本番の設定への反映は PR で行う。", "",
               "## 前後の比較", "", "| 組 | 指標 | 始め | 終わり | 差 |", "|---|---|---|---|---|"]
-    metrics = [key, "route_acc", "recall_eff", "mrr"] + (["facts_hit", "none_rate"] if result["answer"] else [])
+    metrics = [key, "route_acc", "recall_eff", "mrr"] + (["facts_hit", "facts_hit_strict", "none_rate"] if result["answer"] else [])
     for split in SPLITS:
         before = ((result["summaries"]["start"].get(split) or {}).get("overall")) or {}
         after = ((result["summaries"]["final"].get(split) or {}).get("overall")) or {}
