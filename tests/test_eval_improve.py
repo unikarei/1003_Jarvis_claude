@@ -122,6 +122,46 @@ def test_gain_below_min_gain_is_not_selected(eval_dir):
     assert fake.splits("val") == [Tuning()]          # 選んだ候補がないので val は始めの 1 度だけ
 
 
+def test_min_gain_is_above_answer_noise(eval_dir):
+    # 答えの揺れだけで点が 0.029 動いた（T-1413）ので、dev が 0.02 上がるだけの候補は採用しない
+    assert improve.MIN_GAIN == 0.03 and improve.VAL_TOLERANCE == 0.01
+    fake = FakeEval(score=lambda t, split: BASE + 0.02 * len(changed_axes(t)))
+    result = run(fake)
+    assert result["iterations_run"] == 1 and not result["changes"] and result["stopped"] == "no_adoption"
+    assert all(c["gain"] == pytest.approx(0.02) for c in result["iterations"][0]["candidates"])
+    assert fake.splits("val") == [Tuning()]
+    # 0.03 上がる候補は選ぶ
+    assert run(FakeEval(score=lambda t, split: BASE + 0.03 * len(changed_axes(t))), max_iterations=1)["changes"]
+    assert result["settings"]["min_gain"] == 0.03
+
+
+def test_judge_is_passed_to_runner_and_counted_separately(eval_dir, monkeypatch):
+    calls = []
+
+    def fake_run(items, tuning=None, provider=None, answer=True, max_llm_calls=0, log=None, judge=False):
+        calls.append((judge, provider, max_llm_calls))
+        result = fake_result(BASE, {"answer": 1}, answer, len(items))
+        result["judge_calls"] = len(items) if judge and answer else 0
+        return result
+    monkeypatch.setattr(improve.runner, "run", fake_run)
+    logs = []
+    items = make_items(2, 1, 1)
+    result = improve.improve("qa-t", max_iterations=1, candidates=1, provider="claude_warm", max_llm_calls=8,
+                             items=items, log=logs.append, judge=True)
+    assert calls and all(j is True for j, _, _ in calls)
+    # 判定の呼び出しは Claude の上限に数えない（llm_calls と別に数える）
+    assert result["judge"] == "ollama" and result["judge_calls"] == result["llm_calls"] > 0
+    assert "判定 最大" in logs[0] and "（ollama）" in logs[0]
+    assert "判定" in improve.to_markdown(result)
+    calls.clear()
+    off = improve.improve("qa-t", max_iterations=1, candidates=1, items=items, log=logs.append, write=False)
+    assert all(j is False for j, _, _ in calls) and off["judge"] is None and off["judge_calls"] == 0
+    first = len(logs)
+    no_answer = improve.improve("qa-t", max_iterations=1, candidates=1, items=items, log=logs.append,
+                                answer=False, judge=True, write=False)
+    assert no_answer["judge"] is None and no_answer["judge_calls"] == 0 and "判定" not in logs[first]
+
+
 # ---------------------------------------------------------------- val による採否
 
 def test_candidate_that_drops_val_beyond_tolerance_is_rejected(eval_dir):

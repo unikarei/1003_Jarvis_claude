@@ -84,6 +84,61 @@ def test_ollama_complete_returns_full_text_and_sends_expected_json(ollama):
                     "think": False, "keep_alive": "30m"}
 
 
+EXPECTED_PAYLOAD = {"model": "gemma4:12b", "messages": [{"role": "user", "content": "質問"}], "stream": False,
+                    "think": False, "keep_alive": "30m"}
+
+
+def test_ollama_options_only_inside_context(ollama):
+    """評価の間だけ Ollama のオプションを足す（T-1414）。外のペイロードは今までと同じ。"""
+    llm.complete("質問", provider="ollama")
+    assert ollama.requests[-1][2] == EXPECTED_PAYLOAD
+    with llm.ollama_options({"temperature": 0, "seed": 0}):
+        llm.complete("質問", provider="ollama")
+        assert ollama.requests[-1][2] == {**EXPECTED_PAYLOAD, "options": {"temperature": 0, "seed": 0}}
+        assert llm._ollama_chat_payload("質問", stream=True)["options"] == {"temperature": 0, "seed": 0}
+    llm.complete("質問", provider="ollama")
+    assert ollama.requests[-1][2] == EXPECTED_PAYLOAD
+    assert llm._ollama_chat_payload("質問", stream=True) == {**EXPECTED_PAYLOAD, "stream": True}
+
+
+def test_ollama_options_stream_inside_context(ollama):
+    def stream(h, body):
+        _start_stream(h)
+        h.wfile.write(_line("答え", done=True))
+    ollama.on_post = stream
+    with llm.ollama_options({"temperature": 0, "seed": 0}):
+        assert llm.complete_stream("質問", lambda t: None, provider="ollama") == "答え"
+    assert ollama.requests[-1][2] == {**EXPECTED_PAYLOAD, "stream": True, "options": {"temperature": 0, "seed": 0}}
+
+
+def test_ollama_options_restore_on_error_and_nested():
+    base = llm._ollama_chat_payload("質問", stream=False)
+    assert "options" not in base
+    with pytest.raises(ZeroDivisionError):
+        with llm.ollama_options({"temperature": 0}):
+            1 / 0
+    assert llm._ollama_chat_payload("質問", stream=False) == base
+    with llm.ollama_options({"temperature": 0, "seed": 1}):
+        with llm.ollama_options({"seed": 2}):
+            assert llm._ollama_chat_payload("質問", stream=False)["options"] == {"seed": 2}
+        assert llm._ollama_chat_payload("質問", stream=False)["options"] == {"temperature": 0, "seed": 1}
+        with pytest.raises(RuntimeError):
+            with llm.ollama_options({"seed": 3}):
+                raise RuntimeError("内側の失敗")
+        assert llm._ollama_chat_payload("質問", stream=False)["options"] == {"temperature": 0, "seed": 1}
+    assert llm._ollama_chat_payload("質問", stream=False) == base
+
+
+def test_ollama_options_seen_from_other_threads():
+    """逐次出力の読み取りのように別のスレッドで組み立てても効く（モジュールの変数で持つ）。"""
+    seen = []
+    with llm.ollama_options({"seed": 0}):
+        t = threading.Thread(target=lambda: seen.append(llm._ollama_chat_payload("q", stream=True).get("options")))
+        t.start()
+        t.join()
+    assert seen == [{"seed": 0}]
+
+
 def test_ollama_stream_passes_each_delta(ollama):
     def stream(h, body):
         _start_stream(h)

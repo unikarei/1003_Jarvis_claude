@@ -2,6 +2,7 @@
 
 import atexit
 import codecs
+import contextlib
 import http.client
 import json
 import os
@@ -349,11 +350,29 @@ def _complete_claude_warm(prompt: str, timeout: int | None = None) -> str:
 # 失敗しても別のプロバイダー（有料の API を含む）には切り替えない。切り替えは呼び出し側が決める。
 
 OLLAMA_KEEP_ALIVE = "30m"
+# ollama_options() の中だけ Ollama の要求に足すオプション（評価の temperature・seed、T-1414）。
+# 逐次出力の読み取りは別のスレッドで動くため、スレッドごとの値ではなくモジュールの変数で持つ
+_ollama_extra_options: dict | None = None
+
+
+@contextlib.contextmanager
+def ollama_options(options: dict):
+    """この中で送る Ollama の要求に "options" を足す。出るとき（例外でも）元に戻す。入れ子は外側の値に戻す。"""
+    global _ollama_extra_options
+    previous = _ollama_extra_options
+    _ollama_extra_options = dict(options)
+    try:
+        yield
+    finally:
+        _ollama_extra_options = previous
 
 
 def _ollama_chat_payload(prompt: str, stream: bool) -> dict:
-    return {"model": CHAT_MODEL, "messages": [{"role": "user", "content": prompt}], "stream": stream,
-            "think": False, "keep_alive": OLLAMA_KEEP_ALIVE}
+    payload = {"model": CHAT_MODEL, "messages": [{"role": "user", "content": prompt}], "stream": stream,
+               "think": False, "keep_alive": OLLAMA_KEEP_ALIVE}
+    if _ollama_extra_options:                      # 設定していないときは今までと同じ要求
+        payload["options"] = dict(_ollama_extra_options)
+    return payload
 
 
 def _http_error_detail(error) -> str:

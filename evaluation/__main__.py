@@ -1,9 +1,9 @@
 """評価部門の CLI（../docs/spec.md §3.4.10、T-1410）。
 
     python -m evaluation build [--n 60] [--seed 0] [--version V] [--split 30,15,15] [--db <パス>] [--keep-copy]
-    python -m evaluation run --qa <版> [--split dev|val|test|all] [--no-answer]
+    python -m evaluation run --qa <版> [--split dev|val|test|all] [--no-answer] [--judge|--no-judge]
                              [--provider ollama|claude_warm|claude_cli] [--max-llm-calls 200] [--db <パス>] [--keep-copy]
-    python -m evaluation improve --qa <版> [--max-iterations 3] [--candidates 4] [--no-answer]
+    python -m evaluation improve --qa <版> [--max-iterations 3] [--candidates 4] [--no-answer] [--judge|--no-judge]
                              [--provider ollama|claude_warm|claude_cli] [--max-llm-calls 200] [--db <パス>]
                              [--start <設定の JSON>] [--seed 0] [--keep-copy]
 
@@ -16,6 +16,10 @@ from pathlib import Path
 
 import config
 from evaluation import improve, isolate, qa, report, runner
+
+
+JUDGE_HELP = ("文字の一致・2 文字の組で外れた要点をローカル LLM（常に Ollama）に判定させる（既定）。"
+              "--no-judge で判定しない。判定の呼び出しは Claude の上限に数えない")
 
 
 def _split(text: str) -> tuple[int, ...]:
@@ -42,6 +46,7 @@ def parser() -> argparse.ArgumentParser:
     r.add_argument("--qa", required=True, help="評価セットの版（data/eval/qa/<版>.jsonl）")
     r.add_argument("--split", choices=(*qa.SPLITS, "all"), default="all")
     r.add_argument("--no-answer", action="store_true", help="LLM を呼ばず、振り分けと検索だけを測る")
+    r.add_argument("--judge", action=argparse.BooleanOptionalAction, default=True, help=JUDGE_HELP)
     r.add_argument("--provider", choices=runner.PROVIDERS, default="ollama")
     r.add_argument("--max-llm-calls", type=int, default=runner.DEFAULT_MAX_LLM_CALLS,
                    help="Claude の呼び出しの上限（ollama には上限をかけない）")
@@ -54,6 +59,7 @@ def parser() -> argparse.ArgumentParser:
     m.add_argument("--candidates", type=int, default=improve.CANDIDATES_PER_ITERATION,
                    help=f"1 回の候補の数（1〜{improve.CANDIDATES_PER_ITERATION}）")
     m.add_argument("--no-answer", action="store_true", help="LLM を呼ばず、振り分けと検索の点（score_retrieval）で改善する")
+    m.add_argument("--judge", action=argparse.BooleanOptionalAction, default=True, help=JUDGE_HELP)
     m.add_argument("--provider", default="ollama", help=f"{' / '.join(runner.PROVIDERS)}（既定 ollama）")
     m.add_argument("--max-llm-calls", type=int, default=runner.DEFAULT_MAX_LLM_CALLS,
                    help="Claude の呼び出しの上限（ollama には上限をかけない）")
@@ -72,6 +78,7 @@ def _print_summary(path, items: list[dict], info: dict) -> None:
     rejected = info["rejected"]
     reasons = "、".join(f"{qa.REJECT_REASONS.get(k, k)} {v}" for k, v in rejected.items())
     print(f"- 捨てた数: {sum(rejected.values())}" + (f"（{reasons}）" if reasons else ""))
+    print(f"- 繰り返し作られる系列として選ばなかった知識: {info.get('excluded_series', 0)} 件")
 
 
 def _check(args) -> str | None:
@@ -144,7 +151,7 @@ def _run(args) -> int:
         items = [i for i in items if i.get("split") == args.split]
     try:
         result = runner.run(items, provider=args.provider, answer=not args.no_answer,
-                            max_llm_calls=args.max_llm_calls, log=print)
+                            max_llm_calls=args.max_llm_calls, log=print, judge=args.judge)
     except runner.EvalError as e:
         print(f"エラー: {e}", file=sys.stderr)
         return 1
@@ -153,7 +160,8 @@ def _run(args) -> int:
     o = result["summary"]["overall"]
     key = "score" if result["answer"] else "score_retrieval"
     print(f"評価: {o['count']} 問、{key} {o[key]}、振り分け {o['route_acc']}、recall_eff {o['recall_eff']}、"
-          f"MRR {o['mrr']}、要点 {o['facts_hit']}（LLM {result['llm_calls']} 回）")
+          f"MRR {o['mrr']}、要点 {o['facts_hit']}（文字の一致 {o['facts_hit_strict']}）"
+          f"（LLM {result['llm_calls']} 回、判定 {result['judge_calls']} 回）")
     print(f"レポート: {md_path}（{json_path.name}）")
     return 1 if result["stopped"] else 0
 
@@ -163,7 +171,7 @@ def _improve(args) -> int:
     try:
         result = improve.improve(args.qa, args.max_iterations, candidates=args.candidates, answer=not args.no_answer,
                                  provider=args.provider, max_llm_calls=args.max_llm_calls, start=start,
-                                 seed=args.seed, log=print)
+                                 seed=args.seed, log=print, judge=args.judge)
     except runner.EvalError as e:
         print(f"エラー: {e}", file=sys.stderr)
         return 1

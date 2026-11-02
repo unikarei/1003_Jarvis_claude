@@ -16,3 +16,7 @@ import config
 
 # CKC・遅延の記録と同じ data/ の下に置く。テストで JARVIS_CKC_DATA_DIR を一時フォルダにしたときは一緒にそちらへ移る
 EVAL_DIR = Path(os.environ.get("JARVIS_EVAL_DIR", config.CKC_DATA_DIR.parent / "eval"))
+
+# 評価の間だけ Ollama に渡すオプション（llm.ollama_options、T-1414）。答えの揺れで点が動かないようにする
+EVAL_LLM_SEED = 0
+EVAL_OLLAMA_OPTIONS = {"temperature": 0, "seed": EVAL_LLM_SEED}
