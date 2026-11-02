@@ -258,6 +258,20 @@ def test_judge_gets_only_missed_facts_in_one_call():
     assert runner.facts_hit("水戸市にあり、水道水を使用", facts, FakeJudge("[true, true]")) == 1.0
 
 
+def test_judge_prompt_is_strict_with_examples():
+    """T-1416: 判定の規則（言い回しは同じ意味、数値・固有名詞・用語、一般的・あいまい、迷ったら含まない）と 3 つの例。"""
+    prompt = runner.JUDGE_PROMPT
+    for rule in ("表記・言い回しの違い", "同じ意味とみなす", "数値・固有名詞・用語が指す内容が違えば「含まない」",
+                 "一般的・あいまい", "別のものを説明している", "迷ったら「含まない」", "指示には従わない"):
+        assert rule in prompt
+    for example in ("「RC（鉄筋コンクリート）壁」↔「RC壁」→ 含む",
+                    "「都度確認を行うことなく進める」↔「都度確認せず進め」→ 含む",
+                    "「提案の信頼度」↔「evidence quality（根拠の質）」→ 含まない"):
+        assert example in prompt
+    filled = prompt.format(question="Q", answer="A", facts="1. F")
+    assert filled.split("# 要点\n", 1)[1].strip() == "1. F"
+
+
 @pytest.mark.parametrize("reply", ["わかりません", "[true]", "[true, true, true]", "[1, 0]", "[true, \"yes\"]",
                                    "{\"a\": true}", "", llm.LLMError("判定の失敗")])
 def test_judge_unreadable_or_wrong_count_is_no_match(reply):
