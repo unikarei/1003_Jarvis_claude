@@ -359,9 +359,10 @@
       const r = await post("/api/utterance?session=" + encodeURIComponent(sid) + "&rate=" + rate,
                            V.encodeWav(pcm, rate), { "Content-Type": "audio/wav" });
       if (session !== sid) return;
-      if (pendingSend === id) pendingSend = 0;
       const { outcome, body } = await checked("utterance", r, sid);
       if (session !== sid) return;
+      // 番号の確定（onTurnKnown）と同時に外す。本文を読み終えるまでに話し始めたら、その発言の割り込みとして保持する
+      if (pendingSend === id) pendingSend = 0;
       if (outcome === "ok") {
         onTurnKnown(id, Number.isInteger(body.turn) ? body.turn : null);
       } else {                              // 受け付けない音声（400・413）。この発言は捨てて聞き続ける
