@@ -288,6 +288,14 @@
 - [x] T-1405 遅延の記録と起動時の読み込み（ADR-0027、`../docs/testing.md` §11）: `latency.py`（発言ごとに段階 segment・stt・route・search・llm_ready・first_text・first_audio・done の経過ミリ秒と、決まった属性 mode・skill・provider・warm・fallback・ok を `JARVIS_LATENCY_LOG`（既定 `data/latency/latency.jsonl`、5 MB で 1 世代に回す）に 1 行の JSON。本文・音声は記録しない。集計 `python -m latency report`、p50・p95 は最近傍順位法）。`chat.py`・`voice_chat.py`（3 つの形、割り込まれた発言は ok=False）・`orchestrator`・`knowledge_engine`・`llm` から記録。`orchestrator.warm_up()` を会話の起動時に裏のスレッドで呼ぶ（Ollama のモデル・待機させる claude）。実機の計測は PR の後
 - [x] T-1406 実マイクの評価の画面（ADR-0027、`../docs/testing.md` §11）: `python -m acc.voice_eval [--port 8773]`（`acc/voice_settings.py` と同じ守り）。決まった 10 の文を 1 件ずつ録って文字にし、CER（NFKC・空白と句読点・記号を除く編集距離 ÷ 正解の文字数）と段階 segment・stt を返す。`mode="full"` は振り分け・読み取りのスキルだけ実行・最初の 1 文の読み上げで first_audio まで測る（書き込み・確認のいるスキルは実行しない）。結果を `data/voice/eval/<日時>.json`（音声なし）に保存し、CER の平均と first_audio の p50・p95（目標 2 秒・5 秒）の達否を示す。Owner の実マイクでの計測は PR の後
 
+## ブラウザでの声の会話（`../docs/spec.md` §3.4.9、`../docs/browser-voice-spec.md`、ADR-0031、`../docs/tasks.md` §16）
+
+- [x] T-1501 土台（`../docs/testing.md` §13）: `python -m voice.web [--port 8771]`（`voice/web/`。Mac の音声の機器を使わない）。トークンと Cookie・Host・Origin・`X-Jarvis-Voice` の確認、同時に 1 つの会話（2 つ目は 409）、ブラウザの音量による発話の自動検出（`vad.js`）、WAV の POST（上限 4 MB・20.5 秒、レートの一致）→ 16 kHz → 認識 → `orchestrator.handle` → 認識した文と回答の断片を SSE で表示。確認の要るスキルは実行しない。テストは偽の認識・偽の handle と Node の `node --test`。Windows 実機での確認は T-1505
+- [ ] T-1502 文ごとの合成と再生、聞いた文だけを履歴に
+- [ ] T-1503 割り込み・再生中のしきい値・異常の表示・再接続
+- [ ] T-1504 画面での承認（PR は Owner がマージ）
+- [ ] T-1505 Windows 実機での受け入れ（AT-01〜AT-11）
+
 ## ナレッジ回答の評価部門（`../docs/spec.md` §3.4.10、ADR-0030、`../docs/tasks.md` §15）
 
 - [x] T-1410 評価セット（疑似 Q&A）の作成と検証: `evaluation/`（`qa.py`・`isolate.py`・`python -m evaluation build`）、`knowledge_engine.source_by_knowledge()`（`stats()` と共有）。本番 DB のコピーでの作成は T-1413
