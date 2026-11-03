@@ -133,6 +133,11 @@ test("画面での承認: 今の発言の要求だけを出し、結果と残り
   assert.strictEqual(P.approvalShown({ turn: 3, text: "x" }, 3, -1), false);   // ID がない
   assert.strictEqual(P.approvalShown({ turn: 3, id: "", text: "x" }, 3, -1), false);
   assert.strictEqual(P.approvalShown(null, 3, -1), false);
+  // 結果（approval_done）は、出している要求か割り込みで消した要求と、ID・番号の両方が一致するときだけ出す
+  assert.strictEqual(P.approvalMatches({ turn: 3, id: "abc" }, { turn: 3, id: "abc" }), true);
+  assert.strictEqual(P.approvalMatches({ turn: 4, id: "abc" }, { turn: 3, id: "abc" }), false);
+  assert.strictEqual(P.approvalMatches({ turn: 3, id: "abd" }, { turn: 3, id: "abc" }), false);
+  assert.strictEqual(P.approvalMatches({ turn: 3, id: "abc" }, null), false);
   assert.strictEqual(P.secondsLeft(60, 1000, 1000), 60);
   assert.strictEqual(P.secondsLeft(60, 1000, 1500), 60);          // 切り上げ
   assert.strictEqual(P.secondsLeft(60, 1000, 60000), 1);

@@ -28,6 +28,7 @@
   let calibration = null;                   // 回り込みの測定 {rms, playing, source, ctrl, timer}
   let watchdog = null;
   let approval = null;                      // 画面に出している承認の要求 {turn, id, timer}
+  let withdrawn = null;                     // 割り込みで画面から消した承認の要求 {turn, id}（結果は approval_done で出す）
 
   function status(text, kind) {
     $("status").textContent = text;
@@ -172,6 +173,7 @@
     if (events) { events.close(); events = null; }
     stopCalibration();
     clearApproval();
+    withdrawn = null;
     if (node) { node.port.onmessage = null; node.disconnect(); node = null; }
     if (stream) { stream.getTracks().forEach(t => { t.onended = null; t.stop(); }); stream = null; }
     resetPlayback(0);
@@ -327,7 +329,7 @@
     const wasPlaying = source !== null;
     const stopCall = audio.currentTime;
     discardPlayback();                      // AudioBufferSourceNode.stop
-    clearApproval();                        // 待っている承認はサーバーが割り込みで取り消す（声は承認にならない）
+    withdrawApproval();                     // 待っている承認はサーバーが割り込みで取り消す（声は承認にならない）
     turnDone = true;                        // 割り込んだ発言の音は再生しない
     awaiting = false;
     answerEl = null;
@@ -406,7 +408,7 @@
   // 新しい発言を始める（前の発言の音を捨てる。取った WAV の参照も外す）
   function resetPlayback(t) {
     discardPlayback();
-    if (approval && approval.turn !== t) clearApproval();   // 前の発言の承認は出さない
+    if (approval && approval.turn !== t) withdrawApproval();   // 前の発言の承認は出さない（結果は出す）
     next = 0;
     turnDone = false;
     turn = t;
@@ -557,9 +559,15 @@
   }
 
   function onApprovalDone(ev) {
-    if (!approval || approval.id !== ev.id || approval.turn !== ev.turn) return;
+    if (!P.approvalMatches(ev, approval)) return;
     clearApproval();
     line("system", "", "確認: " + P.approvalResultText(ev.result));
+  }
+
+  // 割り込みでボタンを消す。割り込んだ発言のイベントは捨てるが、その要求の結果（approval_done）だけは出す
+  function withdrawApproval() {
+    if (approval) withdrawn = { turn: approval.turn, id: approval.id };
+    clearApproval();
   }
 
   function clearApproval() {
@@ -585,6 +593,11 @@
     }
     if (ev.type === "audio" && ev.calibration) { onCalibrationAudio(ev); return; }
     if (ev.type === "notice") { note(ev.message); return; }
+    if (ev.type === "approval_done" && P.approvalMatches(ev, withdrawn)) {   // 割り込んだ発言の確認の結果
+      withdrawn = null;
+      line("system", "", "確認: " + P.approvalResultText(ev.result));
+      return;
+    }
     dispatch(ev);
   }
 

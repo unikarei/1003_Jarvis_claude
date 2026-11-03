@@ -42,6 +42,7 @@ class Context:
     cancel: Callable[[], bool] | None = None      # True を返したら答えの生成を止める（声の割り込み、ADR-0028）
     last_provider: str | None = None              # 直前の答えに使った LLM のプロバイダー（切り替えの記録、T-1403）
     terminal: bool = True                         # 端末で入力できる（ブラウザの会話は False、T-1504）
+    before_run: Callable[[], bool] | None = None  # 承認の後、実行の直前に呼ぶ。False なら実行しない（ブラウザ、T-1504）
 
 
 @dataclass
@@ -601,6 +602,9 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
         ask = ask or input
         if ask(confirm_text(skill, r.inputs)).strip().lower() != "y":
             return done("実行しませんでした。", ok=True, items=ctx.items, error="declined")
+        if ctx.before_run is not None and not ctx.before_run():
+            # 承認の後に割り込み・終了・切断があった（ブラウザの会話。chat.py・voice_chat.py は設定しない）
+            return done("実行しませんでした。", ok=True, items=ctx.items, error="cancelled")
     try:
         if _interactive(skill.name):     # 対話で入力を待つスキル（ナレッジ化・テーマ登録）は打ち切らない
             message, items = handler(r.inputs, ctx, text)

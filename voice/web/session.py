@@ -382,22 +382,36 @@ class WebSession:
                         req.result = req.answer
                     elif self.clock() >= req.deadline:
                         req.result = "expired"
-                    if req.result is not None:
+                    if req.result is not None and req.result != "run":
                         if self._approval is req:
                             self._approval = None
                         self._send_locked("approval_done", turn, id=req.id, result=req.result)
+                    # run は実行の直前（_before_run）まで要求を残し、それまでの割り込み・終了で取り消せるようにする
                 if req.result is not None:
                     return "y" if req.result == "run" else "n"
             req.event.wait(POLL_SECONDS)      # 時計を差し替えられるように、短い間隔で期限を確かめる
 
+    def _before_run(self, turn: int) -> bool:
+        """orchestrator.execute が承認の後、スキルを実行する直前に呼ぶ（Context.before_run）。「実行する」で確定した
+        発言 turn の要求がまだ取り消されておらず、会話が続いていて割り込まれていなければ、要求を使い切って True。
+        割り込み・終了と同じロックで判定するので、実行を始めた後の取り消しと、取り消した後の実行は起きない。"""
+        with self._lock:
+            req = self._approval
+            if req is None or req.turn != turn or req.result != "run" or self.closed or turn in self._cut:
+                return False
+            self._approval = None
+            self._send_locked("approval_done", turn, id=req.id, result="run")
+            return True
+
     def _cancel_approval_locked(self, turn: int | None = None) -> None:
         """待っている承認の要求を取り消す（self._lock の中で呼ぶ）。turn を渡せば、その発言の要求だけ。
+        「実行する」で確定しても実行を始める前（_before_run の前）なら取り消す。
         approval_done（cancelled）は、割り込み・終了のイベントより先に送る（その後は送れないため）。"""
         req = self._approval
         if req is None or (turn is not None and req.turn != turn):
             return
         self._approval = None
-        if req.result is None:
+        if req.result in (None, "run"):
             req.result = "cancelled"
             self._emit_locked("approval_done", req.turn, id=req.id, result="cancelled")
         req.event.set()
@@ -525,6 +539,7 @@ class WebSession:
 
         ctx.stream = stream
         ctx.cancel = lambda t=turn: self.closed or t != self.speaker.turn   # voice_chat.run_barge_in と同じ
+        ctx.before_run = lambda t=turn: self._before_run(t)   # 承認の後、実行の直前にもう一度確かめる（T-1504）
         try:
             outcome = self.handle(text, ctx, ask=lambda prompt: self._ask(turn, prompt))   # 確認は画面で（T-1504）
         except Exception as e:  # noqa: BLE001
@@ -532,6 +547,9 @@ class WebSession:
             return
         finally:
             ctx.stream = None
+            ctx.before_run = None
+            with self._lock:
+                self._cancel_approval_locked(turn)   # 実行の直前の確認を通らなかった要求を残さない
         st.outcome = outcome
         with self.speaker._lock:              # 番号の確認と残りの投入を、読み上げの側と同じロックで
             if turn == self.speaker.turn and not self.closed:

@@ -148,6 +148,11 @@
       typeof ev.id === "string" && ev.id !== "" && typeof ev.text === "string";
   }
 
+  // approval_done が要求 a（{turn, id}。出している要求か、割り込みで消した要求）の結果か
+  function approvalMatches(ev, a) {
+    return !!ev && !!a && ev.id === a.id && ev.turn === a.turn;
+  }
+
   // 残りの秒数（切り上げ、0 未満にしない）。startedMs は approval を受けた時刻
   function secondsLeft(expiresIn, startedMs, nowMs) {
     return Math.max(0, Math.ceil(expiresIn - (nowMs - startedMs) / 1000));
@@ -163,7 +168,7 @@
 
   const api = { PLAYBACK_FAILS_TO_WARN, SILENCE_LIMIT_MS, PROBLEMS, problem, micErrorKind, createSeqFilter,
                 turnDecision, createFailCounter, bargeTiming, bargeNote, postOutcome, createCutHold,
-                approvalShown, secondsLeft, approvalResultText };
+                approvalShown, approvalMatches, secondsLeft, approvalResultText };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JarvisPage = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

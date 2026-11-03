@@ -201,6 +201,42 @@ def test_end_cancels_pending_approval(fake_skills):
     assert fake_skills["write"].calls == 0
 
 
+@pytest.mark.parametrize("how", ["interrupt", "utterance", "end"])
+def test_cut_after_run_but_before_execution_does_not_execute(fake_skills, how):
+    """「実行する」で確定した直後、スキルを起動する前に割り込み・終了・切断が来たら実行しない（実行の直前の確認）。"""
+    s, events, fake, _, req = start()
+    original = s._before_run
+
+    def cut_then_check(turn):
+        if how == "interrupt":
+            assert s.interrupt(turn) == "ok"
+        elif how == "utterance":
+            fake.text = "はい"
+            s.submit(wav(), 48000)
+        else:
+            s.end()
+        return original(turn)
+    s._before_run = cut_then_check
+    assert s.approve(1, req["id"], "run") == "ok"
+    until(lambda: done(events) == ["cancelled"])
+    if how == "end":
+        events.wait("ended")
+    else:
+        events.wait("turn_done", 2 if how == "utterance" else 1)   # 割り込みは turn_done（interrupted）の 1 回だけ
+    time.sleep(0.2)
+    assert not [e for e in events.of("answer_done") if e["turn"] == 1]   # 割り込んだ発言の結果は送らない
+    assert done(events) == ["cancelled"]                                 # 「実行しました」とは出さない
+    assert s._approval is None
+    assert fake_skills["write"].calls == 0
+
+
+def test_before_run_false_skips_skill_and_chat_path_is_unchanged(fake_skills):
+    out = orc.handle(WRITE, orc.Context(terminal=False, before_run=lambda: False), ask=lambda p: "y", use_llm=False)
+    assert out.ok and out.error == "cancelled" and fake_skills["write"].calls == 0
+    out = orc.handle(WRITE, orc.Context(), ask=lambda p: "y", use_llm=False)   # chat.py（before_run なし）
+    assert out.ok and out.error is None and fake_skills["write"].calls == 1
+
+
 def test_ask_after_cut_or_end_does_not_request():
     s, events, _ = make_session()
     s.end()
