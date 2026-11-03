@@ -469,6 +469,36 @@ def test_warm_up_is_silent_when_index_unreadable(tmp_path, monkeypatch, warm_cal
     skills.reset_cache()
 
 
+def test_warm_up_does_not_touch_warning_state(tmp_path, monkeypatch, warm_calls):
+    """warm_up は裏のスレッドで動くため、warnings.catch_warnings（スレッドをまたいで安全でない）を使わない。
+    使うと会話の側で同時に出た警告を横取りする（test_chat_ckc がまれに DID NOT WARN になっていた）。"""
+    import warnings
+    _write_index(tmp_path, monkeypatch, ["general-chat"])
+    skills.reset_cache()
+
+    def forbidden(*a, **k):
+        raise AssertionError("catch_warnings を使った")
+    monkeypatch.setattr(warnings, "catch_warnings", forbidden)
+    orc.warm_up()
+    assert warm_calls == ["ollama"]
+    skills.reset_cache()
+
+
+def test_quiet_load_neither_warns_nor_caches(tmp_path, monkeypatch, recwarn):
+    """quiet の読み込みは警告を出さず、結果を残さない。後の通常の読み込みで警告が 1 回出る。"""
+    import warnings
+    path = tmp_path / "skills.json"
+    path.write_text("{壊れた JSON", encoding="utf-8")
+    monkeypatch.setenv("JARVIS_SKILLS_JSON", str(path))
+    skills.reset_cache()
+    warnings.simplefilter("always")
+    assert skills.load(quiet=True) == dict(skills.FALLBACK)
+    assert len(recwarn) == 0 and skills._cache is None
+    skills.active()
+    assert sum("スキルの索引を読めない" in str(w.message) for w in recwarn) == 1
+    skills.reset_cache()
+
+
 def test_warm_up_without_ollama_or_claude_does_not_raise(tmp_path, monkeypatch):
     """本物の warm_up_*（conftest で Ollama の接続先と claude を無効にしてある）でも例外を出さない。"""
     _write_index(tmp_path, monkeypatch, ["general-chat", "knowledge-answer"])

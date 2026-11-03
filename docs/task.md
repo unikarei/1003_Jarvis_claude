@@ -295,6 +295,7 @@
 - [x] T-1412 改善のループ: `evaluation/improve.py`（決めた設定の空間 `SPACE`、dev の失敗の傾向から 1 つの軸だけを変えた候補を最大 4 個、dev で `MIN_GAIN` 0.01 以上の最良を val で確かめ `VAL_TOLERANCE` 0.01 を超えて下がれば不採用、既定 3 回・上限 5 回・採用のない回で停止、test はループの後に 1 度だけ）、`evaluation/synonyms.json`（同義語の辞書）、`python -m evaluation improve`。結果は `data/eval/tuned/<日時>.json` と `data/eval/reports/<日時>-improve.md`（本番の設定は変えない）。本番 DB のコピーでの実行と反映の PR は T-1413
 - [x] T-1414 評価の精度の修正（ADR-0030 の改訂、2026-11-02 Owner 承認、`../docs/testing.md` §12）: 要点の採点を 文字の一致 → 2 文字の組の重なり（`FACT_BIGRAM_RATIO` 0.7・数字の並びは一致が必要）→ ローカル LLM の判定（`--judge` 既定／`--no-judge`、常に Ollama、Claude の上限に数えない）の 3 段に。問ごとに `facts_hit_strict`・`fact_match`、集計とレポートに `facts_hit_strict`。`llm.ollama_options()`（評価の間だけ temperature 0・seed 0）。`MIN_GAIN` 0.03。作問の規則の版 2（対象の名前を質問に書く・要点 30 字以内、`fact_too_long`・`no_subject` で捨てる、題名から数字・日時を除くと同じ知識が 2 件以上の系列を選ばない、メタ情報に `rules`・`excluded_series`）。本番 DB のコピーでの作り直しと再評価は別のタスク
 - [x] T-1416 判定のプロンプトを厳しくする（提案 G、`../docs/spec.md` §3.4.10 の改訂 A の 3、2026-11-03 Owner 承認、`../docs/testing.md` §12）: `evaluation/runner.py` の `JUDGE_PROMPT` に、数値・固有名詞・用語が違う／一般的・あいまい／別のもの／迷ったら「含まない」の規則と、含む 2 つ・含まない 1 つの例を追加（質問・答え・要点の差し込みと出力の形は変えない）
+- [x] 不具合の修正（2026-11-03）: 起動時の warm_up（裏のスレッド）が `warnings.catch_warnings` で索引の警告を抑えていたため、会話の側で同時に出た警告を横取りすることがあった（`tests/test_chat_ckc.py` がまれに DID NOT WARN）。`skills.load(quiet=True)`・`skills.active(quiet=True)`（警告を出さず結果を残さない）を足し、warm_up はそれを使う。回帰テスト 2 件
 
 ## Project OS API の再開（`../docs/tasks.md` T-1216・`../docs/project-os-api-restart-plan.md` 案 A、2026-10-16 Owner 承認）
 
