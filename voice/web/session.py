@@ -262,14 +262,14 @@ class WebSession:
         return st.turn
 
     def interrupt(self, turn: int) -> str:
-        """ブラウザが割り込んだ（/api/interrupt）。返り値は "ok" / "stale"（今の発言の番号でない・終えた会話）。
-        その発言の処理を終えていれば何もしない（"ok"）。"""
+        """ブラウザが割り込んだ（/api/interrupt）。返り値は "ok" / "stale"（今処理している発言の番号でない・
+        すでに割り込んだ・処理を終えた・終えた会話）。stale は何もしない（server.py が 409 にする）。"""
         with self._lock:
             if self.closed or turn != self.turn:
                 return "stale"
             st = self._active
             if st is None or st.turn != turn:
-                return "ok"
+                return "stale"
             self._interrupt_locked(st)
         self._finish_interrupted(st)
         return "ok"

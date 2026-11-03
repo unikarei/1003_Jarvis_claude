@@ -152,7 +152,7 @@ def test_interrupt_while_speaking_discards_audio_cancels_generation_and_keeps_he
     assert [e for e in after(events, done[0]) if e.get("turn") == 1] == []   # 古い発言のイベントはその後に出ない
     assert len(events.of("turn_done")) == 1
     assert [(t.speaker, t.text) for t in s.ctx.history] == [(Who.OWNER, "こんにちは"), (Who.AI, "一文目です。" + MARK)]
-    assert s.interrupt(1) == "ok"                        # もう処理していない（何もしない）
+    assert s.interrupt(1) == "stale"                     # 同じ番号の再送: もう処理していないので 409（何もしない）
     assert len(interrupted_done(events, 1)) == 1
     until(lambda: _records())
     assert _records()[-1]["ok"] is False and _records()[-1]["mode"] == "web"   # 割り込まれた発言
@@ -209,6 +209,14 @@ def test_stale_interrupt_is_rejected_and_does_nothing():
     assert s.player.held()[0] == 1 and s.speaker.turn == 1 and not interrupted_done(events, 1)
     s.end()
     assert s.interrupt(1) == "stale"                     # 終えた会話
+
+
+def test_interrupt_after_turn_finished_is_stale():
+    s, events, _ = make_session(handle=Gen(["一文目です。"]))
+    s.submit(wav(), 48000)
+    until(lambda: events.of("turn_done"))
+    assert s.interrupt(1) == "stale"                     # 処理を終えた発言（今の番号でも）には割り込まない
+    assert not interrupted_done(events, 1)
 
 
 def test_uncancellable_skill_result_is_not_used_and_context_is_separated():

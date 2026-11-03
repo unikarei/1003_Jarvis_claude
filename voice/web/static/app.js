@@ -20,6 +20,7 @@
   let turnDone = false;                     // 今の発言の turn_done が届いた（その後の同じ発言の音は再生しない）
   let awaiting = false;                     // 送った発言の turn_done を待っている（考えている間・話している間）
   let sendId = 0, pendingSend = 0;          // 送った発言の通し番号。pendingSend は応答（番号）を待っている発言
+  let pendingBase = 0;                      // pendingSend を送ったときの turn（SSE で番号が先に分かったかの判定）
   let cutHold = P.createCutHold();          // 番号の分からないまま割り込んだ発言と、その間に届いた新しい番号のイベント
   let playedQueue = Promise.resolve();      // /api/played を送る順番（start → end）を守る
   let seqFilter = P.createSeqFilter(), fails = P.createFailCounter();
@@ -328,6 +329,10 @@
     answerEl = null;
     if (pendingSend) {
       cutHold.cut(pendingSend);             // 番号の分からない発言（応答がまだ）。番号が分かったら割り込みを送る
+      if (turn > pendingBase) {             // 応答より先に SSE で番号が分かっている: すぐ割り込み、以後の古いイベントを捨てる
+        cut = Math.max(cut, turn);          // （応答の後の割り込みの再送は、サーバーが 409 で何もしない）
+        interrupt(turn);
+      }
     } else {
       cut = Math.max(cut, turn);
       interrupt(turn);
@@ -353,6 +358,7 @@
     const rate = audio.sampleRate;          // 16 kHz を仮定しない（サーバーで変換する）
     const sid = session, id = ++sendId;
     pendingSend = id;
+    pendingBase = turn;
     awaiting = true;
     status("考え中", "busy");
     try {
