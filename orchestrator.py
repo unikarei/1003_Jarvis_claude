@@ -563,7 +563,9 @@ class _NotStarted(Exception):
 
 def _gated(gate, handler, inputs, ctx, text):
     """スキルを動かすスレッドの中で、handler を呼ぶ直前に gate を確かめる。確認と起動の間に別スレッドへの投入を
-    挟まないので、確認を通った後に取り消されたのに実行される、ということが起きない（T-1504）。"""
+    挟まないので、確認を通った後に取り消されたのに実行される、ということが起きない（T-1504）。
+    gate が True を返した時点が実行の確定。それより後の割り込み・終了は、動き始めたスキルへの割り込みと同じ扱いで、
+    スキルは止めず結果を使わない（取り消せない処理、browser-voice-spec.md BV-06）。"""
     if gate is not None and not gate():
         raise _NotStarted()
     return handler(inputs, ctx, text)

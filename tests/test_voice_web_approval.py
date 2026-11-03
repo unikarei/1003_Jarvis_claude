@@ -260,6 +260,27 @@ def test_cut_while_handing_skill_to_its_thread_does_not_execute(fake_skills, mon
     assert fake_skills["write"].calls == 0
 
 
+def test_cut_after_commit_runs_once_and_discards_result(fake_skills, monkeypatch):
+    """実行の確定（_before_run が要求を使い切った時点）より後の割り込みは、動き始めたスキルへの割り込みと同じ扱い:
+    スキルは止まらず 1 回だけ実行され、その結果は会話に使わない（取り消せない処理、BV-06）。"""
+    write, session, cut = fake_skills["write"], {}, []
+
+    def interrupted_while_running(inputs, ctx, text):
+        cut.append(session["s"].interrupt(1))            # 確定の後なので要求はもうない（取り消しにならない）
+        return write(inputs, ctx, text)
+    # execute は承認を求める前にスキルの関数を取り出すため、発言を送る前に差し替える
+    monkeypatch.setitem(orc.HANDLERS, "fake-write", interrupted_while_running)
+    s, events, fake, _, req = start()
+    session["s"] = s
+    assert s.approve(1, req["id"], "run") == "ok"
+    events.wait("turn_done", 1)
+    time.sleep(0.2)
+    assert cut == ["ok"] and write.calls == 1
+    assert done(events) == ["run"]                       # 確定は「実行する」のまま（取り消しは出ない）
+    assert [e.get("interrupted") for e in events.of("turn_done") if e["turn"] == 1] == [True]
+    assert not [e for e in events.of("answer_done") if e["turn"] == 1]   # 割り込んだ発言の結果は送らない
+
+
 def test_before_run_is_checked_in_the_skill_thread_right_before_handler(fake_skills):
     """起動の直前の確認とスキルの処理が同じスレッドで続けて動く（間に別スレッドへの投入を挟まない）。"""
     seen = []
