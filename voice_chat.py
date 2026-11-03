@@ -450,12 +450,21 @@ def main(listen=None, transcribe=None, speaker: Speaker | None = None, push_to_t
             restore()
 
 
+def use_voice_model() -> None:
+    """声の会話のプロセスでは、claude -p を速いモデル（JARVIS_VOICE_CLAUDE_MODEL、既定 Sonnet）で起動する
+    （2026-11-03 Owner 指示。ナレッジの回答の最初の文字を速くする）。待機させる claude を起動する前に呼ぶ。"""
+    import llm
+    from config import VOICE_CLAUDE_MODEL
+    llm.use_claude_model(VOICE_CLAUDE_MODEL)
+
+
 def _stop_on_signals(launcher):
     from voice import engine_process
     return engine_process.stop_on_signals(launcher)
 
 
 def _main(listen, transcribe, speaker, push_to_talk, keys, barge_in, launcher) -> int:
+    use_voice_model()
     orchestrator.start_warm_up()              # 使う LLM を裏で読み込んでおく（最初の答えを速くする、T-1405）
     if listen is None:
         print("音声認識のモデルを読み込んでいます（初回はダウンロードに数分かかります）…")

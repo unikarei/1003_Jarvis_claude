@@ -350,19 +350,20 @@ def make_synth(settings: VoiceSettings, fallback: VoiceSettings | None = None, n
 
 LONG_SENTENCE = 60             # これより長い文は、読点で区切って先に読み始める（最初の声を早く）
 MIN_PHRASE = 12                # 読点で区切るときの、前の部分の最短の長さ（短すぎる切れ目を作らない）
+FIRST_PHRASE = 24              # 発言の最初の文は、これより長ければ読点で区切って先に読む（最初の声を早く、2026-11-03 Owner 指示）
 
 
-def split_long(text: str) -> tuple[str, str]:
-    """句点の前で長くなった文を、読点（、）の切れ目で前後に分ける。分けられなければ ("", text)。
-    語や数字の途中では切らない（読点の直後だけ）。"""
-    if len(text) <= LONG_SENTENCE:
+def split_long(text: str, limit: int = LONG_SENTENCE) -> tuple[str, str]:
+    """句点の前で limit 字（既定 LONG_SENTENCE）より長くなった文を、読点（、）の切れ目で前後に分ける。
+    分けられなければ ("", text)。語や数字の途中では切らない（読点の直後だけ）。"""
+    if len(text) <= limit:
         return "", text
     # 読点の直後だけで切る。半角・全角のカンマは数字（1,000・１，０００）の間なら使わない
     found = [m.end() for m in re.finditer(r"、|(?<![0-9０-９])，|，(?![0-9０-９])", text) if m.end() < len(text)]
     if not found:
         return "", text
-    preferred = [c for c in found if MIN_PHRASE <= c <= LONG_SENTENCE]
-    later = [c for c in found if c > LONG_SENTENCE]
-    # 12〜60 字の読点（最後のもの）→ 60 字より後の最初の読点 → 短い前半句の読点、の順に選ぶ
+    preferred = [c for c in found if MIN_PHRASE <= c <= limit]
+    later = [c for c in found if c > limit]
+    # 12〜limit 字の読点（最後のもの）→ limit 字より後の最初の読点 → 短い前半句の読点、の順に選ぶ
     cut = preferred[-1] if preferred else (later[0] if later else found[-1])
     return text[:cut], text[cut:]

@@ -244,3 +244,45 @@ def test_stream_parses_lines_split_across_reads(monkeypatch):
     monkeypatch.setattr(fresh.subprocess, "Popen", Proc)
     got = []
     assert fresh._stream_claude_cli("本文", got.append, timeout=10) == "こんにちは" and got == ["こんにちは"]
+
+
+def test_voice_model_is_passed_to_every_claude_command(monkeypatch):
+    """声の会話のプロセスは claude -p に --model を渡す（2026-11-03 Owner 指示）。空なら CLI の既定（渡さない）。"""
+    captured = {}
+    monkeypatch.setattr(llm.subprocess, "run", _fake_run(_envelope("結果"), captured=captured))
+    llm.complete("本文", provider="claude_cli")
+    assert "--model" not in captured["cmd"]                             # 既定（chat.py・定期ジョブ）は渡さない
+    llm.use_claude_model("claude-sonnet-5-5")
+    llm.complete("本文", provider="claude_cli")
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5-5"
+    popen = []
+
+    class FakePopen:
+        def __init__(self, cmd, **kw):
+            popen.append(cmd)
+            raise FileNotFoundError
+    monkeypatch.setattr(llm.subprocess, "Popen", FakePopen)
+    with pytest.raises(llm.LLMError):
+        llm._spawn_claude_warm()
+    assert popen[-1][popen[-1].index("--model") + 1] == "claude-sonnet-5-5"
+    llm.use_claude_model("")
+    llm.complete("本文", provider="claude_cli")
+    assert "--model" not in captured["cmd"]
+
+
+def test_changing_model_stops_the_waiting_claude(monkeypatch):
+    stopped = []
+    monkeypatch.setattr(llm, "stop_warm_claude", lambda: stopped.append(True))
+    llm.use_claude_model("claude-sonnet-5-5")
+    llm.use_claude_model("claude-sonnet-5-5")                            # 同じモデルなら止めない
+    assert stopped == [True]
+
+
+def test_use_voice_model_reads_config(monkeypatch):
+    import voice_chat
+    seen = []
+    monkeypatch.setattr(llm, "use_claude_model", seen.append)
+    monkeypatch.setattr("config.VOICE_CLAUDE_MODEL", "claude-sonnet-5-5")
+    voice_chat.use_voice_model()
+    assert seen == ["claude-sonnet-5-5"]
