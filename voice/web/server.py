@@ -6,11 +6,13 @@ POST /api/played で受ける（T-1502）。回り込みの測定のあいさつ
 （T-1503）、画面での承認は POST /api/approve（T-1504）。SSE は 5 秒ごとに ping（event: ping）を送り、切れたら会話を終える（再接続しない、BV-11）。
 起動ごとのトークンを HttpOnly の Cookie に移して認証する（acc/voice_settings.py と同じ形）。
 VS Code のポート転送は別の番号になることがあるため、Host・Origin は localhost・127.0.0.1 ならポートを問わない。
+追加の DNS 名は Host で許し、POST の Origin はその名前の HTTPS だけを許す。
 トークン・Cookie・本文・音声はログに出さない。
 """
 
 import hmac
 import json
+import os
 import queue
 import re
 import secrets
@@ -34,8 +36,10 @@ PING_SECONDS = 5.0                # ページは 15 秒イベントも ping も�
 ATTACH_SECONDS = 30.0             # 会話を始めてから SSE をつなぐまでの猶予（つながなかった会話は次の開始で終える）
 WAV_TYPES = ("audio/wav", "audio/x-wav", "audio/wave")
 
-HOST_RE = re.compile(r"(localhost|127\.0\.0\.1)(:\d{1,5})?")
-ORIGIN_RE = re.compile(r"http://(localhost|127\.0\.0\.1)(:\d{1,5})?")
+LOCAL_HOSTS = frozenset(("localhost", "127.0.0.1"))
+DNS_LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+HOST_RE = re.compile(r"([A-Za-z0-9.-]+)(:\d{1,5})?", re.IGNORECASE)
+ORIGIN_RE = re.compile(r"(https?)://([A-Za-z0-9.-]+)(:\d{1,5})?", re.IGNORECASE)
 AUDIO_PATH_RE = re.compile(r"/api/audio/([A-Za-z0-9_-]{1,64})")
 STATIC_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\.(html|js|css)")
 CONTENT_TYPES = {"html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
@@ -117,7 +121,22 @@ class Sessions:
             s.end()
 
 
-def make_handler(token: str, sessions: Sessions, ping_seconds: float):
+def valid_allowed_hosts(allowed_hosts=()) -> tuple[str, ...]:
+    """明示指定と環境変数の名前を検証し、表示・照合に使う名前へ正規化する。"""
+    names = (*allowed_hosts, *os.environ.get("JARVIS_VOICE_ALLOWED_HOSTS", "").split(","))
+    result = []
+    for raw in names:
+        name = raw.strip().lower()
+        if (name in LOCAL_HOSTS or len(name) > 253 or
+                not all(DNS_LABEL_RE.fullmatch(label) for label in name.split("."))):
+            continue
+        if name not in result:
+            result.append(name)
+    return tuple(result)
+
+
+def make_handler(token: str, sessions: Sessions, ping_seconds: float, allowed_hosts=()):
+    allowed = LOCAL_HOSTS | frozenset(allowed_hosts)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "JarvisVoiceWeb"
@@ -151,7 +170,8 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
         # -------------------------------------------------------- 確認
 
         def _host_ok(self) -> bool:
-            if HOST_RE.fullmatch(self.headers.get("Host", "")):
+            match = HOST_RE.fullmatch(self.headers.get("Host", ""))
+            if match and match.group(1).lower() in allowed:
                 return True
             self._json(400, {"error": "bad_host"})
             return False
@@ -168,7 +188,12 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
             return False
 
         def _write_ok(self) -> bool:
-            if not ORIGIN_RE.fullmatch(self.headers.get("Origin", "")) or self.headers.get(CSRF_HEADER) != "1":
+            match = ORIGIN_RE.fullmatch(self.headers.get("Origin", ""))
+            origin_ok = bool(match and (
+                (match.group(1).lower() == "http" and match.group(2).lower() in LOCAL_HOSTS) or
+                (match.group(1).lower() == "https" and match.group(2).lower() in allowed_hosts)
+            ))
+            if not origin_ok or self.headers.get(CSRF_HEADER) != "1":
                 self._json(403, {"error": "forbidden"})
                 return False
             return True
@@ -391,11 +416,13 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
 
 
 def make_server(port: int = DEFAULT_PORT, session_factory=None, token: str | None = None,
-                ping_seconds: float = PING_SECONDS):
+                ping_seconds: float = PING_SECONDS, allowed_hosts=()):
     """（サーバー, トークン）を返す。port=0 なら空いている番号。session_factory(emit) は会話を作る（テストで差し替える）。"""
     token = token or secrets.token_urlsafe(24)
+    allowed_hosts = valid_allowed_hosts(allowed_hosts)
     server = ThreadingHTTPServer((HOST, port), None)
     server.daemon_threads = True
     server.sessions = Sessions(session_factory or default_session_factory)
-    server.RequestHandlerClass = make_handler(token, server.sessions, ping_seconds)
+    server.allowed_hosts = allowed_hosts
+    server.RequestHandlerClass = make_handler(token, server.sessions, ping_seconds, allowed_hosts)
     return server, token

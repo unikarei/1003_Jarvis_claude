@@ -296,6 +296,7 @@
 - [x] T-1504 画面での承認（`../docs/testing.md` §13、BV-09・AT-06。PR は Owner がマージ）: `orchestrator.execute` の確認を、発言ごとの承認の要求（使い捨ての ID `secrets.token_urlsafe(16)`・発言の番号・期限 60 秒）にし、イベント `approval` で画面に出して「画面で確認してください」と読み上げる。`POST /api/approve`（`{"turn", "id", "decision": run|decline}`、一致・期限内なら 200、違う・期限切れ・使用済み・会話が違えば 409、形が違えば 400）の「実行する」が、その ID・番号・期限内・会話が続いている・割り込まれていない、のすべてを満たしたときだけ実行する。結果は `approval_done`（run・declined・expired・cancelled）。「実行する」の後もスキルの起動の直前に会話・発言の有効性を確かめ（`Context.before_run`）、その間の割り込み・終わり・切断では実行しない。割り込み・会話の終わり・切断で取り消し、声の「はい」は新しい発言（割り込み）として扱い承認にしない。端末の入力を待つスキル（`knowledge-capture`・`theme-register`）は、ブラウザでは確認を求めずに実行しない（`orchestrator.Context.terminal=False`、`needs_terminal`。`chat.py`・`voice_chat.py` は変わらない）。ページは今の番号の要求だけを出し、ボタン・残りの秒数・結果を出す。テストは副作用のない偽のスキルで `orchestrator.handle`・`execute` の確認の経路を通し、期限は差し替えた時計（`tests/test_voice_web_approval.py`）。Windows 実機での確認は T-1505
 - [x] 声の会話の応答の速さ（2026-11-03 Owner 指示、T-1505 の実測から）: (A) 声の会話のプロセスの claude -p を Sonnet（`JARVIS_VOICE_CLAUDE_MODEL`）、(B) 発言の最初の文を 24 字を超えたら読点で区切って先に読む
 - [ ] T-1505 Windows 実機での受け入れ（AT-01〜AT-11）
+- [~] T-1506 tailnet 内のブラウザで声の会話を開く（2026-11-03 Owner 指示、Owner 事前承認）: `--allow-host`・`JARVIS_VOICE_ALLOWED_HOSTS` の DNS 名を Host と HTTPS Origin に追加し、`--tailnet-port` の URL を表示する。`python -m voice.web --port 8772 --allow-host ohidemac-mini.taild8cb51.ts.net`、`tailscale serve --bg --https=8446 http://127.0.0.1:8772`。ACL に tcp:8446 の許可が必要。インターネットには公開しない。静的ページの相対 URL を確認し、HTTP・CLI のテストと全体テストを実行する。Tailscale と ACL の設定は別作業。
 
 ## ナレッジ回答の評価部門（`../docs/spec.md` §3.4.10、ADR-0030、`../docs/tasks.md` §15）
 
