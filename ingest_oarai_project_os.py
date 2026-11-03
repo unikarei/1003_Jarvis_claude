@@ -290,16 +290,20 @@ def _split_json(path: str, parsed: dict) -> list[Section]:
     arrays: list[tuple[str, list[str]]] = []          # (配列の名前, [名前の行, 要素..., 閉じの行])
     ids: dict[tuple[str, int], str] = {}
     others: list[str] = []
-    for i, (name, value) in enumerate(items):
-        comma = "," if i < len(items) - 1 else ""
+    for name, value in items:
         key = json.dumps(name, ensure_ascii=False)
         if isinstance(value, list) and value:
             elems = [_indent(_dumps(elem), 4) + ("," if j < len(value) - 1 else "") for j, elem in enumerate(value)]
-            arrays.append((name, [f"  {key}: ["] + elems + [f"  ]{comma}"]))
+            arrays.append((name, [f"  {key}: ["] + elems + ["  ]"]))
             for j, elem in enumerate(value):
                 ids[(name, j + 1)] = _label(elem, j + 1)
         else:
-            others.append(_indent(f"{key}: {_dumps(value)}", 2) + comma)
+            others.append(_indent(f"{key}: {_dumps(value)}", 2))
+    # 区切りの , は並べ替えた後の順（配列以外の項目 → 配列）で付ける。最後の項目だけ付けない
+    others = [text + ("," if i < len(others) - 1 or arrays else "") for i, text in enumerate(others)]
+    for a, (name, lines) in enumerate(arrays):
+        if a < len(arrays) - 1:
+            lines[-1] += ","
     header, footer = f"# {path}\n\n```json\n{{", "}\n```"
     head: str | None = "\n".join([header] + others)
     sections: list[Section] = []
@@ -518,10 +522,13 @@ def _project_os_sources(conn: sqlite3.Connection) -> list[sqlite3.Row]:
                         (len(BLOB_PREFIX), BLOB_PREFIX)).fetchall()
 
 
-def migrate_sections(backup_to: Path | None = None) -> dict:
+def migrate_sections(backup_to: Path | None = None, on_backup=None) -> dict:
     """DB の Project OS のファイル単位の Knowledge を節の Knowledge に置き換える（GitHub は呼ばない）。
-    先に DB をバックアップする。全体を 1 つのトランザクションで行い、すでに節になっているファイルは飛ばす。"""
+    先に DB をバックアップする（on_backup にそのパスを渡してから移行する。移行が失敗してもパスがわかる）。
+    全体を 1 つのトランザクションで行い、すでに節になっているファイルは飛ばす。"""
     backup = backup_db(backup_to)
+    if on_backup is not None:
+        on_backup(backup)
     files, deleted, created = 0, [], []
     conn = db.get_connection()
     try:
@@ -605,8 +612,7 @@ def main(argv: list[str] | None = None) -> None:
                        help="バックアップの DB から Project OS の Knowledge だけを戻す")
     args = parser.parse_args(argv)
     if args.migrate_sections:
-        result = migrate_sections()
-        print(f"バックアップ: {result['backup']}")
+        result = migrate_sections(on_backup=lambda path: print(f"バックアップ: {path}", flush=True))
         print(f"ファイル: {result['files']}件 / 消したKnowledge: {len(result['deleted'])}件 / "
               f"作ったKnowledge: {len(result['created'])}件")
         if result["files"] == 0:

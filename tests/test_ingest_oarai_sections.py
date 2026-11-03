@@ -150,6 +150,24 @@ def test_json_other_items_after_arrays_are_kept():
     _check_json("data/tasks.json", raw, sections)
 
 
+def _joined_json(sections):
+    text = "\n".join(s.body for s in sections)
+    return json.loads(text.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
+
+
+@pytest.mark.parametrize("parsed", [
+    {"tasks": _tasks(12), "updated_at": "2026-11-03"},                                  # 配列以外が後ろ
+    {"schema_version": 2, "tasks": _tasks(12), "risks": _tasks(9, key="title"), "note": "x"},
+    {"a": 1, "b": "2", "tasks": _tasks(3)},                                             # 分割しない長さでも
+])
+def test_json_sections_join_to_same_value(parsed):
+    """節をつなぐと、元と同じ値の JSON として読める（区切りの , を並べ替えた後の順で付ける）。"""
+    raw = json.dumps(parsed, ensure_ascii=False)
+    sections = split_sections("data/tasks.json", raw)
+    if len(sections) > 1:
+        assert _joined_json(sections) == parsed
+
+
 def test_json_single_long_item_alone_and_fallback_labels():
     items = [{"name": "小"}, {"name": "大", "body": "x" * 1500}, {"v": 1}]
     sections = split_sections("data/x.json", json.dumps({"items": items}))
@@ -414,9 +432,11 @@ def test_migrate_failure_changes_nothing(legacy, tmp_path, monkeypatch):
             raise RuntimeError("偽の失敗")
         return real(path, raw)
     monkeypatch.setattr(ipo, "split_sections", flaky)
+    shown = []
     with pytest.raises(RuntimeError):
-        ipo.migrate_sections(tmp_path / "bk")
+        ipo.migrate_sections(tmp_path / "bk", on_backup=shown.append)
     assert _project_os_state() == state
+    assert len(shown) == 1 and shown[0].exists()      # 移行が失敗しても、バックアップのパスは先に渡っている
     assert list((tmp_path / "bk").glob("jarvis-*-before-sections.db"))
 
 
