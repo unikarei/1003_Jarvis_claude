@@ -23,6 +23,8 @@ def main(argv=None) -> int:
     init_db()
     print("音声認識のモデルを読み込んでいます…", flush=True)
     speech_to_text.load_model()
+    import voice_chat
+    voice_chat.use_voice_model()           # claude -p を速いモデルで起動する（待機させる前に）
     orchestrator.start_warm_up()
     server, token = make_server(args.port)
     print(f"http://localhost:{server.server_address[1]}/?token={token}", flush=True)

@@ -9,7 +9,7 @@ import pytest
 
 import llm
 import skills
-from voice import duplex
+from voice import duplex, tts
 
 
 def _frame(level: float) -> np.ndarray:
@@ -800,3 +800,24 @@ def test_rejected_decision_does_not_block_later_barge_ins():
     for _ in range(6):
         s.push(_frame(5000))
     assert s.barged.is_set()
+
+
+def test_first_sentence_is_split_early_at_comma_then_long_limit_applies():
+    """発言の最初の文だけ、FIRST_PHRASE 字を超えたら読点で区切って先に読み始める（最初の声を早く）。2 つ目からは
+    今までどおり LONG_SENTENCE 字まで区切らない（2026-11-03 Owner 指示）。"""
+    player = FakePlayer()
+    sp = duplex.DuplexSpeaker(player, synth=lambda s, c: np.zeros(10, dtype=np.float32))
+    turn = sp.new_turn()
+    first = "日本の歴史は縄文と弥生の時代を経て、古墳の時代に大きな政権が生まれ"   # 句点の前（まだ続く）
+    sp.feed(first)
+    second = "その後は奈良と平安の都が置かれ、貴族の文化が長く栄えたことが知られています。"
+    sp.feed("ました。" + second)
+    sp.flush()
+    sp.wait()
+    assert player.heard(turn) == ["日本の歴史は縄文と弥生の時代を経て、", "古墳の時代に大きな政権が生まれました。", second]
+    assert len(second) <= tts.LONG_SENTENCE                # 2 つ目の文は読点があっても区切らない
+    turn2 = sp.new_turn()                                  # 次の発言の最初の文もまた早く区切る
+    sp.feed(first)
+    sp.wait()
+    assert player.heard(turn2) == ["日本の歴史は縄文と弥生の時代を経て、"]
+    sp.close()

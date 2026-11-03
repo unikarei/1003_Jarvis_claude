@@ -112,6 +112,14 @@ def _reset_registry_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_claude_model(monkeypatch):
+    """声の会話の起動（use_voice_model）が決めた claude -p のモデルを、次のテストに持ち越さない。"""
+    import llm
+
+    monkeypatch.setattr(llm, "_claude_model", None)
+
+
+@pytest.fixture(autouse=True)
 def no_real_claude_stream(monkeypatch):
     """テストでは本物の claude -p を逐次出力で呼ばない（T-1212）。必要なテストは complete_stream を差し替える。"""
     import llm

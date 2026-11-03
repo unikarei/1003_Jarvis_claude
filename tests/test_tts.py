@@ -498,3 +498,9 @@ def test_settings_page_sliders_can_hold_butler_preset():
         step = float(_re.search(r'step="([0-9.]+)"', tag).group(1))
         value = voice_settings.BUTLER[k]
         assert abs(round(value / step) * step - value) < 1e-9
+
+
+def test_split_long_uses_given_limit():
+    text = "日本の歴史は縄文と弥生の時代を経て、古墳の時代に大きな政権が生まれ"
+    assert tts.split_long(text) == ("", text)                           # 既定（60 字）では区切らない
+    assert tts.split_long(text, tts.FIRST_PHRASE) == ("日本の歴史は縄文と弥生の時代を経て、", "古墳の時代に大きな政権が生まれ")

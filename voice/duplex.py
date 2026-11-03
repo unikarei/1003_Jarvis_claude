@@ -222,6 +222,7 @@ class DuplexSpeaker(Speaker):
         self._cancel = threading.Event()
         self._busy = False
         self._buffers: dict[int, tuple[str, bool]] = {}   # 発言ごとの区切りの途中の文字とコードの区間
+        self._started: set[int] = set()                   # 最初の文を読み始めた発言（最初の文だけ短く区切る）
         self._pending = 0                                  # キューに入れてから、合成・再生に渡し終えるまでの文の数
         super().__init__(voice=voice, runner=lambda cmd: None)
         # 番号の確認から表示・投入までを 1 つの区間にできるよう、入れ子にできるロックにする（会話の側も使う）
@@ -254,9 +255,14 @@ class DuplexSpeaker(Speaker):
     # 番号の確認・文の区切りの途中の文字（発言ごと）・キューへの投入は、すべて new_turn と同じロックの中で行う。
     # 割り込みと逐次表示・読み上げの完了が重なっても、古い発言の文字が新しい発言に混ざらない。
 
+    def _limit(self, turn: int) -> int:
+        """読点で区切る長さ。発言の最初の文は短く区切って先に読み始める（最初の声を早く、2026-11-03 Owner 指示）。"""
+        return tts.LONG_SENTENCE if turn in self._started else tts.FIRST_PHRASE
+
     def _put(self, turn: int, text: str) -> None:
         text = speakable(text)
         if text:
+            self._started.add(turn)
             self._pending += 1                    # ロックの中で数える（取り出してから作業中になるまでの隙間をなくす）
             self._queue.put((turn, text))
 
@@ -282,14 +288,14 @@ class DuplexSpeaker(Speaker):
                     continue
                 if not in_code:
                     while True:                  # 句点まで届いた長い文も、読点の切れ目で区切って読む
-                        head, part = tts.split_long(part)
+                        head, part = tts.split_long(part, self._limit(turn))
                         if not head:
                             break
                         self._put(turn, head)
                     self._put(turn, part)
             # コードの区間の始まり（```）かもしれない行は区切らない（改行まで待って区間を判定する）
             while not in_code and not buffer.lstrip().startswith("`"):
-                head, buffer = tts.split_long(buffer)   # 句点まで長い文は、読点の切れ目で先に読み始める（繰り返し）
+                head, buffer = tts.split_long(buffer, self._limit(turn))   # 句点まで長い文は、読点の切れ目で先に読み始める（繰り返し）
                 if not head:
                     break
                 self._put(turn, head)
@@ -310,6 +316,7 @@ class DuplexSpeaker(Speaker):
             self.turn += 1
             turn = self.turn
             self._buffers.clear()
+            self._started.clear()
             if hasattr(self.player, "set_turn"):
                 self.player.set_turn(turn)        # 再生の側でも古い番号の音を受け付けない
             self.stop()

@@ -67,6 +67,9 @@ ESCALATION_MODEL = os.environ.get("JARVIS_ESCALATION_MODEL", "claude-sonnet-5-5"
 LLM_PROVIDER = os.environ.get("JARVIS_LLM_PROVIDER", "claude_cli")
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local" / "bin" / "claude"))
 CLAUDE_CLI_TIMEOUT_SECONDS = int(os.environ.get("JARVIS_CLAUDE_CLI_TIMEOUT", "300"))
+# 声の会話（voice_chat.py・python -m voice.web）のプロセスで claude -p に渡すモデル（2026-11-03 Owner 指示、
+# 最初の文字を速くする）。空にすると CLI の既定のモデル。chat.py・定期ジョブは CLI の既定のまま
+VOICE_CLAUDE_MODEL = os.environ.get("JARVIS_VOICE_CLAUDE_MODEL", "claude-sonnet-5-5")
 # ローカルの Ollama（llm の "ollama" プロバイダー、ADR-0027、T-1402）。無料・最初の文字まで約 0.5 秒
 OLLAMA_URL = os.environ.get("JARVIS_OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 CHAT_MODEL = os.environ.get("JARVIS_CHAT_MODEL", "gemma4:12b")

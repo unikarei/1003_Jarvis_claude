@@ -86,10 +86,29 @@ def _cli_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in CLI_BLOCKED_ENV}
 
 
+_claude_model: str | None = None   # claude -p に渡すモデル（None なら CLI の既定）。use_claude_model で決める
+
+
+def use_claude_model(model: str | None) -> None:
+    """このプロセスで起動する claude -p のモデルを決める（声の会話の起動時、2026-11-03 Owner 指示）。
+    空・None なら CLI の既定。待機中の claude -p が別のモデルなら止める（次の答えで新しいモデルで起動する）。"""
+    global _claude_model
+    model = (model or "").strip() or None
+    with _warm_lock:
+        changed = model != _claude_model
+        _claude_model = model
+    if changed:
+        stop_warm_claude()
+
+
+def _model_options() -> list[str]:
+    return ["--model", _claude_model] if _claude_model else []
+
+
 def _complete_claude_cli(prompt: str, timeout: int | None = None) -> str:
     """Claude Code CLI（claude -p）をツールなしで実行し、最終応答のテキストを返す。"""
     timeout = timeout or CLAUDE_CLI_TIMEOUT_SECONDS
-    cmd = [CLAUDE_BIN, "-p", "--tools", "", "--no-session-persistence", "--output-format", "json"]
+    cmd = [CLAUDE_BIN, "-p", "--tools", "", "--no-session-persistence", "--output-format", "json", *_model_options()]
     with tempfile.TemporaryDirectory(prefix="jarvis-llm-") as workdir:
         try:
             proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
@@ -207,7 +226,7 @@ def _claude_result_text(proc, result: dict | None) -> str:
 def _stream_claude_cli(prompt: str, on_text, timeout: int | None = None, cancel=None) -> str:
     """claude -p の逐次出力（stream-json）。差分のテキストを on_text に渡し、最後に全文を返す（FR-014、T-1212）。"""
     timeout = timeout or CLAUDE_CLI_TIMEOUT_SECONDS
-    cmd = [CLAUDE_BIN, *_STREAM_OPTIONS]
+    cmd = [CLAUDE_BIN, *_STREAM_OPTIONS, *_model_options()]
     deadline = time.monotonic() + timeout
     with tempfile.TemporaryDirectory(prefix="jarvis-llm-") as workdir:
         try:
@@ -242,7 +261,7 @@ def _spawn_claude_warm():
     global _atexit_registered
     workdir = tempfile.TemporaryDirectory(prefix="jarvis-llm-")
     try:
-        proc = subprocess.Popen([CLAUDE_BIN, *_WARM_OPTIONS], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        proc = subprocess.Popen([CLAUDE_BIN, *_WARM_OPTIONS, *_model_options()], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True, cwd=workdir.name, env=_cli_env())
     except FileNotFoundError:
         workdir.cleanup()
