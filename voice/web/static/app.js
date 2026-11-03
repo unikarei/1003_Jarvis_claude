@@ -72,14 +72,19 @@
     events.onerror = () => {
       if (!session) return;
       status("サーバーとの接続が切れました。会話は終わりました（もう一度「会話を始める」を押してください）", "error");
-      cleanup();
+      end(true);                            // サーバーが切断に気づく前でも会話を終え、直後の再試行を 409 busy にしない
     };
   }
 
   async function openMic() {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
-    audio = new AudioContext();
-    await audio.audioWorklet.addModule("/static/vad-worklet.js");
+    const sid = session;
+    const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
+    if (session !== sid) { s.getTracks().forEach(t => t.stop()); return; }   // 許可を待つ間に会話が終わった
+    stream = s;
+    const ctx = new AudioContext();
+    audio = ctx;
+    await ctx.audioWorklet.addModule("/static/vad-worklet.js");
+    if (session !== sid) { s.getTracks().forEach(t => t.stop()); ctx.close().catch(() => {}); return; }
     const source = audio.createMediaStreamSource(stream);
     node = new AudioWorkletNode(audio, "vad-frames", { numberOfOutputs: 1 });
     node.port.onmessage = m => onFrame(m.data.rms, m.data.samples);
@@ -108,7 +113,7 @@
     if (events) { events.close(); events = null; }
     if (node) { node.port.onmessage = null; node.disconnect(); node = null; }
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-    if (audio) { audio.close(); audio = null; }
+    if (audio) { audio.close().catch(() => {}); audio = null; }
     detector = null; current = null; ring = []; background = []; paused = false;
     $("start").disabled = false;
     $("pause").disabled = true;

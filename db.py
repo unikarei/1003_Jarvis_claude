@@ -71,16 +71,24 @@ def insert_node(node_type: str, category: str | None = None, title: str | None =
                 node_id: str | None = None) -> str:
     if node_type not in NODE_TYPES:
         raise ValueError(f"unknown node type: {node_type}")
-    node_id = node_id or generate_id(node_type, category)
-    _execute(
-        "INSERT INTO nodes (id, type, category, title, content, url, created_at, meta) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            node_id, node_type, category, title, content, url,
-            datetime.now().isoformat(), json.dumps(meta or {}, ensure_ascii=False),
-        ),
-    )
-    return node_id
+    given = node_id is not None
+    for attempt in range(5):
+        if not given:
+            node_id = generate_id(node_type, category)
+        try:
+            _execute(
+                "INSERT INTO nodes (id, type, category, title, content, url, created_at, meta) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    node_id, node_type, category, title, content, url,
+                    datetime.now().isoformat(), json.dumps(meta or {}, ensure_ascii=False),
+                ),
+            )
+            return node_id
+        except sqlite3.IntegrityError:
+            # 同じ秒に作った ID の短縮部分（4 桁）が重なったときだけ作り直す。指定された ID の重複はそのまま知らせる
+            if given or attempt == 4 or get_node(node_id) is None:
+                raise
 
 
 def insert_edge(src_id: str, dst_id: str, edge_type: str) -> int:
