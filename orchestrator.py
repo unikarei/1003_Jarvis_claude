@@ -557,12 +557,25 @@ def _interactive(name: str) -> bool:
     return FLOOR.get(name, ("read", False, False))[2]
 
 
-def _run_with_timeout(handler, inputs, ctx, text, seconds: int):
-    """確認の入力を待たないスキルを上限付きで動かす。超えたら TimeoutError（処理は裏で終わるまで続く）。"""
+class _NotStarted(Exception):
+    """承認の後、スキルを起動する直前の確認（Context.before_run）が False だった（T-1504）。"""
+
+
+def _gated(gate, handler, inputs, ctx, text):
+    """スキルを動かすスレッドの中で、handler を呼ぶ直前に gate を確かめる。確認と起動の間に別スレッドへの投入を
+    挟まないので、確認を通った後に取り消されたのに実行される、ということが起きない（T-1504）。"""
+    if gate is not None and not gate():
+        raise _NotStarted()
+    return handler(inputs, ctx, text)
+
+
+def _run_with_timeout(handler, inputs, ctx, text, seconds: int, gate=None):
+    """確認の入力を待たないスキルを上限付きで動かす。超えたら TimeoutError（処理は裏で終わるまで続く）。
+    gate は、スキルを動かすスレッドで handler の直前に呼ぶ（False なら _NotStarted）。"""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
     pool = ThreadPoolExecutor(max_workers=1)
     # 今の文脈（遅延の記録の Turn）を引き継ぐ。スレッドには文脈が引き継がれないため（T-1405）
-    future = pool.submit(contextvars.copy_context().run, handler, inputs, ctx, text)
+    future = pool.submit(contextvars.copy_context().run, _gated, gate, handler, inputs, ctx, text)
     try:
         return future.result(timeout=seconds)
     except FutureTimeout:
@@ -602,14 +615,17 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
         ask = ask or input
         if ask(confirm_text(skill, r.inputs)).strip().lower() != "y":
             return done("実行しませんでした。", ok=True, items=ctx.items, error="declined")
-        if ctx.before_run is not None and not ctx.before_run():
-            # 承認の後に割り込み・終了・切断があった（ブラウザの会話。chat.py・voice_chat.py は設定しない）
-            return done("実行しませんでした。", ok=True, items=ctx.items, error="cancelled")
+    # 承認の後、スキルを起動する直前の確認（ブラウザの会話。chat.py・voice_chat.py は設定しない）。
+    # handler を呼ぶのと同じスレッドで、呼ぶ直前に確かめる（_gated）
+    gate = ctx.before_run if needs_confirm else None
     try:
         if _interactive(skill.name):     # 対話で入力を待つスキル（ナレッジ化・テーマ登録）は打ち切らない
-            message, items = handler(r.inputs, ctx, text)
+            message, items = _gated(gate, handler, r.inputs, ctx, text)
         else:
-            message, items = _run_with_timeout(handler, r.inputs, ctx, text, SKILL_TIMEOUT_SECONDS)
+            message, items = _run_with_timeout(handler, r.inputs, ctx, text, SKILL_TIMEOUT_SECONDS, gate)
+    except _NotStarted:
+        # 承認の後に割り込み・終了・切断があった
+        return done("実行しませんでした。", ok=True, items=ctx.items, error="cancelled")
     except TimeoutError as e:
         return done(f"[時間切れ] {skill.name}: {e}", ok=False, error="timeout")
     except Exception as e:   # スキルの失敗で対話を止めない

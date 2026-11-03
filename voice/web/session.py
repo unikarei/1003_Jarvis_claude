@@ -392,7 +392,7 @@ class WebSession:
             req.event.wait(POLL_SECONDS)      # 時計を差し替えられるように、短い間隔で期限を確かめる
 
     def _before_run(self, turn: int) -> bool:
-        """orchestrator.execute が承認の後、スキルを実行する直前に呼ぶ（Context.before_run）。「実行する」で確定した
+        """orchestrator.execute が承認の後、スキルを動かすスレッドで handler を呼ぶ直前に呼ぶ（Context.before_run）。「実行する」で確定した
         発言 turn の要求がまだ取り消されておらず、会話が続いていて割り込まれていなければ、要求を使い切って True。
         割り込み・終了と同じロックで判定するので、実行を始めた後の取り消しと、取り消した後の実行は起きない。"""
         with self._lock:

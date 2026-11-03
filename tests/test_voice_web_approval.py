@@ -230,6 +230,50 @@ def test_cut_after_run_but_before_execution_does_not_execute(fake_skills, how):
     assert fake_skills["write"].calls == 0
 
 
+@pytest.mark.parametrize("how", ["interrupt", "utterance", "end"])
+def test_cut_while_handing_skill_to_its_thread_does_not_execute(fake_skills, monkeypatch, how):
+    """承認を受けて execute がスキルを別スレッドへ投入する間（以前は before_run を通った後）に割り込み・終了・切断が
+    来ても実行しない。起動の直前の確認は、スキルを動かすスレッドで handler の直前に行う。"""
+    s, events, fake, _, req = start()
+    original = orc._run_with_timeout
+
+    def cut_then_run(handler, inputs, ctx, text, seconds, gate=None):
+        if how == "interrupt":
+            assert s.interrupt(1) == "ok"
+        elif how == "utterance":
+            fake.text = "はい"
+            s.submit(wav(), 48000)
+        else:
+            s.end()
+        return original(handler, inputs, ctx, text, seconds, gate)
+    monkeypatch.setattr(orc, "_run_with_timeout", cut_then_run)
+    assert s.approve(1, req["id"], "run") == "ok"
+    until(lambda: done(events) == ["cancelled"])
+    if how == "end":
+        events.wait("ended")
+    else:
+        events.wait("turn_done", 2 if how == "utterance" else 1)
+    time.sleep(0.2)
+    assert not [e for e in events.of("answer_done") if e["turn"] == 1]
+    assert done(events) == ["cancelled"]
+    assert s._approval is None
+    assert fake_skills["write"].calls == 0
+
+
+def test_before_run_is_checked_in_the_skill_thread_right_before_handler(fake_skills):
+    """起動の直前の確認とスキルの処理が同じスレッドで続けて動く（間に別スレッドへの投入を挟まない）。"""
+    seen = []
+    write = fake_skills["write"]
+    orc.HANDLERS["fake-write"] = lambda i, c, t: (seen.append(("handler", threading.get_ident())), write(i, c, t))[1]
+
+    def gate():
+        seen.append(("gate", threading.get_ident()))
+        return True
+    out = orc.handle(WRITE, orc.Context(terminal=False, before_run=gate), ask=lambda p: "y", use_llm=False)
+    assert out.ok and out.error is None and write.calls == 1
+    assert [k for k, _ in seen] == ["gate", "handler"] and seen[0][1] == seen[1][1] != threading.get_ident()
+
+
 def test_before_run_false_skips_skill_and_chat_path_is_unchanged(fake_skills):
     out = orc.handle(WRITE, orc.Context(terminal=False, before_run=lambda: False), ask=lambda p: "y", use_llm=False)
     assert out.ok and out.error == "cancelled" and fake_skills["write"].calls == 0
