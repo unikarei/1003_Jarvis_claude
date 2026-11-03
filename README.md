@@ -98,9 +98,11 @@ python update_obsidian.py append "民泊@大洗/01_物件/大洗_物件概要.md
 
 ```powershell
 python ingest_oarai_project_os.py
+python ingest_oarai_project_os.py --migrate-sections                 # DB のファイル単位の Knowledge を節に置き換える（1 回だけ）
+python ingest_oarai_project_os.py --rollback-sections <バックアップ>  # Project OS の Knowledge だけをバックアップの時点に戻す（ほかの知識は残す）
 ```
 
-`data/*.json`（タスク・決定事項・リスク等の構造化データ）・`docs/**/*.md`を取得し、category=minpakuのSource/Knowledgeとして保存する（要約せず保存）。`ask.py`で大洗Project OSのタスク・リスク・決定事項について質問できる。
+`data/*.json`（タスク・決定事項・リスク等の構造化データ）・`docs/**/*.md`を取得し、category=minpakuのSource/Knowledgeとして保存する（要約せず保存）。1,000 字を超えるファイルは見出し・項目ごとの節に分けて節ごとの Knowledge にする（T-1419）。`--migrate-sections` は GitHub を呼ばず、先に DB を `data/backups/jarvis-<日時>-before-sections.db` に写してから置き換える（表示されたバックアップのパスを `--rollback-sections` に渡すと戻せる）。`ask.py`で大洗Project OSのタスク・リスク・決定事項について質問できる。
 
 対話からの改造提案（Python関数として利用。CLIは未提供）:
 

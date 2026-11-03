@@ -15,6 +15,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import db
 import evaluation
 import knowledge_engine
 import latency
@@ -172,6 +173,23 @@ def _blank(item: dict, answer: bool) -> dict:
     return r
 
 
+def _replaces(knowledge_id: str) -> str | None:
+    """知識の meta.replaces（移行で置き換えたファイル単位の知識の ID、T-1419）。評価で読む DB のコピーから読む。"""
+    node = db.get_node(knowledge_id)
+    try:
+        meta = json.loads(node["meta"] or "{}") if node is not None else {}
+    except (TypeError, ValueError):
+        return None
+    return meta.get("replaces") if isinstance(meta, dict) else None
+
+
+def _rank(ids: list[str], target: str | None) -> int | None:
+    """検索結果で問の根拠に最初に当たった順位（1 始まり）。知識の ID が同じか、meta.replaces が同じなら当たり。"""
+    if not target:
+        return None
+    return next((i for i, kid in enumerate(ids, 1) if kid == target or _replaces(kid) == target), None)
+
+
 def _evaluate(item: dict, t: Tuning, answer: bool, call_llm) -> dict:
     r = _blank(item, answer)
     question = item["question"]
@@ -188,8 +206,7 @@ def _evaluate(item: dict, t: Tuning, answer: bool, call_llm) -> dict:
         stage = "search"
         hits = knowledge_engine.search(question, limit=max(RANK_DEPTH, t.search_limit))
         latency.mark("search")
-        ids = [h.knowledge_id for h in hits]
-        rank = ids.index(item["knowledge_id"]) + 1 if item.get("knowledge_id") in ids else None
+        rank = _rank([h.knowledge_id for h in hits], item.get("knowledge_id"))
         r["rank"] = rank
         r.update({f"recall@{k}": int(rank is not None and rank <= k) for k in RECALL_KS})
         r["recall_eff"] = int(rank is not None and rank <= t.search_limit)

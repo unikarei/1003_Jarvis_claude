@@ -255,6 +255,9 @@ def _knowledge_sources(resources: dict) -> list[tuple[sqlite3.Row, str]]:
     prefixes = _source_prefixes(resources)
     rows = _fetchall_readonly(
         "SELECT k.id, k.category, k.created_at, k.url AS k_url, "
+        "CASE WHEN json_valid(k.meta) THEN json_extract(k.meta, '$.section_key') END AS section_key, "
+        "(SELECT s.id FROM edges e JOIN nodes s ON s.id = e.dst_id "
+        " WHERE e.src_id = k.id AND e.type = 'derived_from' ORDER BY s.created_at LIMIT 1) AS s_id, "
         "(SELECT s.url FROM edges e JOIN nodes s ON s.id = e.dst_id "
         " WHERE e.src_id = k.id AND e.type = 'derived_from' ORDER BY s.created_at LIMIT 1) AS s_url, "
         "EXISTS (SELECT 1 FROM edges e WHERE e.src_id = k.id AND e.type = 'derived_from') AS has_source "
@@ -268,16 +271,35 @@ def source_by_knowledge() -> dict[str, str]:
     return {row["id"]: sid for row, sid in _knowledge_sources(resources)}
 
 
+def _count_units(rows: list[tuple[sqlite3.Row, str]]) -> list[tuple[str | None, str, str | None]]:
+    """数える単位 (分野, データソースの ID, 最終更新) の一覧。節の Knowledge（meta に section_key、T-1419）は
+    根拠の Source ごとに 1 件とし、最終更新はその節の中の最新。ほかの知識は 1 件ずつ。"""
+    units, files = [], {}
+    for row, sid in rows:
+        if row["section_key"] is None or row["s_id"] is None:
+            units.append((row["category"], sid, row["created_at"]))
+            continue
+        key = row["s_id"]
+        if key not in files:
+            files[key] = len(units)
+            units.append((row["category"], sid, row["created_at"]))
+            continue
+        category, source, last = units[files[key]]
+        created = row["created_at"]
+        units[files[key]] = (category, source, created if last is None or (created and created > last) else last)
+    return units
+
+
 def stats(now: datetime | None = None) -> dict:
-    """データソース別・分野別の Knowledge の件数（読み取りだけ）。件数は jarvis.db の Knowledge の数。"""
+    """データソース別・分野別の Knowledge の件数（読み取りだけ）。件数は jarvis.db の Knowledge の数
+    （節に分けた Knowledge はファイルごとに 1 件）。"""
     data = registry.load()
     resources = (data or {}).get("resources") or {}
-    rows = _knowledge_sources(resources)
+    rows = _count_units(_knowledge_sources(resources))
     by_source, by_category = {}, {}
-    for row, sid in rows:
-        for key, table in ((sid, by_source), (row["category"] or NO_CATEGORY, by_category)):
+    for category, sid, created in rows:
+        for key, table in ((sid, by_source), (category or NO_CATEGORY, by_category)):
             count, last = table.get(key, (0, None))
-            created = row["created_at"]
             table[key] = (count + 1, created if last is None or (created and created > last) else last)
 
     def ranked(items):

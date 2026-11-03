@@ -88,6 +88,28 @@ def test_stats_counts_order_names(knowledge):
     assert "registry_unavailable" not in s
 
 
+def test_stats_counts_sectioned_file_once(knowledge):
+    """節に分けた Knowledge（meta に section_key、T-1419）は根拠の Source ごとに 1 件と数える。"""
+    url = "https://github.com/unikarei/oarai-project-os-since2026/blob/main/docs/long.md"
+    sid = db.insert_node("Source", category="minpaku", title="long.md", url=url)
+    for i in range(5):
+        kid = db.insert_node("Knowledge", category="minpaku", title=f"long.md › {i}", content="c",
+                             url=f"{url}?plain=1#L{i * 10 + 1}-L{i * 10 + 9}",
+                             meta={"repo_path": "docs/long.md", "section_key": f"## {i}/0", "section_index": i})
+        db._execute("UPDATE nodes SET created_at = ? WHERE id = ?", (f"2026-10-2{i}T10:00:00", kid))
+        db.insert_edge(kid, sid, "derived_from")
+    s = ke.stats()
+    assert s["total"] == 15
+    by_id = {x["source_id"]: x for x in s["by_source"]}
+    assert by_id["repo-oarai-project-os"]["count"] == 3
+    assert by_id["repo-oarai-project-os"]["last_updated"] == "2026-10-24T10:00:00"
+    assert {x["source_id"]: x["count"] for x in s["by_source"]} == {
+        "web": 7, "vault-oarai-obsidian": 3, "repo-oarai-project-os": 3, "data-insight-reporter-db": 1, "unknown": 1}
+    assert [(x["category"], x["count"]) for x in s["by_category"]] == [
+        ("minpaku", 6), ("news", 6), ("(なし)", 1), ("piano", 1), ("trading", 1)]
+    assert len(ke.source_by_knowledge()) == 19                              # 知識 ID ごとは今のまま
+
+
 def test_unavailable_vault_not_zero(knowledge):
     s = ke.stats()
     assert s["unavailable"] == [{"source_id": "vault-jarvis-knowledge", "name": "Obsidian の Vault「jarvis-knowledge」",

@@ -199,6 +199,37 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
 - JSON（構造化データ）は要約せず、整形したJSON文字列をそのままKnowledgeのcontentとする。Markdownは全文
   保存する（民泊Obsidian取り込みと同じ方針）
 - 既存ノートの内容が変わっていれば新規作成せずcontentを更新する（`ingest_obsidian.py`と同じ更新ロジック）
+- **節ごとの取り込み（T-1419、統合ワークスペースの `docs/project-os-split-design.md`、2026-11-03 Owner 承認）**:
+  本文が `SECTION_MAX_CHARS`（1,000）字を超えるファイルは `split_sections()` で節に分け、節ごとに Knowledge を作る
+  （1,000 字以下のファイルは今のとおり 1 件、`section_key` は `"all"`）。ファイルの Source は全文のまま
+  - Markdown: 行頭の `## ` で分ける（フェンス ``` の中では分けない。最初の `## ` より前は「冒頭」）。1,000 字を超える節は
+    `### ` で分け（見出し「<##> › <###>」）、まだ超えるときは空行の段落で 1,000 字以内に詰める（2 つ目から「（続き n）」）。
+    1 段落が 1,000 字を超えるときだけ文字数で切る
+  - JSON: 最上位のオブジェクトの配列の要素ごとに整形し、順に 1,000 字以内に詰める（1 要素が超えるときはその要素だけで
+    1 節）。見出しは「<配列の名前> <最初の id>〜<最後の id>」（id がなければ title・name、それもなければ番号）。配列以外の
+    項目（空の配列を含む）は最初の節の先頭にまとめる（それが 1,000 字を超えるとき・空でない配列がないときは、それだけを
+    行で 1,000 字以内に詰めた「冒頭」の節にする。1 行が超えるときだけ文字数で切る）。読めない JSON・最上位がオブジェクト
+    でない JSON は 1 節。節の本文は 1 節のときの本文（`# <path>`・```json・外側の `{ }`・配列の名前の行 `"tasks": [`・
+    `]`・区切りの `,` を含む）を切り分けたもので、すべての節をつなぐと空白以外の文字がすべてそろう（配列以外の項目を
+    先頭に寄せるため、並びだけが変わることがある）
+  - 節の Knowledge: title `<ファイル名> › <見出し>（大洗Project OS）`、content の先頭に `# <ファイル名> › <見出し>`、
+    url `…/blob/main/<path>?plain=1#L<開始>-L<終了>`（行がわからない JSON は `#part-<番号>`。長い 1 行を文字数で切って
+    行の範囲が重なる 2 つ目からは `?plain=1&part=<番号>#L<開始>-L<終了>` で一意にする）、meta `repo_path`・
+    `section_key`（見出しの階層と同じ見出しの中の順番。行番号は使わない）・`section_index`（移行で置き換えたものは
+    `replaces`）。各節 → ファイルの Source に `derived_from`。DB のスキーマは変えない
+  - 再取り込み: 内容が変わったファイルは節を作り直し、既存の節と `section_key` で対応づけて、変わった節を更新・新しい節を
+    追加・**なくなった節は Knowledge とその辺を削除**する（1 ファイル 1 トランザクション。戻り値・表示に `deleted`）。
+    `section_key` のない既存の Knowledge（移行の前）は消して節にし、新しい節の `replaces` に元の ID を入れる
+  - 移行 `--migrate-sections`: GitHub は呼ばない。DB を `data/backups/jarvis-<日時>-before-sections.db`（DB と同じ
+    フォルダの下。日時はマイクロ秒まで、同じ名前があれば番号を付け、既存のバックアップを上書きしない）に sqlite3 の backup API で写してから、Project OS の Source ごとにファイル単位の Knowledge を節の
+    Knowledge に置き換える（全体で 1 トランザクション、節になっているファイルは飛ばす）
+  - 戻し方 `--rollback-sections <バックアップ>`: Project OS の Knowledge をバックアップの時点の状態にそろえる。今の Project OS の
+    Knowledge（節もファイル単位も）と辺を消し、バックアップにある Project OS の Knowledge（移行の前から節だったものを含む）と
+    `derived_from` の辺、ほかのノードとの辺（相手が今もあるもの）を同じ ID で戻す（ほかの知識には触れない。1 トランザクション）。
+    戻すファイル単位の Knowledge が 1 件もないバックアップ（2 回目以降の移行のときのものなど）は、何も変えずに断る。
+    移行したファイルが 0 件のときは、そのバックアップは戻し方に使えず、最初の移行のときのバックアップを使うよう表示する
+  - 集計（`knowledge_engine.stats`）は節の Knowledge を根拠の Source ごとに 1 件と数える。評価（`evaluation/runner.py`）
+    の順位の照合は、知識の ID か `meta.replaces` が問の `knowledge_id` と同じなら当たりとする
 
 **提案（`oarai_project_os.py`、対話からの「改造」機能）**:
 - `docs/09_it_dx/orchestrator-ingestion-contract.md` が定義する ingestion envelope
