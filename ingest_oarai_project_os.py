@@ -108,7 +108,7 @@ def split_sections(path: str, raw: str) -> list[Section]:
             return whole
         if not isinstance(parsed, dict):
             return whole
-        return _unique_keys(_split_json(parsed)) or whole
+        return _unique_keys(_split_json(path, parsed)) or whole
     return _unique_keys(_split_markdown(raw))
 
 
@@ -270,24 +270,53 @@ def _pack_lines(text: str) -> list[str]:
     return chunks
 
 
-def _split_json(parsed: dict) -> list[Section]:
+def _dumps(value) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _indent(text: str, n: int) -> str:
+    return "\n".join(" " * n + line for line in text.split("\n"))
+
+
+def _split_json(path: str, parsed: dict) -> list[Section]:
     """値が配列の項目の要素ごとに整形して順に詰める。配列以外の項目（空の配列を含む）は最初の節の先頭にまとめる。
     配列以外の項目が SECTION_MAX_CHARS 字を超える（または空でない配列がない）ときは、それだけを行で詰めた
-    「冒頭」の節にする（1 行が超えるときだけ文字数で切る）。"""
-    arrays = [(name, value) for name, value in parsed.items() if isinstance(value, list) and value]
-    others = {name: value for name, value in parsed.items() if not (isinstance(value, list) and value)}
-    head = json.dumps(others, ensure_ascii=False, indent=2) if others else None
+    「冒頭」の節にする（1 行が超えるときだけ文字数で切る）。
+
+    本文は _to_knowledge_text の整形（`# <path>`・```json・外側の { }・配列の名前の行 `"tasks": [`・`]`・
+    区切りの ,）をそのまま切り分けたもので、すべての節をつなぐと元の本文の文字（空白を除く）がすべてそろう
+    （配列以外の項目を先頭に寄せるので、並びだけが変わる）。"""
+    items = list(parsed.items())
+    arrays: list[tuple[str, list[str]]] = []          # (配列の名前, [名前の行, 要素..., 閉じの行])
+    ids: dict[tuple[str, int], str] = {}
+    others: list[str] = []
+    for i, (name, value) in enumerate(items):
+        comma = "," if i < len(items) - 1 else ""
+        key = json.dumps(name, ensure_ascii=False)
+        if isinstance(value, list) and value:
+            elems = [_indent(_dumps(elem), 4) + ("," if j < len(value) - 1 else "") for j, elem in enumerate(value)]
+            arrays.append((name, [f"  {key}: ["] + elems + [f"  ]{comma}"]))
+            for j, elem in enumerate(value):
+                ids[(name, j + 1)] = _label(elem, j + 1)
+        else:
+            others.append(_indent(f"{key}: {_dumps(value)}", 2) + comma)
+    header, footer = f"# {path}\n\n```json\n{{", "}\n```"
+    head: str | None = "\n".join([header] + others)
     sections: list[Section] = []
-    if head is not None and (not arrays or len(head) > SECTION_MAX_CHARS):
-        for n, body in enumerate(_pack_lines(head)):
+    if not arrays or len(head) > SECTION_MAX_CHARS:
+        tail = "\n" + footer if not arrays else ""
+        for n, body in enumerate(_pack_lines(head + tail)):
             sections.append(Section(f"{PREAMBLE}/{n}", PREAMBLE if n == 0 else f"{PREAMBLE}（続き {n}）",
                                     body, None, None))
         head = None
-    for name, items in arrays:
-        pieces = [(json.dumps(elem, ensure_ascii=False, indent=2), _label(elem, i)) for i, elem in enumerate(items, 1)]
+    for a, (name, lines) in enumerate(arrays):
+        # 要素には題名の id を付け、名前の行・閉じの行・配列以外の項目・外枠には付けない
+        pieces = [(text, ids[(name, j)] if 0 < j < len(lines) - 1 else None) for j, text in enumerate(lines)]
         if head is not None:
-            pieces.insert(0, (head, None))          # 配列以外の項目（題名の id には使わない）
+            pieces.insert(0, (head, None))
             head = None
+        if a == len(arrays) - 1:
+            pieces.append((footer, None))
         chunks: list[list[tuple[str, str | None]]] = []
         for piece in pieces:
             if chunks and len("\n".join(t for t, _ in chunks[-1] + [piece])) <= SECTION_MAX_CHARS:
@@ -537,6 +566,10 @@ def rollback_sections(backup_path: Path) -> dict:
                                       (k["id"],)).fetchall() for k in restore}
     finally:
         src.close()
+    if not restore:
+        # 移行を 2 回目以降に実行したときのバックアップなど。節を消すと Project OS の知識がなくなるので、何も変えない
+        raise ValueError(f"このバックアップには戻すファイル単位の Project OS の Knowledge がありません: {backup_path}。"
+                         "最初に移行したとき（ファイル数が 1 件以上）に表示されたバックアップを指定してください")
 
     deleted = []
     conn = db.get_connection()
@@ -576,8 +609,15 @@ def main(argv: list[str] | None = None) -> None:
         print(f"バックアップ: {result['backup']}")
         print(f"ファイル: {result['files']}件 / 消したKnowledge: {len(result['deleted'])}件 / "
               f"作ったKnowledge: {len(result['created'])}件")
+        if result["files"] == 0:
+            print("移行するファイルはありませんでした（すでに節になっています）。このバックアップは移行の前の状態では"
+                  "ないため --rollback-sections には使えません。戻すときは最初の移行のときに表示されたバックアップを"
+                  "指定してください")
     elif args.rollback_sections:
-        result = rollback_sections(Path(args.rollback_sections))
+        try:
+            result = rollback_sections(Path(args.rollback_sections))
+        except (FileNotFoundError, ValueError) as e:
+            raise SystemExit(f"戻せません: {e}")
         print(f"ファイル: {result['files']}件 / 消したKnowledge: {len(result['deleted'])}件 / "
               f"戻したKnowledge: {len(result['created'])}件")
     else:

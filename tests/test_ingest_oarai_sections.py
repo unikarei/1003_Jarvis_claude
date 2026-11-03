@@ -3,6 +3,7 @@
 import json
 import re
 import sqlite3
+from collections import Counter
 
 import pytest
 
@@ -105,17 +106,48 @@ def _tasks(n: int, size: int = 100, key: str = "id") -> list[dict]:
     return [{key: f"T-{i:03}", "body": "あ" * size} for i in range(1, n + 1)]
 
 
+def _elem(t: dict) -> str:
+    """配列の要素の整形（_to_knowledge_text の中と同じく 4 字下げ）。"""
+    return "\n".join("    " + line for line in json.dumps(t, ensure_ascii=False, indent=2).split("\n"))
+
+
+def _check_json(path: str, raw: str, sections) -> None:
+    """JSON の節: key が一意・本文を落とさない（つなぐと _to_knowledge_text の空白以外の文字がすべてそろう）。"""
+    assert len({s.key for s in sections}) == len(sections)
+    assert Counter(_nows("".join(s.body for s in sections))) == Counter(_nows(ipo._to_knowledge_text(path, raw)))
+
+
 def test_json_packs_array_items_with_ids():
     raw = json.dumps({"schema_version": 2, "tasks": _tasks(12), "risks": _tasks(2, key="title")}, ensure_ascii=False)
     sections = split_sections("data/tasks.json", raw)
     assert all(len(s.body) <= SECTION_MAX_CHARS for s in sections)
-    assert sections[0].body.startswith('{\n  "schema_version": 2\n}')       # 配列以外の項目は最初の節の先頭
+    # 外枠と配列以外の項目は最初の節の先頭、続いて配列の名前の行
+    assert sections[0].body.startswith('# data/tasks.json\n\n```json\n{\n  "schema_version": 2,\n  "tasks": [\n')
     assert sections[0].heading.startswith("tasks T-001〜")
     assert [s.key for s in sections if s.key.startswith("tasks/")] == [f"tasks/{i}" for i in range(len(sections) - 1)]
     assert sections[-1].key == "risks/0" and sections[-1].heading == "risks T-001〜T-002"
+    assert sections[-1].body.startswith('  "risks": [\n') and sections[-1].body.endswith("  ]\n}\n```")
     for t in _tasks(12):
-        assert any(json.dumps(t, ensure_ascii=False, indent=2) in s.body for s in sections)
+        assert any(_elem(t) in s.body for s in sections)
     assert all(s.start_line is None for s in sections)
+    _check_json("data/tasks.json", raw, sections)
+
+
+def test_json_keeps_array_name_and_frame_in_order():
+    """配列以外の項目が最初にあるとき、節をつなぐと _to_knowledge_text の本文そのもの（空白を除く）になる。"""
+    raw = json.dumps({"schema_version": 2, "tasks": _tasks(12), "risks": _tasks(9, key="title")}, ensure_ascii=False)
+    sections = split_sections("data/tasks.json", raw)
+    assert _nows("".join(s.body for s in sections)) == _nows(ipo._to_knowledge_text("data/tasks.json", raw))
+    assert sum('"tasks": [' in s.body for s in sections) == 1 and sum('"risks": [' in s.body for s in sections) == 1
+
+
+def test_json_other_items_after_arrays_are_kept():
+    parsed = {"tasks": _tasks(12), "updated_at": "2026-11-03", "notes": {"a": "あ" * 50}}
+    raw = json.dumps(parsed, ensure_ascii=False)
+    sections = split_sections("data/tasks.json", raw)
+    assert '"updated_at": "2026-11-03"' in sections[0].body and '"notes": {' in sections[0].body
+    assert all(len(s.body) <= SECTION_MAX_CHARS for s in sections)
+    _check_json("data/tasks.json", raw, sections)
 
 
 def test_json_single_long_item_alone_and_fallback_labels():
@@ -123,6 +155,7 @@ def test_json_single_long_item_alone_and_fallback_labels():
     sections = split_sections("data/x.json", json.dumps({"items": items}))
     assert [s.heading for s in sections] == ["items 小", "items 大", "items 3"]
     assert len(sections[1].body) > SECTION_MAX_CHARS
+    _check_json("data/x.json", json.dumps({"items": items}), sections)
 
 
 @pytest.mark.parametrize("raw", ["{" + "x" * 1500, json.dumps([{"id": i, "b": "x" * 100} for i in range(20)])])
@@ -139,7 +172,7 @@ def test_json_without_arrays_is_split_by_lines():
     assert len(sections) > 1 and all(len(s.body) <= SECTION_MAX_CHARS for s in sections)
     assert [s.heading for s in sections][:2] == ["冒頭", "冒頭（続き 1）"]
     assert len({s.key for s in sections}) == len(sections)
-    assert _nows("".join(s.body for s in sections)) == _nows(json.dumps(parsed, ensure_ascii=False, indent=2))
+    assert _nows("".join(s.body for s in sections)) == _nows(ipo._to_knowledge_text("data/x.json", raw))
 
 
 def test_json_long_head_is_split_before_arrays():
@@ -149,8 +182,10 @@ def test_json_long_head_is_split_before_arrays():
     head = [s for s in sections if s.key.startswith("冒頭/")]
     assert len(head) > 1 and sections[:len(head)] == head
     assert sections[len(head)].heading.startswith("tasks T-001〜")
+    assert sections[len(head)].body.startswith('  "tasks": [\n')
     for t in _tasks(12):
-        assert any(json.dumps(t, ensure_ascii=False, indent=2) in s.body for s in sections)
+        assert any(_elem(t) in s.body for s in sections)
+    _check_json("data/tasks.json", json.dumps(parsed, ensure_ascii=False), sections)
 
 
 def test_json_section_urls_use_part(db_path):
@@ -337,6 +372,27 @@ def test_migrate_twice_keeps_first_backup_for_rollback(legacy, tmp_path, monkeyp
     assert first != second
     ipo.rollback_sections(first)
     assert _project_os_state() == before
+
+
+def test_rollback_refuses_backup_without_file_knowledge(legacy, tmp_path, capsys):
+    """2 回目の移行のバックアップ（節だけ）で戻そうとすると、何も変えずに断る。"""
+    ipo.migrate_sections(tmp_path / "bk")
+    state = _project_os_state()
+    second = ipo.migrate_sections(tmp_path / "bk")["backup"]
+    with pytest.raises(ValueError, match="最初に移行したとき"):
+        ipo.rollback_sections(second)
+    assert _project_os_state() == state
+    with pytest.raises(SystemExit):
+        ipo.main(["--rollback-sections", second])
+    assert _project_os_state() == state
+
+
+def test_cli_second_migration_warns_backup_not_for_rollback(legacy, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ipo, "backup_dir", lambda: tmp_path / "bk")
+    ipo.main(["--migrate-sections"])
+    assert "--rollback-sections には使えません" not in capsys.readouterr().out
+    ipo.main(["--migrate-sections"])
+    assert "--rollback-sections には使えません" in capsys.readouterr().out
 
 
 def test_migrate_twice_is_same(legacy, tmp_path):
