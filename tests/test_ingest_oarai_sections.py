@@ -78,6 +78,10 @@ def test_long_paragraph_on_one_line_has_unique_urls(db_path):
     rows = ipo._section_rows("docs/a.md", raw)
     urls = [r["url"] for r in rows]
     assert len(urls) == len(set(urls))
+    assert all("#part-" not in u for u in urls)                                    # 行がわかる節は行へのリンク
+    assert [u.rsplit("#", 1)[1] for u in urls] == ["L1-L2", "L2-L2", "L2-L2", "L3-L4"]
+    assert urls[1] == f"{BLOB}docs/a.md?plain=1#L2-L2"
+    assert urls[2] == f"{BLOB}docs/a.md?plain=1&part=3#L2-L2"
 
 
 def test_keys_stable_when_section_added_before():
@@ -126,6 +130,27 @@ def test_json_unreadable_or_not_object_is_one_section(raw):
     sections = split_sections("data/x.json", raw)
     assert [s.key for s in sections] == ["all"]
     assert sections[0].body == ipo._to_knowledge_text("data/x.json", raw)
+
+
+def test_json_without_arrays_is_split_by_lines():
+    parsed = {f"k{i}": "あ" * 150 for i in range(20)} | {"long": "x" * 2500, "empty": []}
+    raw = json.dumps(parsed, ensure_ascii=False)
+    sections = split_sections("data/x.json", raw)
+    assert len(sections) > 1 and all(len(s.body) <= SECTION_MAX_CHARS for s in sections)
+    assert [s.heading for s in sections][:2] == ["冒頭", "冒頭（続き 1）"]
+    assert len({s.key for s in sections}) == len(sections)
+    assert _nows("".join(s.body for s in sections)) == _nows(json.dumps(parsed, ensure_ascii=False, indent=2))
+
+
+def test_json_long_head_is_split_before_arrays():
+    parsed = {"meta": {f"k{i}": "あ" * 150 for i in range(10)}, "tasks": _tasks(12)}
+    sections = split_sections("data/tasks.json", json.dumps(parsed, ensure_ascii=False))
+    assert all(len(s.body) <= SECTION_MAX_CHARS for s in sections)
+    head = [s for s in sections if s.key.startswith("冒頭/")]
+    assert len(head) > 1 and sections[:len(head)] == head
+    assert sections[len(head)].heading.startswith("tasks T-001〜")
+    for t in _tasks(12):
+        assert any(json.dumps(t, ensure_ascii=False, indent=2) in s.body for s in sections)
 
 
 def test_json_section_urls_use_part(db_path):
@@ -272,7 +297,7 @@ def test_migrate_replaces_file_knowledge_with_sections(legacy, tmp_path):
     result = ipo.migrate_sections(tmp_path / "bk")
     assert result["files"] == 3 and sorted(result["deleted"]) == sorted(legacy["kids"].values())
     assert sqlite3.connect(result["backup"]).execute("SELECT COUNT(*) FROM nodes").fetchone()[0] > 0
-    assert re.search(r"jarvis-\d{8}-\d{6}-before-sections\.db$", result["backup"])
+    assert re.search(r"jarvis-\d{8}-\d{6}-\d{6}(-\d+)?-before-sections\.db$", result["backup"])
     for kid in legacy["kids"].values():
         assert db.get_node(kid) is None
     knowledge = [r for r in _knowledge().values() if r["category"] == "minpaku"]
@@ -283,6 +308,35 @@ def test_migrate_replaces_file_knowledge_with_sections(legacy, tmp_path):
         assert db.get_source_for_knowledge(r["id"])["url"] == f"{BLOB}{meta['repo_path']}"
     assert sum(json.loads(r["meta"])["repo_path"] == "docs/spec.md" for r in knowledge) == 4
     assert db.get_node(legacy["other"]) is not None
+
+
+def test_backup_does_not_overwrite_in_same_instant(legacy, tmp_path, monkeypatch):
+    class Frozen(ipo.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return ipo.datetime(2026, 11, 3, 12, 0, 0)
+    monkeypatch.setattr(ipo, "datetime", Frozen)
+    first = ipo.backup_db(tmp_path / "bk")
+    db.insert_node("Knowledge", category="news", title="後から", content="x")
+    second = ipo.backup_db(tmp_path / "bk")
+    assert first != second
+    count = "SELECT COUNT(*) FROM nodes"
+    assert (sqlite3.connect(first).execute(count).fetchone()[0] + 1
+            == sqlite3.connect(second).execute(count).fetchone()[0])
+
+
+def test_migrate_twice_keeps_first_backup_for_rollback(legacy, tmp_path, monkeypatch):
+    class Frozen(ipo.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return ipo.datetime(2026, 11, 3, 12, 0, 0)
+    before = _project_os_state()
+    monkeypatch.setattr(ipo, "datetime", Frozen)            # 同じ時刻に 2 回移行しても最初のバックアップが残る
+    first = ipo.migrate_sections(tmp_path / "bk")["backup"]
+    second = ipo.migrate_sections(tmp_path / "bk")["backup"]
+    assert first != second
+    ipo.rollback_sections(first)
+    assert _project_os_state() == before
 
 
 def test_migrate_twice_is_same(legacy, tmp_path):

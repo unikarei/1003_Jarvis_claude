@@ -207,16 +207,19 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
     1 段落が 1,000 字を超えるときだけ文字数で切る
   - JSON: 最上位のオブジェクトの配列の要素ごとに整形し、順に 1,000 字以内に詰める（1 要素が超えるときはその要素だけで
     1 節）。見出しは「<配列の名前> <最初の id>〜<最後の id>」（id がなければ title・name、それもなければ番号）。配列以外の
-    項目（空の配列を含む）は最初の節の先頭にまとめる。読めない JSON・最上位がオブジェクトでない JSON は 1 節
+    項目（空の配列を含む）は最初の節の先頭にまとめる（それが 1,000 字を超えるとき・空でない配列がないときは、それだけを
+    行で 1,000 字以内に詰めた「冒頭」の節にする。1 行が超えるときだけ文字数で切る）。読めない JSON・最上位がオブジェクト
+    でない JSON は 1 節
   - 節の Knowledge: title `<ファイル名> › <見出し>（大洗Project OS）`、content の先頭に `# <ファイル名> › <見出し>`、
-    url `…/blob/main/<path>?plain=1#L<開始>-L<終了>`（行がわからない JSON は `#part-<番号>`）、meta `repo_path`・
+    url `…/blob/main/<path>?plain=1#L<開始>-L<終了>`（行がわからない JSON は `#part-<番号>`。長い 1 行を文字数で切って
+    行の範囲が重なる 2 つ目からは `?plain=1&part=<番号>#L<開始>-L<終了>` で一意にする）、meta `repo_path`・
     `section_key`（見出しの階層と同じ見出しの中の順番。行番号は使わない）・`section_index`（移行で置き換えたものは
     `replaces`）。各節 → ファイルの Source に `derived_from`。DB のスキーマは変えない
   - 再取り込み: 内容が変わったファイルは節を作り直し、既存の節と `section_key` で対応づけて、変わった節を更新・新しい節を
     追加・**なくなった節は Knowledge とその辺を削除**する（1 ファイル 1 トランザクション。戻り値・表示に `deleted`）。
     `section_key` のない既存の Knowledge（移行の前）は消して節にし、新しい節の `replaces` に元の ID を入れる
   - 移行 `--migrate-sections`: GitHub は呼ばない。DB を `data/backups/jarvis-<日時>-before-sections.db`（DB と同じ
-    フォルダの下）に sqlite3 の backup API で写してから、Project OS の Source ごとにファイル単位の Knowledge を節の
+    フォルダの下。日時はマイクロ秒まで、同じ名前があれば番号を付け、既存のバックアップを上書きしない）に sqlite3 の backup API で写してから、Project OS の Source ごとにファイル単位の Knowledge を節の
     Knowledge に置き換える（全体で 1 トランザクション、節になっているファイルは飛ばす）
   - 戻し方 `--rollback-sections <バックアップ>`: Project OS の節の Knowledge と辺を消し、バックアップから Project OS の
     ファイル単位の Knowledge と `derived_from` の辺を同じ ID で戻す（ほかの知識には触れない。1 トランザクション）

@@ -253,14 +253,36 @@ def _label(elem, number: int) -> str:
     return str(number)
 
 
+def _pack_lines(text: str) -> list[str]:
+    """行を順に SECTION_MAX_CHARS 字以内に詰める。超える 1 行だけ文字数で切る。"""
+    chunks: list[str] = []
+    current: str | None = None
+    for line in text.split("\n"):
+        for piece in [line[i:i + SECTION_MAX_CHARS] for i in range(0, len(line), SECTION_MAX_CHARS)] or [""]:
+            if current is not None and len(current) + 1 + len(piece) <= SECTION_MAX_CHARS:
+                current += "\n" + piece
+            else:
+                if current:
+                    chunks.append(current)
+                current = piece
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def _split_json(parsed: dict) -> list[Section]:
-    """値が配列の項目の要素ごとに整形して順に詰める。配列以外の項目（空の配列を含む）は最初の節の先頭にまとめる。"""
+    """値が配列の項目の要素ごとに整形して順に詰める。配列以外の項目（空の配列を含む）は最初の節の先頭にまとめる。
+    配列以外の項目が SECTION_MAX_CHARS 字を超える（または空でない配列がない）ときは、それだけを行で詰めた
+    「冒頭」の節にする（1 行が超えるときだけ文字数で切る）。"""
     arrays = [(name, value) for name, value in parsed.items() if isinstance(value, list) and value]
-    if not arrays:
-        return []
     others = {name: value for name, value in parsed.items() if not (isinstance(value, list) and value)}
     head = json.dumps(others, ensure_ascii=False, indent=2) if others else None
     sections: list[Section] = []
+    if head is not None and (not arrays or len(head) > SECTION_MAX_CHARS):
+        for n, body in enumerate(_pack_lines(head)):
+            sections.append(Section(f"{PREAMBLE}/{n}", PREAMBLE if n == 0 else f"{PREAMBLE}（続き {n}）",
+                                    body, None, None))
+        head = None
     for name, items in arrays:
         pieces = [(json.dumps(elem, ensure_ascii=False, indent=2), _label(elem, i)) for i, elem in enumerate(items, 1)]
         if head is not None:
@@ -297,9 +319,12 @@ def _section_rows(path: str, raw: str) -> list[dict]:
             rows.append({"key": s.key, "title": f"{name}（大洗Project OS）", "content": s.body, "url": blob_url,
                          "meta": meta})
             continue
-        url = f"{blob_url}?plain=1#L{s.start_line}-L{s.end_line}" if s.start_line is not None else None
-        if url is None or url in urls:                # 1 行の長い段落を文字数で切ると同じ行の範囲になる
+        if s.start_line is None:
             url = f"{blob_url}?plain=1#part-{i + 1}"
+        else:
+            url = f"{blob_url}?plain=1#L{s.start_line}-L{s.end_line}"
+            if url in urls:                           # 1 行の長い段落を文字数で切ると同じ行の範囲になる
+                url = f"{blob_url}?plain=1&part={i + 1}#L{s.start_line}-L{s.end_line}"
         urls.add(url)
         rows.append({"key": s.key, "title": f"{name} › {s.heading}（大洗Project OS）",
                      "content": f"# {name} › {s.heading}\n\n{s.body}", "url": url, "meta": meta})
@@ -438,10 +463,18 @@ def backup_dir() -> Path:
 
 
 def backup_db(directory: Path | None = None) -> Path:
-    """DB を sqlite3 の backup API で data/backups/jarvis-<日時>-before-sections.db に写す。"""
+    """DB を sqlite3 の backup API で data/backups/jarvis-<日時>-before-sections.db に写す。
+    既存のバックアップは上書きしない（同じ名前があれば番号を付けた新しい名前にする）。"""
     directory = Path(directory or backup_dir())
     directory.mkdir(parents=True, exist_ok=True)
-    dst_path = directory / f"jarvis-{datetime.now().strftime('%Y%m%d-%H%M%S')}-before-sections.db"
+    stamp, n = datetime.now().strftime('%Y%m%d-%H%M%S-%f'), 0
+    while True:
+        dst_path = directory / f"jarvis-{stamp}{f'-{n}' if n else ''}-before-sections.db"
+        try:
+            dst_path.open("xb").close()               # 排他的に作る（あれば FileExistsError）
+            break
+        except FileExistsError:
+            n += 1
     src, dst = sqlite3.connect(db.DB_PATH), sqlite3.connect(dst_path)
     try:
         src.backup(dst)
