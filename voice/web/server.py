@@ -1,7 +1,8 @@
-"""ブラウザでの声の会話の HTTP サーバー（T-1501、ADR-0031、../docs/browser-voice-spec.md §6・§7）。
+"""ブラウザでの声の会話の HTTP サーバー（T-1501・T-1502、ADR-0031、../docs/browser-voice-spec.md §6・§7）。
 
 標準ライブラリの ThreadingHTTPServer で 127.0.0.1 だけに置く。ブラウザ → サーバーは POST、サーバー → ブラウザは
-SSE（EventSource）の 1 本。起動ごとのトークンを HttpOnly の Cookie に移して認証する（acc/voice_settings.py と同じ形）。
+SSE（EventSource）の 1 本。読み上げの音は文ごとに GET /api/audio/<id> で渡し、再生の始め・終わりを
+POST /api/played で受ける（T-1502）。起動ごとのトークンを HttpOnly の Cookie に移して認証する（acc/voice_settings.py と同じ形）。
 VS Code のポート転送は別の番号になることがあるため、Host・Origin は localhost・127.0.0.1 ならポートを問わない。
 トークン・Cookie・本文・音声はログに出さない。
 """
@@ -33,6 +34,7 @@ WAV_TYPES = ("audio/wav", "audio/x-wav", "audio/wave")
 
 HOST_RE = re.compile(r"(localhost|127\.0\.0\.1)(:\d{1,5})?")
 ORIGIN_RE = re.compile(r"http://(localhost|127\.0\.0\.1)(:\d{1,5})?")
+AUDIO_PATH_RE = re.compile(r"/api/audio/([A-Za-z0-9_-]{1,64})")
 STATIC_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\.(html|js|css)")
 CONTENT_TYPES = {"html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
                  "css": "text/css; charset=utf-8"}
@@ -55,8 +57,9 @@ def page_config() -> dict:
 
 
 def default_session_factory(emit):
-    from voice.web.session import WebSession
-    return WebSession(emit=emit)
+    """本番の会話。選んだ音声のエンジンを会話の開始で起動し、会話の終わりで止める（T-1502）。"""
+    from voice.web.session import WebSession, default_launcher
+    return WebSession(emit=emit, launcher=default_launcher())
 
 
 class Sessions:
@@ -99,6 +102,13 @@ class Sessions:
                 return None
             self.attached = True
             return s, self.events
+
+    def end_current(self) -> None:
+        """動いている会話を終える（サーバーを止めるとき。この会話が起動したエンジンも止まる）。"""
+        with self.lock:
+            s = self.current
+        if s is not None and not s.closed:
+            s.end()
 
 
 def make_handler(token: str, sessions: Sessions, ping_seconds: float):
@@ -189,7 +199,18 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
                 return self._json(200, page_config())
             if path == "/api/events":
                 return self._events(q.get("session"))
+            m = AUDIO_PATH_RE.fullmatch(path)
+            if m:
+                return self._audio(q.get("session"), m.group(1))
             self._json(404, {"error": "not_found"})
+
+        def _audio(self, sid, audio_id):
+            """今の会話の、まだ保持している文の WAV だけを返す（T-1502）。"""
+            session = sessions.get(sid)
+            data = session.audio(audio_id) if session is not None else None
+            if data is None:
+                return self._json(404, {"error": "not_found"})
+            self._send(200, data, "audio/wav")
 
         def _static(self, name: str):
             if not STATIC_NAME_RE.fullmatch(name):
@@ -235,7 +256,9 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
             length = self._length()
             if length is None or length > MAX_SMALL_BODY:
                 return self._json(400, {"error": "bad_length"})
-            self.rfile.read(length)       # 本文は使わない
+            body = self.rfile.read(length)
+            if path == "/api/played":
+                return self._played(q, body)
             if path == "/api/session":
                 session = sessions.start()
                 if session is None:
@@ -248,6 +271,31 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
                 session.end()
                 return self._json(200, {"ended": True})
             self._json(404, {"error": "not_found"})
+
+        def _played(self, q, body: bytes):
+            """ブラウザの再生の知らせ {"turn", "id", "event": start|end|error}（T-1502）。
+            今の発言の番号と違えば 409 で何もしない。保持していない ID は 404。"""
+            from voice.web.player import EVENTS
+
+            session = sessions.get(q.get("session"))
+            if session is None:
+                return self._json(404, {"error": "no_session"})
+            try:
+                data = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                return self._json(400, {"error": "bad_json"})
+            if not isinstance(data, dict):
+                return self._json(400, {"error": "bad_json"})
+            turn, audio_id, event = data.get("turn"), data.get("id"), data.get("event")
+            if (not isinstance(turn, int) or isinstance(turn, bool) or not isinstance(audio_id, str)
+                    or not AUDIO_PATH_RE.fullmatch("/api/audio/" + audio_id) or event not in EVENTS):
+                return self._json(400, {"error": "bad_request"})
+            status = session.played(turn, audio_id, event)
+            if status == "stale":
+                return self._json(409, {"error": "stale_turn"})
+            if status == "unknown":
+                return self._json(404, {"error": "not_found"})
+            self._json(200, {"ok": True})
 
         def _utterance(self, q):
             from voice.web.session import AudioError, Busy

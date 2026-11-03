@@ -1,11 +1,13 @@
 """ブラウザでの声の会話の土台（T-1501、../docs/testing.md §13）のテスト。
 
-偽の認識・偽の orchestrator.handle・一時の DB で動かし、本物の LLM・Whisper・音声の機器を使わない。
+偽の認識・偽の orchestrator.handle・偽の合成・偽のブラウザ・一時の DB で動かし、本物の LLM・Whisper・音声の機器・
+音声エンジンを使わない。読み上げ（T-1502）のテストは tests/test_voice_web_speech.py。
 """
 
 import http.client
 import io
 import json
+import queue
 import shutil
 import subprocess
 import sys
@@ -17,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import config
 import orchestrator
 from ckc.models import Speaker as Who
 from voice.web import server as web
@@ -24,6 +27,11 @@ from voice.web.session import AudioError, Busy, WebSession, decode_wav
 
 ROOT = Path(__file__).resolve().parent.parent
 TOKEN = "test-token-123"
+
+
+@pytest.fixture(autouse=True)
+def _latency_log(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "LATENCY_LOG", tmp_path / "latency" / "latency.jsonl")
 
 
 def wav(seconds=0.5, rate=48000, channels=1, value=1000) -> bytes:
@@ -60,23 +68,80 @@ class Fake:
 
     def handle(self, text, ctx, ask=None):
         self.handled.append(text)
+        ctx.shown = ""
         for c in self.chunks:
             ctx.stream(c)
+            ctx.shown += c                # orchestrator と同じく、逐次表示した部分を残す
         return outcome(self.answer)
 
     def record(self, text, out):
         self.recorded.append((text, out.text))
 
 
+class Synth:
+    """偽の合成（文, 取り消し）→ 16 kHz の float32。読んだ文を覚える。fail の文は合成できない（None）。"""
+
+    def __init__(self, seconds=0.1, fail=(), log=None, silent=False):
+        self.seconds, self.fail, self.log, self.silent = seconds, set(fail), log, silent
+        self.said = []
+
+    def __call__(self, sentence, cancel=None):
+        self.said.append(sentence)
+        if self.log is not None:
+            self.log.append(("synth", sentence))
+        if self.silent or sentence in self.fail:
+            return None
+        return np.full(int(self.seconds * 16000), 0.1, dtype=np.float32)
+
+
+class Browser:
+    """偽のブラウザ。audio のイベントを受けたら、別のスレッドで WAV を取り、start・end を知らせる。
+    play は最初の何文まで再生するか（None なら全部。それより後は何も知らせない＝止まったブラウザ）、
+    errors は再生できない文の順番。知らせる前にイベントの記録へ _played として残し（turn_done との順番を見る）、
+    知らせた結果を done に残す。"""
+
+    def __init__(self, play=None, errors=()):
+        self.play, self.errors = play, set(errors)
+        self.session, self.events = None, None
+        self.fetched, self.done = [], []
+        self._queue: queue.Queue = queue.Queue()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def on_event(self, event):
+        if event["type"] == "audio":
+            self._queue.put(event)
+
+    def _run(self):
+        count = 0
+        while True:
+            ev = self._queue.get()
+            data = self.session.audio(ev["id"])
+            self.fetched.append((ev["id"], data))
+            if self.play is not None and count >= self.play:
+                continue
+            count += 1
+            steps = ["error"] if ev["index"] in self.errors else ["start", "end"]
+            for step in steps:
+                self.events({"type": "_played", "event": step, "index": ev["index"]})
+                self.done.append((step, ev["index"], self.session.played(ev["turn"], ev["id"], step)))
+
+
 class Events(list):
-    def __init__(self):
+    def __init__(self, browser=None):
         super().__init__()
         self.cond = threading.Condition()
+        self.browser = browser
 
     def __call__(self, event):
         with self.cond:
             self.append(event)
             self.cond.notify_all()
+        if self.browser is not None:
+            self.browser.on_event(event)
+
+    def of(self, *types):
+        with self.cond:
+            return [e for e in self if e["type"] in types]
 
     def wait(self, type_, count=1, timeout=5.0):
         end = time.monotonic() + timeout
@@ -88,12 +153,24 @@ class Events(list):
                 self.cond.wait(left)
 
 
-def make_session(fake=None, **kw):
+def make_session(fake=None, browser=None, synth=None, **kw):
+    """偽の認識・handle・合成・ブラウザ（既定はすべての文を再生する）でつくる会話。"""
     fake = fake or Fake()
-    events = Events()
+    browser = browser or Browser()
+    events = Events(browser)
     s = WebSession(transcribe=fake.transcribe, handle=kw.get("handle", fake.handle), emit=events,
-                   record=kw.get("record", fake.record))
+                   record=kw.get("record", fake.record), synth=synth or Synth(), launcher=kw.get("launcher"),
+                   clock=kw.get("clock", time.monotonic))
+    browser.session, browser.events = s, events
     return s, events, fake
+
+
+UI_EVENTS = ("ready", "recognized", "ignored", "answer_chunk", "answer_done", "error", "ended", "turn_done")
+
+
+def ui(events):
+    """読み上げ（audio・notice）と偽のブラウザの記録を除いた種類の並び。"""
+    return [e["type"] for e in events.of(*UI_EVENTS)]
 
 
 # ---------------------------------------------------------------- WAV
@@ -122,17 +199,19 @@ def test_decode_wav_checks_format_rate_and_length():
 def test_48k_wav_is_resampled_to_16k_and_events_in_order():
     s, events, fake = make_session()
     assert s.submit(wav(0.5, 48000), 48000) == 1
-    events.wait("answer_done")
+    events.wait("turn_done")
     audio = fake.heard[0]
     assert audio.dtype == np.float32 and len(audio) == 8000      # 0.5 秒の 16 kHz
     assert abs(float(audio.mean()) - 1000 / 32768) < 1e-4
-    assert [e["type"] for e in events] == ["ready", "recognized", "answer_chunk", "answer_chunk", "answer_done"]
-    assert [e["seq"] for e in events] == [1, 2, 3, 4, 5]
-    assert all(e["session"] == s.id for e in events)
-    assert all(e["turn"] == 1 for e in events[1:])
-    assert events[1]["text"] == "こんにちは"
-    assert [e["text"] for e in events[2:4]] == ["答え", "です"]
-    assert (events[4]["text"], events[4]["skill"], events[4]["ok"]) == ("答えです", "general-chat", True)
+    assert ui(events) == ["ready", "recognized", "answer_chunk", "answer_chunk", "answer_done", "turn_done"]
+    sent = [e for e in events if e["type"] != "_played"]
+    assert [e["seq"] for e in sent] == list(range(1, len(sent) + 1))
+    assert all(e["session"] == s.id for e in sent)
+    assert all(e["turn"] == 1 for e in sent[1:])
+    shown = events.of(*UI_EVENTS)
+    assert shown[1]["text"] == "こんにちは"
+    assert [e["text"] for e in shown[2:4]] == ["答え", "です"]
+    assert (shown[4]["text"], shown[4]["skill"], shown[4]["ok"]) == ("答えです", "general-chat", True)
     assert fake.recorded == [("こんにちは", "答えです")]
     assert [(t.speaker, t.text) for t in s.ctx.history] == [(Who.OWNER, "こんにちは"), (Who.AI, "答えです")]
     assert s.ctx.voice is True and s.ctx.stream is None
@@ -142,8 +221,10 @@ def test_48k_wav_is_resampled_to_16k_and_events_in_order():
 def test_noise_is_ignored(text, reason):
     s, events, fake = make_session(Fake(text=text))
     s.submit(wav(), 48000)
-    events.wait("ignored")
-    assert events[-1]["reason"] == reason and events[-1]["turn"] == 1
+    events.wait("turn_done")
+    ignored = events.of("ignored")[-1]
+    assert ignored["reason"] == reason and ignored["turn"] == 1
+    assert ui(events)[-2:] == ["ignored", "turn_done"]
     assert fake.handled == []
 
 
@@ -178,12 +259,13 @@ def test_stt_error_is_reported_and_session_continues():
     fake = Fake(text=RuntimeError("whisper failed"))
     s, events, _ = make_session(fake)
     s.submit(wav(), 48000)
-    events.wait("error")
-    assert events[-1]["kind"] == "stt" and events[-1]["turn"] == 1
+    events.wait("turn_done")
+    error = events.of("error")[-1]
+    assert error["kind"] == "stt" and error["turn"] == 1
     fake.text = "もう一度"
     assert s.submit(wav(), 48000) == 2
-    events.wait("answer_done")
-    assert events[-1]["turn"] == 2 and not s.closed
+    events.wait("turn_done", 2)
+    assert events.of("answer_done")[-1]["turn"] == 2 and not s.closed
 
 
 def test_answer_error_and_record_error_do_not_stop_session():
@@ -192,15 +274,15 @@ def test_answer_error_and_record_error_do_not_stop_session():
 
     s, events, fake = make_session(handle=broken)
     s.submit(wav(), 48000)
-    events.wait("error")
-    assert events[-1]["kind"] == "answer"
+    events.wait("turn_done")
+    assert events.of("error")[-1]["kind"] == "answer"
 
     def bad_record(text, out):
         raise RuntimeError("db is locked")
 
     s2, events2, _ = make_session(record=bad_record)
     s2.submit(wav(), 48000)
-    events2.wait("answer_done")
+    events2.wait("turn_done")
     assert len(s2.ctx.history) == 2
 
 
@@ -212,7 +294,7 @@ def test_second_utterance_while_thinking_is_busy():
     with pytest.raises(Busy):
         s.submit(wav(), 48000)
     fake.gate.set()
-    events.wait("answer_done")
+    events.wait("turn_done")
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
         try:
@@ -237,10 +319,12 @@ def test_bad_audio_emits_error_event():
 @pytest.fixture
 def served():
     fake = Fake()
+    fake.synth = Synth(silent=True)      # 既定は音を作らない（SSE の並びを T-1501 と同じに保つ）。読み上げのテストで差し替える
     made = []
 
     def factory(emit):
-        s = WebSession(transcribe=fake.transcribe, handle=fake.handle, emit=emit, record=fake.record)
+        s = WebSession(transcribe=fake.transcribe, handle=fake.handle, emit=emit, record=fake.record,
+                       synth=fake.synth)
         made.append(s)
         return s
 
@@ -417,7 +501,7 @@ def test_sse_events_and_end(served):
     assert call(port, "POST", f"/api/end?session={sid}")[0].status == 200
     events, pings = _read_events(resp, "ended")
     assert pings >= 1                                         # 待っている間は : ping を送る
-    assert events[-1]["type"] == "ended" and events[-1]["seq"] == 6
+    assert [e["type"] for e in events] == ["turn_done", "ended"] and events[-1]["seq"] == 7
     assert resp.readline() == b"\n" and resp.readline() == b""   # 終えたら閉じる
     conn.close()
     assert made[0].closed

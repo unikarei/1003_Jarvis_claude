@@ -1,14 +1,20 @@
-// ブラウザでの声の会話のページ（T-1501）。話すと自動で区切って送り、認識した文と回答を文字で出す。
-// 音声・本文はブラウザの保存領域に置かない。読み上げ（T-1502）・割り込み（T-1503）・画面での承認（T-1504）はまだない。
+// ブラウザでの声の会話のページ（T-1501・T-1502）。話すと自動で区切って送り、認識した文と回答を文字で出し、
+// 回答を文ごとに受け取って最初の文から順に読み上げる。読み上げている間は発話の検出を止める（割り込みは T-1503）。
+// 音声・本文はブラウザの保存領域に置かない。画面での承認（T-1504）はまだない。
 (function () {
   "use strict";
   const V = window.JarvisVad;
   const H = { "X-Jarvis-Voice": "1" };
   const $ = id => document.getElementById(id);
   const CALIBRATE_FRAMES = Math.round(1 / V.FRAME_SECONDS);   // 最初の 1 秒で背景の音を測る
+  const AFTER_SPEECH_MS = 300;              // 最後の文を読み終えてから聞き始めるまで（自分の声の残りを拾わない）
 
   let config = null, session = null, events = null, stream = null, audio = null, node = null;
   let detector = null, paused = false, background = [], ring = [], current = null, answerEl = null;
+  // 読み上げ: turn は今の発言の番号。items は順番 → {id, buffer, state: "loading"|"ready"|"error"}
+  let turn = 0, items = new Map(), next = 0, source = null, muted = false, lastEnd = 0, unmuteTimer = null;
+  let turnDone = false;                     // 今の発言の turn_done が届いた（その後の同じ発言の音は再生しない）
+  let playedQueue = Promise.resolve();      // /api/played を送る順番（start → end）を守る
 
   function status(text, kind) {
     $("status").textContent = text;
@@ -115,6 +121,8 @@
     if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
     if (audio) { audio.close().catch(() => {}); audio = null; }
     detector = null; current = null; ring = []; background = []; paused = false;
+    resetPlayback(0);
+    muted = false; lastEnd = 0;
     $("start").disabled = false;
     $("pause").disabled = true;
     $("pause").textContent = "マイクを一時停止";
@@ -124,7 +132,7 @@
   // ------------------------------------------------------------ 発話の検出
 
   function onFrame(rms, samples) {
-    if (paused || !session) return;
+    if (paused || !session || muted) return;  // 読み上げている間は聞かない（割り込みは T-1503）
     if (!detector) {
       background.push(rms);
       if (background.length < CALIBRATE_FRAMES) return;
@@ -163,8 +171,11 @@
       const r = await post("/api/utterance?session=" + encodeURIComponent(sid) + "&rate=" + rate,
                            V.encodeWav(pcm, rate), { "Content-Type": "audio/wav" });
       if (r.status === 409) {
-        note("前の発言を考えているため、今の発言は送りませんでした");
-      } else if (!r.ok) {
+        note("前の発言を処理しているため、今の発言は送りませんでした");
+      } else if (r.ok) {
+        const body = await r.json().catch(() => ({}));
+        if (session === sid && Number.isInteger(body.turn) && body.turn > turn) resetPlayback(body.turn);
+      } else {
         const body = await r.json().catch(() => ({}));
         status("音声を送れませんでした（" + r.status + " " + (body.message || body.error || "") + "）", "error");
       }
@@ -173,10 +184,147 @@
     }
   }
 
+  // ------------------------------------------------------------ 読み上げ
+
+  // 新しい発言を始める（前の発言の音を捨てる。取った WAV の参照も外す）
+  function resetPlayback(t) {
+    discardPlayback();
+    next = 0;
+    turnDone = false;
+    if (unmuteTimer) { clearTimeout(unmuteTimer); unmuteTimer = null; }
+    if (t > turn && muted) {                  // サーバーは前の発言を終えてから次を受け付ける（止めたままにしない）
+      muted = false;
+      if (detector) detector.reset();
+      current = null; ring = [];
+    }
+    turn = t;
+  }
+
+  // 再生中・取得中・再生待ちの音を捨てる（取った WAV の参照も外す）
+  function discardPlayback() {
+    if (source) {
+      source.onended = null;
+      try { source.stop(); } catch (e) { /* 止まっていれば何もしない */ }
+      try { source.disconnect(); } catch (e) { /* 外れていれば何もしない */ }
+      lastEnd = performance.now();            // 止めた時刻から 0.3 秒は聞かない
+    }
+    source = null;
+    for (const item of items.values()) item.buffer = null;
+    items = new Map();
+  }
+
+  // 知らせは 1 つずつ順に送る（短い文で end が start より先にサーバーへ届くと、start が 404 になり
+  // 最初の再生の時刻を記録できない）
+  function played(item, t, event) {
+    if (!session) return;
+    const path = "/api/played?session=" + encodeURIComponent(session);
+    const body = JSON.stringify({ turn: t, id: item.id, event });
+    playedQueue = playedQueue
+      .then(() => post(path, body, { "Content-Type": "application/json" }))
+      .catch(() => { /* 届かなければサーバーが待つのをやめる */ });
+  }
+
+  async function onAudio(ev) {
+    // 今の発言の番号と違う音、turn_done の後に届いた音（サーバーが待つのをやめた文）は取りに行かない
+    if (ev.turn !== turn || turnDone || !audio) return;
+    const item = { id: ev.id, buffer: null, state: "loading" };
+    items.set(ev.index, item);
+    const t = turn, sid = session;
+    const stale = () => t !== turn || turnDone || session !== sid || !audio || items.get(ev.index) !== item;
+    try {
+      const r = await fetch("/api/audio/" + encodeURIComponent(ev.id) + "?session=" + encodeURIComponent(sid),
+                            { credentials: "same-origin", cache: "no-store" });
+      if (!r.ok) throw new Error("音声を取れません（" + r.status + "）");
+      const data = await r.arrayBuffer();
+      if (stale()) return;
+      const buffer = await audio.decodeAudioData(data);
+      if (stale()) return;                    // 復号の間に turn_done・次の発言が来たら捨てる
+      item.buffer = buffer;
+      item.state = "ready";
+    } catch (e) {
+      if (stale()) return;
+      item.state = "error";
+    }
+    pump();
+  }
+
+  // 順番（index）どおりに 1 文ずつ続けて再生する（全文を待たない）
+  function pump() {
+    while (!source && audio && !turnDone && items.has(next)) {
+      const item = items.get(next), t = turn;
+      if (item.state === "loading") return;
+      if (item.state === "error") {
+        items.delete(next);
+        next += 1;
+        played(item, t, "error");
+        continue;
+      }
+      try {
+        const s = audio.createBufferSource();
+        s.buffer = item.buffer;
+        s.connect(audio.destination);
+        s.onended = () => {
+          s.onended = null;
+          s.disconnect();
+          if (source === s) source = null;
+          item.buffer = null;                   // 取った WAV の参照を外す
+          lastEnd = performance.now();
+          played(item, t, "end");
+          if (t === turn) pump();
+        };
+        startSpeaking();
+        s.start();
+        source = s;
+        items.delete(next);
+        next += 1;
+        played(item, t, "start");
+      } catch (e) {
+        item.buffer = null;
+        items.delete(next);
+        next += 1;
+        played(item, t, "error");
+      }
+    }
+  }
+
+  function startSpeaking() {
+    if (unmuteTimer) { clearTimeout(unmuteTimer); unmuteTimer = null; }
+    if (!muted) {
+      muted = true;                           // 最初の文の開始から、発話の検出を止める
+      if (detector) detector.reset();
+      current = null; ring = [];
+    }
+    if (!paused) status("話しています", "speaking");
+  }
+
+  // 発言の処理の終わり（最後の文の終了の 0.3 秒後から聞く）
+  function onTurnDone(t) {
+    if (t !== turn) return;                   // 新しい番号は onEvent で反映済み。古い番号の知らせは無視する
+    // サーバーは終えた（再生の知らせを待つ期限を過ぎた文は聞いていない扱い）。この発言の取得中・再生待ち・
+    // 再生中の音を捨て、後から届く同じ発言の音も再生しない（再生して発話の検出を止めたままにしない）
+    turnDone = true;
+    discardPlayback();
+    const wait = muted ? Math.max(0, lastEnd + AFTER_SPEECH_MS - performance.now()) : 0;
+    if (unmuteTimer) clearTimeout(unmuteTimer);
+    unmuteTimer = setTimeout(() => {
+      unmuteTimer = null;
+      if (t !== turn || !session) return;
+      muted = false;
+      if (detector) detector.reset();
+      current = null; ring = [];
+      if ($("status").classList.contains("error")) return;   // 認識・回答の失敗の表示は残す（次に話せば消える）
+      status(paused ? "マイクを一時停止しています" : (detector ? "聞いています" : "背景の音を測っています"),
+             paused ? "" : "listening");
+    }, wait);
+  }
+
   // ------------------------------------------------------------ イベント
 
   function onEvent(ev) {
     if (!session || ev.session !== session) return;
+    // /api/utterance の応答より先に、その発言のイベント（recognized・ignored・turn_done など）が届くことがある。
+    // 新しい番号はここで反映し、応答との到着順にかかわらず受付状態へ戻れるようにする
+    if (ev.type !== "ended" && Number.isInteger(ev.turn) && ev.turn > turn) resetPlayback(ev.turn);
     switch (ev.type) {
       case "ready":
         break;
@@ -186,7 +334,15 @@
         status("考え中", "busy");
         break;
       case "ignored":
-        if (!paused && detector) status("聞いています", "listening");
+        break;                                // 次の受け付けは turn_done で
+      case "audio":
+        onAudio(ev);
+        break;
+      case "notice":
+        note(ev.message);
+        break;
+      case "turn_done":
+        onTurnDone(ev.turn);
         break;
       case "answer_chunk":
         if (!answerEl) answerEl = line("ai", "JARVIS", "");
@@ -196,9 +352,9 @@
         if (!answerEl) answerEl = line("ai", "JARVIS", "");
         answerEl.textContent = ev.text;      // 逐次表示しなかった回答もここで全文を出す
         answerEl = null;
-        if (!paused) status("聞いています", "listening");
-        break;
+        break;                                // 読み上げが終わるまで聞かない（turn_done で戻る）
       case "error":
+        if (ev.kind === "playback") { note("読み上げの音を 1 文再生できませんでした（次の文に進みます）"); break; }
         line("error", "エラー", ev.message || ev.kind);
         status(ev.kind === "stt" ? "認識できませんでした。もう一度話してください" :
                ev.kind === "answer" ? "答えを作れませんでした。もう一度話してください" :
@@ -222,7 +378,7 @@
     current = null; ring = [];
     if (stream) stream.getAudioTracks().forEach(t => { t.enabled = !paused; });
     $("pause").textContent = paused ? "マイクを再開" : "マイクを一時停止";
-    status(paused ? "マイクを一時停止しています" : (detector ? "聞いています" : "背景の音を測っています"),
-           paused ? "" : "listening");
+    status(paused ? "マイクを一時停止しています" : muted ? "話しています" :
+           (detector ? "聞いています" : "背景の音を測っています"), paused ? "" : muted ? "speaking" : "listening");
   };
 })();
