@@ -239,9 +239,8 @@ class WebSession:
             result["last"] = ("error", {"kind": "internal", "message": f"{type(e).__name__}: {e}"})
         try:
             self._wait_spoken()               # ブラウザが最後の文を再生し終えるまで（その間は受け付けない）
-            outcome = result["outcome"]
-            if outcome is not None and not self.closed:
-                self._remember(turn, result["text"], outcome)
+            if result["text"] is not None and not self.closed:
+                self._remember(turn, result["text"], result["outcome"])
         finally:
             self._finish_latency(turn, lat, result)
             # 受付の再開と最後の知らせを同じロックの中で行う: submit も同じロックを取るので、次の発言のイベントは
@@ -267,10 +266,13 @@ class WebSession:
             time.sleep(POLL_SECONDS)
 
     def _remember(self, turn: int, text: str, outcome) -> None:
-        """履歴は voice_chat.py と同じ規則: Owner の発言と、ブラウザが再生し終えた文だけ（空なら AI の行を入れない）。"""
-        if outcome.skill == "knowledge-capture" and outcome.method == "rule":
+        """履歴は voice_chat.py と同じ規則: Owner の発言と、ブラウザが再生し終えた文だけ（空なら AI の行を入れない）。
+        回答が例外で失敗した（outcome が None）ときも、Owner の発言は残す（T-1210: ナレッジ化の材料）。"""
+        if outcome is not None and outcome.skill == "knowledge-capture" and outcome.method == "rule":
             return
         self.ctx.history.append(Turn(Who.OWNER, text))
+        if outcome is None:
+            return
         heard = "".join(self.speaker.heard(turn))
         if outcome.ok and outcome.error is None and heard:
             self.ctx.history.append(Turn(Who.AI, heard))
@@ -304,6 +306,7 @@ class WebSession:
             self.speaker.feed(chunk, turn=turn)   # 文がそろったら合成し始める（回答の終わりを待たない）
 
         self.ctx.stream = stream
+        result["text"] = text                 # 回答が失敗しても Owner の発言は履歴に残す
         try:
             # 確認の要るスキルは、画面での承認（T-1504）までは実行しない
             outcome = self.handle(text, self.ctx, ask=lambda prompt: "n")

@@ -284,6 +284,18 @@ def test_nothing_heard_adds_no_ai_line():
     assert [(t.speaker, t.text) for t in s.ctx.history] == [(Who.OWNER, "こんにちは")]
 
 
+def test_answer_exception_keeps_owner_line_without_ai_line():
+    def broken(text, ctx, ask=None):
+        raise RuntimeError("LLM が止まった")
+
+    s, events, _ = make_session(handle=broken)
+    s.submit(wav(), 48000)
+    events.wait("turn_done")
+    errors = events.of("error")
+    assert len(errors) == 1 and errors[0]["kind"] == "answer"
+    assert [(t.speaker, t.text) for t in s.ctx.history] == [(Who.OWNER, "こんにちは")]
+
+
 def test_playback_error_sentence_is_not_in_history():
     browser = Browser(errors={1})
     s, events, _ = make_session(handle=Streamer(["一文目です。", "二文目です。", "三文目です。"]), browser=browser)
