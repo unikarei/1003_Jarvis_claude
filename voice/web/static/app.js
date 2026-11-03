@@ -13,6 +13,7 @@
   let detector = null, paused = false, background = [], ring = [], current = null, answerEl = null;
   // 読み上げ: turn は今の発言の番号。items は順番 → {id, buffer, state: "loading"|"ready"|"error"}
   let turn = 0, items = new Map(), next = 0, source = null, muted = false, lastEnd = 0, unmuteTimer = null;
+  let playedQueue = Promise.resolve();      // /api/played を送る順番（start → end）を守る
 
   function status(text, kind) {
     $("status").textContent = text;
@@ -190,14 +191,24 @@
     source = null;
     items = new Map();
     next = 0;
-    turn = t;
     if (unmuteTimer) { clearTimeout(unmuteTimer); unmuteTimer = null; }
+    if (t > turn && muted) {                  // サーバーは前の発言を終えてから次を受け付ける（止めたままにしない）
+      muted = false;
+      if (detector) detector.reset();
+      current = null; ring = [];
+    }
+    turn = t;
   }
 
+  // 知らせは 1 つずつ順に送る（短い文で end が start より先にサーバーへ届くと、start が 404 になり
+  // 最初の再生の時刻を記録できない）
   function played(item, t, event) {
     if (!session) return;
-    post("/api/played?session=" + encodeURIComponent(session), JSON.stringify({ turn: t, id: item.id, event }),
-         { "Content-Type": "application/json" }).catch(() => { /* 届かなければサーバーが待つのをやめる */ });
+    const path = "/api/played?session=" + encodeURIComponent(session);
+    const body = JSON.stringify({ turn: t, id: item.id, event });
+    playedQueue = playedQueue
+      .then(() => post(path, body, { "Content-Type": "application/json" }))
+      .catch(() => { /* 届かなければサーバーが待つのをやめる */ });
   }
 
   async function onAudio(ev) {
@@ -270,7 +281,7 @@
 
   // 発言の処理の終わり（最後の文の終了の 0.3 秒後から聞く）
   function onTurnDone(t) {
-    if (t !== turn) return;
+    if (t !== turn) return;                   // 新しい番号は onEvent で反映済み。古い番号の知らせは無視する
     const wait = muted ? Math.max(0, lastEnd + AFTER_SPEECH_MS - performance.now()) : 0;
     if (unmuteTimer) clearTimeout(unmuteTimer);
     unmuteTimer = setTimeout(() => {
@@ -289,11 +300,13 @@
 
   function onEvent(ev) {
     if (!session || ev.session !== session) return;
+    // /api/utterance の応答より先に、その発言のイベント（recognized・ignored・turn_done など）が届くことがある。
+    // 新しい番号はここで反映し、応答との到着順にかかわらず受付状態へ戻れるようにする
+    if (ev.type !== "ended" && Number.isInteger(ev.turn) && ev.turn > turn) resetPlayback(ev.turn);
     switch (ev.type) {
       case "ready":
         break;
       case "recognized":
-        if (ev.turn > turn) resetPlayback(ev.turn);
         line("owner", "あなた", ev.text);
         answerEl = null;
         status("考え中", "busy");

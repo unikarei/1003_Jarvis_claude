@@ -139,14 +139,18 @@ class WebSession:
 
     def _send(self, type_: str, turn: int | None = None, **data) -> None:
         with self._lock:
-            if self.closed and type_ != "ended":
-                return                        # 終えた後の古い発言の結果は送らない
-            self._seq += 1
-            event = {"session": self.id, "seq": self._seq, "type": type_}
-            if turn is not None:
-                event["turn"] = turn
-            event.update(data)
-            self.emit(event)
+            self._send_locked(type_, turn, **data)
+
+    def _send_locked(self, type_: str, turn: int | None = None, **data) -> None:
+        """self._lock を持った状態で送る。"""
+        if self.closed and type_ != "ended":
+            return                            # 終えた後の古い発言の結果は送らない
+        self._seq += 1
+        event = {"session": self.id, "seq": self._seq, "type": type_}
+        if turn is not None:
+            event["turn"] = turn
+        event.update(data)
+        self.emit(event)
 
     def _notice(self, message: str) -> None:
         self._send("notice", message=message)
@@ -240,13 +244,13 @@ class WebSession:
                 self._remember(turn, result["text"], outcome)
         finally:
             self._finish_latency(turn, lat, result)
+            # 受付の再開と最後の知らせを同じロックの中で行う: submit も同じロックを取るので、次の発言のイベントは
+            # 必ず turn_done の後に出る。知らせた時点では受け付けているので、すぐ次の発言を送っても 409 にしない
             with self._lock:
                 self._busy = False
-        if self.closed:
-            return
-        if result["last"] is not None:        # 記録・履歴・受付の再開の後に知らせる（すぐ次の発言を送っても 409 にしない）
-            self._send(result["last"][0], turn, **result["last"][1])
-        self._send("turn_done", turn)
+                if result["last"] is not None:
+                    self._send_locked(result["last"][0], turn, **result["last"][1])
+                self._send_locked("turn_done", turn)
 
     def _finish_latency(self, turn: int, lat: "latency.Turn", result: dict) -> None:
         if self._latency is not None and self._latency[0] == turn:
