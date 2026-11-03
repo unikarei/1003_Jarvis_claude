@@ -261,6 +261,8 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
 - LLM は `llm.complete()` を通して使い、既定は `claude -p`（ツールなし）。既存の `ask_claude` / `ask_claude_tiered` は変えない。失敗時に有料 API へ自動で切り替えない
 - 開発・テストは worktree と開発用の `.venv` で行い、本番の `jarvis.db`・Vault・定期処理に影響させない（`../docs/spec.md` §3.3.12）
 
+- ブラウザでの声の会話（T-1506、Owner 事前承認・2026-11-03 指示）: `python -m voice.web --port 8772 --allow-host ohidemac-mini.taild8cb51.ts.net` で許可した名前を、`tailscale serve --bg --https=8446 http://127.0.0.1:8772` により tailnet 内の HTTPS から開ける。ACL に tcp:8446 の許可が必要で、インターネットには公開しない。サーバーは 127.0.0.1 のみで待ち受ける。追加名は `--allow-host` または `JARVIS_VOICE_ALLOWED_HOSTS`（カンマ区切り）で指定し、DNS 名の形だけを採用する。Host は許可名ならポートを問わず、POST の Origin は追加名の HTTPS のみを許す。localhost・127.0.0.1 の HTTP と既存のトークン・Cookie・ヘッダー確認は維持する。
+
 #### 4-11. スキルと会話からの実行（FR-014 Phase 1）
 
 全体仕様 `../docs/spec.md` §3.4（FR-014）を正とし、ここには本リポジトリでの実装の要点だけを書く。設計は `../docs/architecture.md` §19、ADR-0021・0022、受け入れ基準は `../docs/testing.md` §9、タスクは `../docs/tasks.md` §12（T-1205〜T-1210）。4-3 の「スキル蓄積」（Skill ノードに名前を記録するだけ）を、この節で置き換える。

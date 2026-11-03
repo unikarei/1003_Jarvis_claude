@@ -15,6 +15,7 @@ import threading
 import time
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -361,6 +362,102 @@ def call(port, method, path, body=None, headers=None, cookie=True, host=None, or
     data = r.read()
     conn.close()
     return r, data
+
+
+@pytest.fixture
+def served_tailnet(monkeypatch):
+    monkeypatch.setenv("JARVIS_VOICE_ALLOWED_HOSTS", " ENV.TS.NET ,evil.com/x,,*,.bad,bad.")
+    def factory(emit):
+        fake = Fake()
+        return WebSession(transcribe=fake.transcribe, handle=fake.handle, emit=emit, synth=Synth(silent=True))
+    srv, _ = web.make_server(0, factory, token=TOKEN, allowed_hosts=("Mini.TS.NET", "evil.com/x", "*"))
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield srv
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_tailnet_host_and_origin(served_tailnet):
+    srv = served_tailnet
+    port = srv.server_address[1]
+    assert srv.allowed_hosts == ("mini.ts.net", "env.ts.net")
+    for host in ("mini.ts.net", "mini.ts.net:8446", "MINI.TS.NET:8446", "env.ts.net:8446"):
+        assert call(port, "GET", "/api/config", host=host)[0].status == 200
+    for host in ("other.ts.net:8446", "evil.com/x", "*", ".bad", "bad."):
+        assert call(port, "GET", "/api/config", host=host)[0].status == 400
+
+    r, body = call(port, "POST", "/api/session", host="MINI.TS.NET:8446",
+                   origin="https://mini.ts.net:8446")
+    assert r.status == 200 and json.loads(body)["session"]
+    for origin in ("https://mini.ts.net", "https://ENV.TS.NET:8446"):
+        assert call(port, "POST", "/api/unknown", host="mini.ts.net", origin=origin)[0].status == 404
+    for origin in ("http://mini.ts.net:8446", "https://other.ts.net:8446", "https://localhost:8446"):
+        assert call(port, "POST", "/api/unknown", host="mini.ts.net", origin=origin)[0].status == 403
+    assert call(port, "POST", "/api/unknown", host="mini.ts.net", origin="https://mini.ts.net",
+                csrf=False)[0].status == 403
+
+
+def test_tailnet_header_checks_without_socket(monkeypatch):
+    monkeypatch.setenv("JARVIS_VOICE_ALLOWED_HOSTS", "ENV.TS.NET,evil.com/x,,*,.bad,bad.")
+    names = web.valid_allowed_hosts(("Mini.TS.NET", "bad name"))
+    assert names == ("mini.ts.net", "env.ts.net")
+    handler = web.make_handler(TOKEN, None, 1, names)
+    errors = []
+    fake = SimpleNamespace(headers={}, _json=lambda code, body: errors.append(code))
+    for host in ("MINI.TS.NET", "mini.ts.net:8446", "env.ts.net:8446", "localhost:8772"):
+        fake.headers = {"Host": host}
+        assert handler._host_ok(fake)
+    for host in ("other.ts.net", "evil.com/x", "*"):
+        fake.headers = {"Host": host}
+        assert not handler._host_ok(fake) and errors[-1] == 400
+    for origin in ("https://mini.ts.net", "https://ENV.TS.NET:8446", "http://localhost:8772"):
+        fake.headers = {"Origin": origin, "X-Jarvis-Voice": "1"}
+        assert handler._write_ok(fake)
+    for origin in ("http://mini.ts.net", "https://other.ts.net", "https://localhost"):
+        fake.headers = {"Origin": origin, "X-Jarvis-Voice": "1"}
+        assert not handler._write_ok(fake) and errors[-1] == 403
+
+
+def test_main_prints_tailnet_urls(monkeypatch, capsys):
+    import db
+    import speech_to_text
+    import voice_chat
+    from voice.web import __main__ as entry
+
+    class SessionsStub:
+        def end_current(self):
+            pass
+
+    class ServerStub:
+        server_address = ("127.0.0.1", 8772)
+        allowed_hosts = ("mini.ts.net", "env.ts.net")
+        sessions = SessionsStub()
+
+        def serve_forever(self):
+            pass
+
+        def server_close(self):
+            pass
+
+    received = []
+    def fake_make_server(port, allowed_hosts):
+        received.append((port, allowed_hosts))
+        return ServerStub(), TOKEN
+
+    monkeypatch.setattr(db, "init_db", lambda: None)
+    monkeypatch.setattr(speech_to_text, "load_model", lambda: None)
+    monkeypatch.setattr(orchestrator, "start_warm_up", lambda: None)
+    monkeypatch.setattr(voice_chat, "use_voice_model", lambda: None)
+    monkeypatch.setattr(entry, "make_server", fake_make_server)
+    assert entry.main(["--port", "8772", "--allow-host", "mini.ts.net", "--tailnet-port", "8446"]) == 0
+    assert received == [(8772, ["mini.ts.net"])]
+    output = capsys.readouterr().out
+    assert f"http://localhost:8772/?token={TOKEN}" in output
+    assert f"https://mini.ts.net:8446/?token={TOKEN}" in output
+    assert f"https://env.ts.net:8446/?token={TOKEN}" in output
 
 
 def test_token_sets_cookie_and_redirects(served):
