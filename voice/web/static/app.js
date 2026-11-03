@@ -13,6 +13,7 @@
   let detector = null, paused = false, background = [], ring = [], current = null, answerEl = null;
   // 読み上げ: turn は今の発言の番号。items は順番 → {id, buffer, state: "loading"|"ready"|"error"}
   let turn = 0, items = new Map(), next = 0, source = null, muted = false, lastEnd = 0, unmuteTimer = null;
+  let turnDone = false;                     // 今の発言の turn_done が届いた（その後の同じ発言の音は再生しない）
   let playedQueue = Promise.resolve();      // /api/played を送る順番（start → end）を守る
 
   function status(text, kind) {
@@ -187,10 +188,9 @@
 
   // 新しい発言を始める（前の発言の音を捨てる。取った WAV の参照も外す）
   function resetPlayback(t) {
-    if (source) { source.onended = null; try { source.stop(); } catch (e) { /* 止まっていれば何もしない */ } }
-    source = null;
-    items = new Map();
+    discardPlayback();
     next = 0;
+    turnDone = false;
     if (unmuteTimer) { clearTimeout(unmuteTimer); unmuteTimer = null; }
     if (t > turn && muted) {                  // サーバーは前の発言を終えてから次を受け付ける（止めたままにしない）
       muted = false;
@@ -198,6 +198,19 @@
       current = null; ring = [];
     }
     turn = t;
+  }
+
+  // 再生中・取得中・再生待ちの音を捨てる（取った WAV の参照も外す）
+  function discardPlayback() {
+    if (source) {
+      source.onended = null;
+      try { source.stop(); } catch (e) { /* 止まっていれば何もしない */ }
+      try { source.disconnect(); } catch (e) { /* 外れていれば何もしない */ }
+      lastEnd = performance.now();            // 止めた時刻から 0.3 秒は聞かない
+    }
+    source = null;
+    for (const item of items.values()) item.buffer = null;
+    items = new Map();
   }
 
   // 知らせは 1 つずつ順に送る（短い文で end が start より先にサーバーへ届くと、start が 404 になり
@@ -212,27 +225,32 @@
   }
 
   async function onAudio(ev) {
-    if (ev.turn !== turn || !audio) return;     // 今の発言の番号と違う音は取りに行かない
+    // 今の発言の番号と違う音、turn_done の後に届いた音（サーバーが待つのをやめた文）は取りに行かない
+    if (ev.turn !== turn || turnDone || !audio) return;
     const item = { id: ev.id, buffer: null, state: "loading" };
     items.set(ev.index, item);
     const t = turn, sid = session;
+    const stale = () => t !== turn || turnDone || session !== sid || !audio || items.get(ev.index) !== item;
     try {
       const r = await fetch("/api/audio/" + encodeURIComponent(ev.id) + "?session=" + encodeURIComponent(sid),
                             { credentials: "same-origin", cache: "no-store" });
       if (!r.ok) throw new Error("音声を取れません（" + r.status + "）");
       const data = await r.arrayBuffer();
-      if (t !== turn || session !== sid || !audio) return;
-      item.buffer = await audio.decodeAudioData(data);
+      if (stale()) return;
+      const buffer = await audio.decodeAudioData(data);
+      if (stale()) return;                    // 復号の間に turn_done・次の発言が来たら捨てる
+      item.buffer = buffer;
       item.state = "ready";
     } catch (e) {
+      if (stale()) return;
       item.state = "error";
     }
-    if (t === turn && session === sid) pump();
+    pump();
   }
 
   // 順番（index）どおりに 1 文ずつ続けて再生する（全文を待たない）
   function pump() {
-    while (!source && audio && items.has(next)) {
+    while (!source && audio && !turnDone && items.has(next)) {
       const item = items.get(next), t = turn;
       if (item.state === "loading") return;
       if (item.state === "error") {
@@ -282,6 +300,10 @@
   // 発言の処理の終わり（最後の文の終了の 0.3 秒後から聞く）
   function onTurnDone(t) {
     if (t !== turn) return;                   // 新しい番号は onEvent で反映済み。古い番号の知らせは無視する
+    // サーバーは終えた（再生の知らせを待つ期限を過ぎた文は聞いていない扱い）。この発言の取得中・再生待ち・
+    // 再生中の音を捨て、後から届く同じ発言の音も再生しない（再生して発話の検出を止めたままにしない）
+    turnDone = true;
+    discardPlayback();
     const wait = muted ? Math.max(0, lastEnd + AFTER_SPEECH_MS - performance.now()) : 0;
     if (unmuteTimer) clearTimeout(unmuteTimer);
     unmuteTimer = setTimeout(() => {

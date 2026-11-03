@@ -518,5 +518,8 @@ def test_page_plays_audio_and_reports_played():
     for needle in ('case "audio"', 'case "turn_done"', 'case "notice"', "decodeAudioData", "/api/played",
                    "/api/audio/", "話しています", "AFTER_SPEECH_MS = 300"):
         assert needle in js, needle
+    # turn_done の後（サーバーが再生の知らせを待つ期限を過ぎた後）に届いた・取得中の音は再生しない
+    assert "turnDone = true;\n    discardPlayback();" in js
+    assert "!source && audio && !turnDone" in js
     for banned in ("localStorage", "sessionStorage", "indexedDB", "caches."):
         assert banned not in js, banned
