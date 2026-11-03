@@ -1,4 +1,4 @@
-// ブラウザでの声の会話のページの判定（T-1503、BV-06・BV-10・BV-11）。ブラウザでは window.JarvisPage、Node では
+// ブラウザでの声の会話のページの判定（T-1503・T-1504、BV-06・BV-09・BV-10・BV-11）。ブラウザでは window.JarvisPage、Node では
 // module.exports。DOM を使わない純粋な関数だけにして、Node の node --test で確かめる（tests/js/page.test.js）。
 (function (root) {
   "use strict";
@@ -106,7 +106,7 @@
   }
 
   // POST の応答の扱い。"ok": 成功、"expected": 想定内の失敗（会話を続ける）、"lost": 想定外（会話を終える）。
-  // kind は送り先（played / interrupt / calibrate / utterance）、error は応答の本文の error
+  // kind は送り先（played / interrupt / calibrate / approve / utterance）、error は応答の本文の error
   function postOutcome(kind, status, error) {
     if (status >= 200 && status < 300) return "ok";
     if (kind === "played") {
@@ -114,7 +114,9 @@
       if (status === 404 && error === "not_found") return "expected"; // もう保持していない音
       return "lost";
     }
-    if (kind === "interrupt" || kind === "calibrate") return status === 409 ? "expected" : "lost";
+    if (kind === "interrupt" || kind === "calibrate" || kind === "approve") {
+      return status === 409 ? "expected" : "lost";   // approve の 409: 期限切れ・取り消し・使用済み（何も実行しない）
+    }
     if (kind === "utterance") return status === 400 || status === 413 ? "expected" : "lost";   // 受け付けない音声
     return "lost";
   }
@@ -140,8 +142,33 @@
     };
   }
 
+  // 画面での承認（T-1504）。approval のイベントを出すか: 今の発言の番号で、割り込んだ発言でなく、形が揃っていること
+  function approvalShown(ev, turn, cut) {
+    return !!ev && Number.isInteger(ev.turn) && ev.turn === turn && ev.turn > cut &&
+      typeof ev.id === "string" && ev.id !== "" && typeof ev.text === "string";
+  }
+
+  // approval_done が要求 a（{turn, id}。出している要求か、割り込みで消した要求）の結果か
+  function approvalMatches(ev, a) {
+    return !!ev && !!a && ev.id === a.id && ev.turn === a.turn;
+  }
+
+  // 残りの秒数（切り上げ、0 未満にしない）。startedMs は approval を受けた時刻
+  function secondsLeft(expiresIn, startedMs, nowMs) {
+    return Math.max(0, Math.ceil(expiresIn - (nowMs - startedMs) / 1000));
+  }
+
+  const APPROVAL_RESULTS = { run: "実行しました", declined: "実行しませんでした",
+                             expired: "期限が切れたので実行しませんでした",
+                             cancelled: "取り消したので実行しませんでした" };
+
+  function approvalResultText(result) {
+    return APPROVAL_RESULTS[result] || "実行しませんでした";
+  }
+
   const api = { PLAYBACK_FAILS_TO_WARN, SILENCE_LIMIT_MS, PROBLEMS, problem, micErrorKind, createSeqFilter,
-                turnDecision, createFailCounter, bargeTiming, bargeNote, postOutcome, createCutHold };
+                turnDecision, createFailCounter, bargeTiming, bargeNote, postOutcome, createCutHold,
+                approvalShown, approvalMatches, secondsLeft, approvalResultText };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JarvisPage = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

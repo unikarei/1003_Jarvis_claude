@@ -242,7 +242,8 @@ def test_quit_word_ends_session():
         s.submit(wav(), 48000)
 
 
-def test_skill_needing_confirmation_is_not_executed():
+def test_skill_needing_confirmation_is_not_executed_when_declined():
+    """確認は画面での承認（T-1504、詳しくは tests/test_voice_web_approval.py）。「実行しない」なら実行しない。"""
     fake = Fake()
     answers = []
 
@@ -253,9 +254,13 @@ def test_skill_needing_confirmation_is_not_executed():
 
     s, events, _ = make_session(fake, handle=handle)
     s.submit(wav(), 48000)
+    events.wait("approval")
+    req = events.of("approval")[0]
+    assert req["text"] == "「theme-register」を実行します。実行しますか？" and req["expires_in"] == 60
+    assert s.approve(req["turn"], req["id"], "decline") == "ok"
     events.wait("answer_done")
     assert answers == ["n"]
-    assert events[-1]["text"] == "実行しませんでした。"
+    assert events.of("answer_done")[0]["text"] == "実行しませんでした。"
 
 
 def test_stt_error_is_reported_and_session_continues():

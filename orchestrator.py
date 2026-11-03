@@ -41,6 +41,8 @@ class Context:
     voice: bool = False                           # 声の会話（答えを短い話し言葉にする、ADR-0026）
     cancel: Callable[[], bool] | None = None      # True を返したら答えの生成を止める（声の割り込み、ADR-0028）
     last_provider: str | None = None              # 直前の答えに使った LLM のプロバイダー（切り替えの記録、T-1403）
+    terminal: bool = True                         # 端末で入力できる（ブラウザの会話は False、T-1504）
+    before_run: Callable[[], bool] | None = None  # 承認の後、実行の直前に呼ぶ。False なら実行しない（ブラウザ、T-1504）
 
 
 @dataclass
@@ -547,16 +549,35 @@ def effective(skill: skills.Skill) -> tuple[str, bool]:
     return perm, perm == "local_write" or skill.confirm or floor_confirm
 
 
+NEEDS_TERMINAL_TEXT = ("このスキルは端末での対話が要るため、ブラウザの会話では実行しません。"
+                       "chat.py か voice_chat.py で実行してください。")
+
+
 def _interactive(name: str) -> bool:
     return FLOOR.get(name, ("read", False, False))[2]
 
 
-def _run_with_timeout(handler, inputs, ctx, text, seconds: int):
-    """確認の入力を待たないスキルを上限付きで動かす。超えたら TimeoutError（処理は裏で終わるまで続く）。"""
+class _NotStarted(Exception):
+    """承認の後、スキルを起動する直前の確認（Context.before_run）が False だった（T-1504）。"""
+
+
+def _gated(gate, handler, inputs, ctx, text):
+    """スキルを動かすスレッドの中で、handler を呼ぶ直前に gate を確かめる。確認と起動の間に別スレッドへの投入を
+    挟まないので、確認を通った後に取り消されたのに実行される、ということが起きない（T-1504）。
+    gate が True を返した時点が実行の確定。それより後の割り込み・終了は、動き始めたスキルへの割り込みと同じ扱いで、
+    スキルは止めず結果を使わない（取り消せない処理、browser-voice-spec.md BV-06）。"""
+    if gate is not None and not gate():
+        raise _NotStarted()
+    return handler(inputs, ctx, text)
+
+
+def _run_with_timeout(handler, inputs, ctx, text, seconds: int, gate=None):
+    """確認の入力を待たないスキルを上限付きで動かす。超えたら TimeoutError（処理は裏で終わるまで続く）。
+    gate は、スキルを動かすスレッドで handler の直前に呼ぶ（False なら _NotStarted）。"""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
     pool = ThreadPoolExecutor(max_workers=1)
     # 今の文脈（遅延の記録の Turn）を引き継ぐ。スレッドには文脈が引き継がれないため（T-1405）
-    future = pool.submit(contextvars.copy_context().run, handler, inputs, ctx, text)
+    future = pool.submit(contextvars.copy_context().run, _gated, gate, handler, inputs, ctx, text)
     try:
         return future.result(timeout=seconds)
     except FutureTimeout:
@@ -589,15 +610,24 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
     if perm == "external":
         return done(f"スキル {skill.name} は外部への書き込みを含むため、会話からは実行しません。", ok=False,
                     error="external")
+    if needs_confirm and _interactive(skill.name) and not ctx.terminal:
+        # 承認の後もキーボードで候補ごとの承認・修正を求めるため、端末のない会話では確認を求めずに実行しない（T-1504）
+        return done(NEEDS_TERMINAL_TEXT, ok=True, items=ctx.items, error="needs_terminal")
     if needs_confirm:
         ask = ask or input
         if ask(confirm_text(skill, r.inputs)).strip().lower() != "y":
             return done("実行しませんでした。", ok=True, items=ctx.items, error="declined")
+    # 承認の後、スキルを起動する直前の確認（ブラウザの会話。chat.py・voice_chat.py は設定しない）。
+    # handler を呼ぶのと同じスレッドで、呼ぶ直前に確かめる（_gated）
+    gate = ctx.before_run if needs_confirm else None
     try:
         if _interactive(skill.name):     # 対話で入力を待つスキル（ナレッジ化・テーマ登録）は打ち切らない
-            message, items = handler(r.inputs, ctx, text)
+            message, items = _gated(gate, handler, r.inputs, ctx, text)
         else:
-            message, items = _run_with_timeout(handler, r.inputs, ctx, text, SKILL_TIMEOUT_SECONDS)
+            message, items = _run_with_timeout(handler, r.inputs, ctx, text, SKILL_TIMEOUT_SECONDS, gate)
+    except _NotStarted:
+        # 承認の後に割り込み・終了・切断があった
+        return done("実行しませんでした。", ok=True, items=ctx.items, error="cancelled")
     except TimeoutError as e:
         return done(f"[時間切れ] {skill.name}: {e}", ok=False, error="timeout")
     except Exception as e:   # スキルの失敗で対話を止めない

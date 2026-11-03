@@ -124,6 +124,34 @@ test("番号の分からないまま割り込んだ発言: 番号が分かるま
   assert.deepStrictEqual(h.known(6), { cut: false, release: [] });
 });
 
+test("画面での承認: 今の発言の要求だけを出し、結果と残りの秒数を示す（T-1504）", () => {
+  const ev = { turn: 3, id: "abc", text: "「x」を実行します", expires_in: 60 };
+  assert.strictEqual(P.approvalShown(ev, 3, -1), true);
+  assert.strictEqual(P.approvalShown(ev, 4, -1), false);          // 今の発言の番号と違う
+  assert.strictEqual(P.approvalShown(ev, 2, -1), false);
+  assert.strictEqual(P.approvalShown(ev, 3, 3), false);           // 割り込んだ発言
+  assert.strictEqual(P.approvalShown({ turn: 3, text: "x" }, 3, -1), false);   // ID がない
+  assert.strictEqual(P.approvalShown({ turn: 3, id: "", text: "x" }, 3, -1), false);
+  assert.strictEqual(P.approvalShown(null, 3, -1), false);
+  // 結果（approval_done）は、出している要求か割り込みで消した要求と、ID・番号の両方が一致するときだけ出す
+  assert.strictEqual(P.approvalMatches({ turn: 3, id: "abc" }, { turn: 3, id: "abc" }), true);
+  assert.strictEqual(P.approvalMatches({ turn: 4, id: "abc" }, { turn: 3, id: "abc" }), false);
+  assert.strictEqual(P.approvalMatches({ turn: 3, id: "abd" }, { turn: 3, id: "abc" }), false);
+  assert.strictEqual(P.approvalMatches({ turn: 3, id: "abc" }, null), false);
+  assert.strictEqual(P.secondsLeft(60, 1000, 1000), 60);
+  assert.strictEqual(P.secondsLeft(60, 1000, 1500), 60);          // 切り上げ
+  assert.strictEqual(P.secondsLeft(60, 1000, 60000), 1);
+  assert.strictEqual(P.secondsLeft(60, 1000, 70000), 0);          // 0 未満にしない
+  const texts = ["run", "declined", "expired", "cancelled"].map(P.approvalResultText);
+  assert.strictEqual(new Set(texts).size, 4);
+  assert.match(P.approvalResultText("run"), /実行しました/);
+  for (const r of ["declined", "expired", "cancelled", "unknown"]) assert.match(P.approvalResultText(r), /実行しませんでした/);
+  assert.strictEqual(P.postOutcome("approve", 200), "ok");
+  assert.strictEqual(P.postOutcome("approve", 409, "stale_approval"), "expected");   // 期限切れ・使用済み
+  assert.strictEqual(P.postOutcome("approve", 403), "lost");
+  assert.strictEqual(P.postOutcome("approve", 400), "lost");
+});
+
 test("切断とみなすまでの時間は ping の間隔（5 秒）より長い", () => {
   assert.strictEqual(P.SILENCE_LIMIT_MS, 15000);
   assert.strictEqual(P.PLAYBACK_FAILS_TO_WARN, 3);

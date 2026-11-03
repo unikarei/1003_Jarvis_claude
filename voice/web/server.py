@@ -1,9 +1,9 @@
-"""ブラウザでの声の会話の HTTP サーバー（T-1501〜T-1503、ADR-0031、../docs/browser-voice-spec.md §6・§7）。
+"""ブラウザでの声の会話の HTTP サーバー（T-1501〜T-1504、ADR-0031、../docs/browser-voice-spec.md §6・§7）。
 
 標準ライブラリの ThreadingHTTPServer で 127.0.0.1 だけに置く。ブラウザ → サーバーは POST、サーバー → ブラウザは
 SSE（EventSource）の 1 本。読み上げの音は文ごとに GET /api/audio/<id> で渡し、再生の始め・終わりを
 POST /api/played で受ける（T-1502）。回り込みの測定のあいさつは POST /api/calibrate、割り込みは POST /api/interrupt
-（T-1503）。SSE は 5 秒ごとに ping（event: ping）を送り、切れたら会話を終える（再接続しない、BV-11）。
+（T-1503）、画面での承認は POST /api/approve（T-1504）。SSE は 5 秒ごとに ping（event: ping）を送り、切れたら会話を終える（再接続しない、BV-11）。
 起動ごとのトークンを HttpOnly の Cookie に移して認証する（acc/voice_settings.py と同じ形）。
 VS Code のポート転送は別の番号になることがあるため、Host・Origin は localhost・127.0.0.1 ならポートを問わない。
 トークン・Cookie・本文・音声はログに出さない。
@@ -270,6 +270,8 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
                 return self._interrupt(q, body)
             if path == "/api/calibrate":
                 return self._calibrate(q)
+            if path == "/api/approve":
+                return self._approve(q, body)
             if path == "/api/session":
                 session = sessions.start()
                 if session is None:
@@ -322,6 +324,26 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
                 return self._json(400, {"error": "bad_request"})
             if session.interrupt(turn) == "stale":
                 return self._json(409, {"error": "stale_turn"})
+            self._json(200, {"ok": True})
+
+        def _approve(self, q, body: bytes):
+            """画面での承認 {"turn", "id", "decision": run|decline}（T-1504、BV-09）。待っている要求と ID・発言の番号が
+            一致し、期限内のときだけ 200。違う・期限切れ・使用済み・会話が違うなら 409（何も実行しない）。"""
+            session = sessions.get(q.get("session"))
+            if session is None:
+                return self._json(409, {"error": "stale_approval"})   # 前の会話の要求への答え
+            try:
+                data = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                return self._json(400, {"error": "bad_json"})
+            if not isinstance(data, dict):
+                return self._json(400, {"error": "bad_json"})
+            turn, approval_id, decision = data.get("turn"), data.get("id"), data.get("decision")
+            if (not isinstance(turn, int) or isinstance(turn, bool) or not isinstance(approval_id, str)
+                    or not 0 < len(approval_id) <= 64 or decision not in ("run", "decline")):
+                return self._json(400, {"error": "bad_request"})
+            if session.approve(turn, approval_id, decision) != "ok":
+                return self._json(409, {"error": "stale_approval"})
             self._json(200, {"ok": True})
 
         def _calibrate(self, q):
