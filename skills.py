@@ -96,9 +96,25 @@ def _parse(name: str, raw: dict) -> Skill:
                  {k: dict(v) for k, v in inputs.items()}, tuple(phrases), raw.get("verify"), confirm)
 
 
-def load() -> dict[str, Skill]:
-    """name → Skill（状態を問わずすべて）。読めなければ予備の索引（警告を1回だけ出す）。"""
+def load(quiet: bool = False) -> dict[str, Skill]:
+    """name → Skill（状態を問わずすべて）。読めなければ予備の索引（警告を1回だけ出す）。
+    quiet=True は警告を出さず、読んだ結果を残さない（裏のスレッドの warm_up 用。警告は会話の側の読み込みで出す）。"""
     global _cache
+    if _cache is None and quiet:
+        try:
+            data = json.loads(index_path().read_text(encoding="utf-8"))
+            raws = data["skills"] if isinstance(data.get("skills"), dict) else None
+        except (OSError, ValueError, AttributeError):
+            raws = None
+        if raws is None:
+            return dict(FALLBACK)
+        quiet_skills = {}
+        for name, raw in raws.items():
+            try:
+                quiet_skills[name] = _parse(name, raw if isinstance(raw, dict) else {})
+            except ValueError:
+                pass
+        return quiet_skills
     if _cache is None:
         path = index_path()
         try:
@@ -119,6 +135,6 @@ def load() -> dict[str, Skill]:
     return _cache
 
 
-def active() -> dict[str, Skill]:
-    """使ってよいスキル（status が active）だけ。"""
-    return {name: s for name, s in load().items() if s.status == "active"}
+def active(quiet: bool = False) -> dict[str, Skill]:
+    """使ってよいスキル（status が active）だけ。quiet は load() と同じ。"""
+    return {name: s for name, s in load(quiet).items() if s.status == "active"}
