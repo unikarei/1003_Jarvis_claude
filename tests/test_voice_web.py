@@ -152,6 +152,7 @@ def test_quit_word_ends_session():
     s.submit(wav(), 48000)
     events.wait("ended")
     assert [e["type"] for e in events] == ["ready", "recognized", "ended"]
+    assert events[-1]["turn"] == 1               # 発言による終了には発言の番号を付ける
     assert s.closed and fake.handled == []
     with pytest.raises(Busy):
         s.submit(wav(), 48000)

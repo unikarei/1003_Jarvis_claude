@@ -119,12 +119,13 @@ class WebSession:
                          daemon=True).start()
         return turn
 
-    def end(self) -> None:
+    def end(self, turn: int | None = None) -> None:
+        """会話を終える。turn は「終了」と話した発言の番号（/api/end・切断では None）。"""
         with self._lock:
             if self.closed:
                 return
             self.closed = True
-        self._send("ended")
+        self._send("ended", turn)
 
     # ------------------------------------------------------------ 1 回の発言
 
@@ -150,7 +151,7 @@ class WebSession:
             return "ignored", {"reason": "noise" if text.strip(" 　。、.!！?？") else "empty"}
         self._send("recognized", turn, text=text)
         if any(w in text for w in QUIT_WORDS) and len(text) <= 10:
-            self.end()
+            self.end(turn)
             return None
         self.ctx.stream = lambda chunk: self._send("answer_chunk", turn, text=chunk)
         try:

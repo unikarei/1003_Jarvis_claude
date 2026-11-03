@@ -62,7 +62,7 @@
       } else {
         status(String(e && e.message || e), "error");
       }
-      await end(false);
+      await end(true);                      // 作った会話をサーバーでも終える（残すと再試行が 409 busy になる）
     }
   }
 
@@ -97,7 +97,9 @@
     const sid = session;
     cleanup();
     if (sid && notify !== false) {
+      $("start").disabled = true;           // サーバーが会話を終えるまで次の会話を始めない
       try { await post("/api/end?session=" + encodeURIComponent(sid)); } catch (e) { /* 終わっていれば何もしない */ }
+      $("start").disabled = false;
     }
   }
 
