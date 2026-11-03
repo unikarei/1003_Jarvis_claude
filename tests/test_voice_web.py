@@ -101,7 +101,7 @@ class Browser:
     知らせた結果を done に残す。"""
 
     def __init__(self, play=None, errors=()):
-        self.play, self.errors = play, set(errors)
+        self.play, self.errors = play, set(errors)   # play は数か、イベントを受けて再生するかを返す関数
         self.session, self.events = None, None
         self.fetched, self.done = [], []
         self._queue: queue.Queue = queue.Queue()
@@ -117,7 +117,10 @@ class Browser:
             ev = self._queue.get()
             data = self.session.audio(ev["id"])
             self.fetched.append((ev["id"], data))
-            if self.play is not None and count >= self.play:
+            if callable(self.play):
+                if not self.play(ev):
+                    continue
+            elif self.play is not None and count >= self.play:
                 continue
             count += 1
             steps = ["error"] if ev["index"] in self.errors else ["start", "end"]
@@ -286,24 +289,23 @@ def test_answer_error_and_record_error_do_not_stop_session():
     assert len(s2.ctx.history) == 2
 
 
-def test_second_utterance_while_thinking_is_busy():
+def test_second_utterance_while_thinking_interrupts():
+    """T-1503: 認識している間に次の発話が届いたら、前の発言に割り込んでから受け付ける（409 にしない）。"""
     fake = Fake()
     fake.gate = threading.Event()
     s, events, _ = make_session(fake)
-    s.submit(wav(), 48000)
-    with pytest.raises(Busy):
-        s.submit(wav(), 48000)
+    assert s.submit(wav(), 48000) == 1
+    assert s.submit(wav(), 48000) == 3                   # 割り込みで 2、新しい発言で 3（割り込まれた発言より大きい）
     fake.gate.set()
-    events.wait("turn_done")
-    deadline = time.monotonic() + 2
-    while time.monotonic() < deadline:
-        try:
-            assert s.submit(wav(), 48000) == 2
-            break
-        except Busy:
-            time.sleep(0.01)
-    else:
-        raise AssertionError("処理の後も受け付けません")
+    events.wait("turn_done", 2)
+    done = events.of("turn_done")
+    assert done[0] == {**done[0], "turn": 1, "interrupted": True}
+    assert done[1]["turn"] == 3 and "interrupted" not in done[1]
+    assert [e["turn"] for e in events.of("recognized", "answer_done")] == [3, 3]   # 前の発言には答えない
+    assert fake.handled == ["こんにちは"]
+    s.end()
+    with pytest.raises(Busy):                            # 終えた会話は受け付けない
+        s.submit(wav(), 48000)
 
 
 def test_bad_audio_emits_error_event():
@@ -390,7 +392,7 @@ def test_post_requires_origin_and_header(served):
 
 def test_static_files_only_inside_static(served):
     port, _, _ = served
-    for name in ("app.js", "vad.js", "vad-worklet.js", "index.html"):
+    for name in ("app.js", "vad.js", "page.js", "vad-worklet.js", "index.html"):
         r, _ = call(port, "GET", f"/static/{name}")
         assert r.status == 200
     assert call(port, "GET", "/static/app.js")[0].getheader("Content-Type").startswith("text/javascript")
@@ -402,11 +404,17 @@ def test_static_files_only_inside_static(served):
 def test_config(served, monkeypatch):
     port, _, _ = served
     monkeypatch.delenv("JARVIS_VOICE_SILENCE_SECONDS", raising=False)
+    monkeypatch.delenv("JARVIS_VOICE_BARGE_MARGIN", raising=False)
     assert json.loads(call(port, "GET", "/api/config")[1]) == {
         "silence_seconds": 0.8, "max_seconds": 20, "preroll_seconds": 0.3, "threshold_factor": 4.0,
-        "min_threshold": 0.002}
+        "min_threshold": 0.002, "barge_margin": 5.0}
     monkeypatch.setenv("JARVIS_VOICE_SILENCE_SECONDS", "1.2")
     assert json.loads(call(port, "GET", "/api/config")[1])["silence_seconds"] == 1.2
+    monkeypatch.setenv("JARVIS_VOICE_BARGE_MARGIN", "3.5")
+    assert json.loads(call(port, "GET", "/api/config")[1])["barge_margin"] == 3.5
+    for bad in ("0", "-1", "abc", "inf", "nan"):
+        monkeypatch.setenv("JARVIS_VOICE_BARGE_MARGIN", bad)
+        assert json.loads(call(port, "GET", "/api/config")[1])["barge_margin"] == 5.0, bad
 
 
 def test_second_session_is_busy(served):
@@ -447,32 +455,42 @@ def test_utterance_limits(served):
     conn.close()
 
 
-def test_utterance_while_thinking_is_409(served):
+def test_utterance_while_thinking_is_interrupt_not_409(served):
     port, fake, _ = served
     fake.gate = threading.Event()
     sid = json.loads(call(port, "POST", "/api/session")[1])["session"]
     r, body = _utter(port, sid, wav())
     assert r.status == 202 and json.loads(body) == {"turn": 1}
     r, body = _utter(port, sid, wav())
-    assert r.status == 409 and json.loads(body) == {"error": "thinking"}
+    assert r.status == 202 and json.loads(body) == {"turn": 3}
     fake.gate.set()
 
 
 def _read_events(resp, until, timeout=5.0):
-    out, pings = [], 0
+    """SSE を until の種類まで読む。ping（event: ping）は数だけ返す。"""
+    out, pings, named = [], 0, None
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         line = resp.readline()
         if not line:
             break
         line = line.decode("utf-8").rstrip("\n")
-        if line.startswith(": ping"):
-            pings += 1
-        elif line.startswith("data: "):
+        if line.startswith("event: "):
+            named = line[7:]
+            if named == "ping":
+                pings += 1
+        elif line == "":
+            named = None
+        elif line.startswith("data: ") and named is None:
             out.append(json.loads(line[6:]))
             if out[-1]["type"] == until:
                 break
     return out, pings
+
+
+def no_tts(events):
+    """合成の失敗（偽の合成が音を作らない served では、文ごとに error tts が出る）を除く。"""
+    return [e for e in events if not (e["type"] == "error" and e.get("kind") == "tts")]
 
 
 def _open_events(port, sid):
@@ -492,16 +510,19 @@ def test_sse_events_and_end(served):
     conn2.close()
 
     assert _utter(port, sid, wav())[0].status == 202
-    events, _ = _read_events(resp, "answer_done")
-    assert [e["type"] for e in events] == ["ready", "recognized", "answer_chunk", "answer_chunk", "answer_done"]
-    assert [e["seq"] for e in events] == [1, 2, 3, 4, 5]
-    assert {e["session"] for e in events} == {sid}
+    first, _ = _read_events(resp, "answer_done")
+    assert [e["type"] for e in no_tts(first)] == ["ready", "recognized", "answer_chunk", "answer_chunk", "answer_done"]
+    assert {e["session"] for e in first} == {sid}
 
     time.sleep(0.5)
     assert call(port, "POST", f"/api/end?session={sid}")[0].status == 200
     events, pings = _read_events(resp, "ended")
-    assert pings >= 1                                         # 待っている間は : ping を送る
-    assert [e["type"] for e in events] == ["turn_done", "ended"] and events[-1]["seq"] == 7
+    assert pings >= 1                                         # 待っている間は ping（event: ping）を送る
+    assert [e["type"] for e in no_tts(events)] == ["turn_done", "ended"]
+    seqs = [e["seq"] for e in first + events]
+    assert seqs == list(range(1, len(seqs) + 1))              # 連番は 1 から抜けなく
+    tts_errors = [e for e in first + events if e["type"] == "error"]
+    assert len(tts_errors) <= 1 and all(e["kind"] == "tts" and e["turn"] == 1 for e in tts_errors)   # 発言ごとに 1 回
     assert resp.readline() == b"\n" and resp.readline() == b""   # 終えたら閉じる
     conn.close()
     assert made[0].closed
@@ -561,7 +582,8 @@ print("OK")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node がない")
-def test_vad_js_with_node():
-    r = subprocess.run(["node", "--test", str(ROOT / "tests" / "js" / "vad.test.js")], cwd=ROOT,
+@pytest.mark.parametrize("name", ["vad.test.js", "page.test.js"])
+def test_page_js_with_node(name):
+    r = subprocess.run(["node", "--test", str(ROOT / "tests" / "js" / name)], cwd=ROOT,
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr

@@ -1,20 +1,29 @@
-// ブラウザでの声の会話のページ（T-1501・T-1502）。話すと自動で区切って送り、認識した文と回答を文字で出し、
-// 回答を文ごとに受け取って最初の文から順に読み上げる。読み上げている間は発話の検出を止める（割り込みは T-1503）。
+// ブラウザでの声の会話のページ（T-1501〜T-1503）。話すと自動で区切って送り、認識した文と回答を文字で出し、
+// 回答を文ごとに受け取って最初の文から順に読み上げる。考えている間・話している間も聞き続け、Owner が話し始めたら
+// サーバーの応答を待たずに読み上げを止めて新しい発言を聞く（割り込み、ADR-0028）。再生中だけしきい値を上げる
+// （会話の開始時のあいさつで回り込みを測る、BV-07）。異常は種類ごとに表示し、切断したら会話を終える（BV-10・BV-11）。
 // 音声・本文はブラウザの保存領域に置かない。画面での承認（T-1504）はまだない。
 (function () {
   "use strict";
   const V = window.JarvisVad;
+  const P = window.JarvisPage;
   const H = { "X-Jarvis-Voice": "1" };
   const $ = id => document.getElementById(id);
   const CALIBRATE_FRAMES = Math.round(1 / V.FRAME_SECONDS);   // 最初の 1 秒で背景の音を測る
-  const AFTER_SPEECH_MS = 300;              // 最後の文を読み終えてから聞き始めるまで（自分の声の残りを拾わない）
+  const AFTER_SPEECH_MS = 300;              // 最後の文の終了から 0.3 秒は、再生中のしきい値のまま（回り込みの残り）
+  const CALIBRATION_PLAY_MS = 15000;        // あいさつの音を受けてから再生し終えるまでの上限
 
   let config = null, session = null, events = null, stream = null, audio = null, node = null;
   let detector = null, paused = false, background = [], ring = [], current = null, answerEl = null;
-  // 読み上げ: turn は今の発言の番号。items は順番 → {id, buffer, state: "loading"|"ready"|"error"}
-  let turn = 0, items = new Map(), next = 0, source = null, muted = false, lastEnd = 0, unmuteTimer = null;
+  // 読み上げ: turn は今の発言の番号、cut は割り込んだ発言の番号の最大。items は順番 → {id, buffer, state, ctrl}
+  let turn = 0, cut = -1, items = new Map(), next = 0, source = null, lastEnd = -Infinity;
   let turnDone = false;                     // 今の発言の turn_done が届いた（その後の同じ発言の音は再生しない）
+  let awaiting = false;                     // 送った発言の turn_done を待っている（考えている間・話している間）
+  let sendId = 0, pendingSend = 0, cutSend = 0;   // 送った発言の通し番号。cutSend は番号の分からないまま割り込んだ発言
   let playedQueue = Promise.resolve();      // /api/played を送る順番（start → end）を守る
+  let seqFilter = P.createSeqFilter(), fails = P.createFailCounter();
+  let calibration = null;                   // 回り込みの測定 {rms, playing, source, ctrl, timer}
+  let watchdog = null;
 
   function status(text, kind) {
     $("status").textContent = text;
@@ -38,9 +47,26 @@
     return body;
   }
 
+  // 異常を表示する（種類ごとの文言と次の操作は page.js）。会話を終える異常は呼び出し側で end する
+  function showProblem(kind) {
+    const p = P.problem(kind);
+    if (p.place === "note") note(p.text);
+    else status(p.text, "error");
+    return p;
+  }
+
   async function post(path, body, headers) {
     return fetch(path, { method: "POST", headers: Object.assign({}, H, headers || {}), body: body || "",
                          credentials: "same-origin" });
+  }
+
+  function q(path) { return path + (path.includes("?") ? "&" : "?") + "session=" + encodeURIComponent(session); }
+
+  // 通信の切断（SSE の切断・POST の失敗）: 会話を終え、マイクを解放する。自動で再開しない・古い発言を送り直さない
+  function lost(sid) {
+    if (!session || (sid !== undefined && sid !== session)) return;
+    showProblem("disconnected");
+    end(true);
   }
 
   // ------------------------------------------------------------ 会話の開始と終了
@@ -48,6 +74,9 @@
   async function start() {
     $("start").disabled = true;
     note("");
+    seqFilter = P.createSeqFilter();
+    fails = P.createFailCounter();
+    turn = 0; cut = -1; sendId = 0; pendingSend = 0; cutSend = 0;
     try {
       if (!config) config = await (await fetch("/api/config", { credentials: "same-origin" })).json();
       const r = await post("/api/session");
@@ -61,25 +90,27 @@
       openEvents();
       await openMic();
     } catch (e) {
-      if (e && (e.name === "NotAllowedError" || e.name === "SecurityError")) {
-        status("マイクの使用が許可されていません。ブラウザの設定でマイクを許可してから、もう一度始めてください", "error");
-      } else if (e && e.name === "NotFoundError") {
-        status("マイクが見つかりません。マイクをつないでから、もう一度始めてください", "error");
-      } else {
-        status(String(e && e.message || e), "error");
-      }
+      const kind = P.micErrorKind(e);
+      if (kind) showProblem(kind);
+      else status(String(e && e.message || e), "error");
       await end(true);                      // 作った会話をサーバーでも終える（残すと再試行が 409 busy になる）
     }
   }
 
+  // イベントも ping も SILENCE_LIMIT_MS 来なければ切断として扱う
+  function kick() {
+    if (watchdog) clearTimeout(watchdog);
+    const sid = session;
+    watchdog = setTimeout(() => { watchdog = null; lost(sid); }, P.SILENCE_LIMIT_MS);
+  }
+
   function openEvents() {
     events = new EventSource("/api/events?session=" + encodeURIComponent(session));
-    events.onmessage = m => onEvent(JSON.parse(m.data));
-    events.onerror = () => {
-      if (!session) return;
-      status("サーバーとの接続が切れました。会話は終わりました（もう一度「会話を始める」を押してください）", "error");
-      end(true);                            // サーバーが切断に気づく前でも会話を終え、直後の再試行を 409 busy にしない
-    };
+    events.onopen = kick;
+    events.onmessage = m => { kick(); onEvent(JSON.parse(m.data)); };
+    events.addEventListener("ping", kick);
+    events.onerror = () => lost();          // EventSource の自動の再接続はしない（cleanup で閉じる）
+    kick();
   }
 
   async function openMic() {
@@ -87,14 +118,21 @@
     const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
     if (session !== sid) { s.getTracks().forEach(t => t.stop()); return; }   // 許可を待つ間に会話が終わった
     stream = s;
+    stream.getAudioTracks().forEach(t => {
+      t.onended = () => {                   // マイクが抜けた
+        if (session !== sid) return;
+        showProblem("mic_ended");
+        end(true);
+      };
+    });
     const ctx = new AudioContext();
     audio = ctx;
     await ctx.audioWorklet.addModule("/static/vad-worklet.js");
     if (session !== sid) { s.getTracks().forEach(t => t.stop()); ctx.close().catch(() => {}); return; }
-    const source = audio.createMediaStreamSource(stream);
+    const src = audio.createMediaStreamSource(stream);
     node = new AudioWorkletNode(audio, "vad-frames", { numberOfOutputs: 1 });
-    node.port.onmessage = m => onFrame(m.data.rms, m.data.samples);
-    source.connect(node);
+    node.port.onmessage = m => onFrame(m.data.rms, m.data.samples, m.data.t);
+    src.connect(node);
     node.connect(audio.destination);        // 出力は無音（処理を動かすためだけにつなぐ）
     background = [];
     detector = null;
@@ -114,34 +152,139 @@
     }
   }
 
+  // 録音・再生・待ちの音・取りに行く途中の要求をすべて止め、マイクを解放する
   function cleanup() {
     session = null;
+    if (watchdog) { clearTimeout(watchdog); watchdog = null; }
     if (events) { events.close(); events = null; }
+    stopCalibration();
     if (node) { node.port.onmessage = null; node.disconnect(); node = null; }
-    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    if (stream) { stream.getTracks().forEach(t => { t.onended = null; t.stop(); }); stream = null; }
+    resetPlayback(0);
     if (audio) { audio.close().catch(() => {}); audio = null; }
     detector = null; current = null; ring = []; background = []; paused = false;
-    resetPlayback(0);
-    muted = false; lastEnd = 0;
+    awaiting = false; lastEnd = -Infinity; cut = -1; cutSend = 0; pendingSend = 0;
     $("start").disabled = false;
     $("pause").disabled = true;
     $("pause").textContent = "マイクを一時停止";
     $("end").disabled = true;
   }
 
+  // ------------------------------------------------------------ 回り込みの測定（会話の開始時に 1 回）
+
+  async function startCalibration() {
+    const sid = session;
+    calibration = { rms: [], playing: false, source: null, ctrl: null, timer: null };
+    status("回り込みを測っています（あいさつが流れます。黙っていてください）", "busy");
+    let ok = false;
+    try {
+      const r = await post(q("/api/calibrate"));
+      if (session !== sid) return;
+      if (r.status === 404) return lost(sid);
+      ok = r.ok && (await r.json().catch(() => ({}))).audio === true;
+    } catch (e) {
+      return lost(sid);
+    }
+    if (!calibration) return;               // 応答より先に、あいさつを再生し終えた
+    if (!ok) return finishCalibration(null, "あいさつを合成できませんでした");
+    if (!calibration.timer) {
+      calibration.timer = setTimeout(() => finishCalibration(null, "あいさつを再生できませんでした"),
+                                     CALIBRATION_PLAY_MS);
+    }
+  }
+
+  async function onCalibrationAudio(ev) {
+    const c = calibration;
+    if (!c || c.source || c.ctrl || !audio) return;
+    const sid = session;
+    if (c.timer) clearTimeout(c.timer);
+    c.timer = setTimeout(() => finishCalibration(null, "あいさつを再生できませんでした"), CALIBRATION_PLAY_MS);
+    const item = { id: ev.id };
+    try {
+      c.ctrl = new AbortController();
+      const r = await fetch("/api/audio/" + encodeURIComponent(ev.id) + "?session=" + encodeURIComponent(sid),
+                            { credentials: "same-origin", cache: "no-store", signal: c.ctrl.signal });
+      if (!r.ok) throw new Error("音声を取れません（" + r.status + "）");
+      const buffer = await audio.decodeAudioData(await r.arrayBuffer());
+      if (calibration !== c || session !== sid) return;
+      const s = audio.createBufferSource();
+      s.buffer = buffer;
+      s.connect(audio.destination);
+      s.onended = () => {
+        s.onended = null;
+        s.disconnect();
+        c.source = null;
+        c.playing = false;
+        lastEnd = performance.now();
+        played(item, ev.turn, "end");
+        finishCalibration(c.rms);
+      };
+      s.start();
+      c.source = s;
+      c.playing = true;                     // start から end までのマイクの RMS を回り込みとして集める
+      played(item, ev.turn, "start");
+    } catch (e) {
+      if (calibration !== c || session !== sid) return;
+      played(item, ev.turn, "error");
+      finishCalibration(null, "あいさつを再生できませんでした");
+    }
+  }
+
+  function stopCalibration() {
+    const c = calibration;
+    calibration = null;
+    if (!c) return;
+    if (c.timer) clearTimeout(c.timer);
+    if (c.ctrl) c.ctrl.abort();
+    if (c.source) {
+      c.source.onended = null;
+      try { c.source.stop(); } catch (e) { /* 止まっていれば何もしない */ }
+      try { c.source.disconnect(); } catch (e) { /* 外れていれば何もしない */ }
+    }
+  }
+
+  // 再生中のしきい値 = max(通常のしきい値, 回り込みの p95 × barge_margin)。測れなければ回り込み 0（通常のしきい値）
+  function finishCalibration(rms, reason) {
+    if (!calibration || !detector) return;
+    stopCalibration();
+    const measured = rms && rms.length ? rms : [];
+    const playTh = V.playThresholdFrom(measured, detector.threshold, config.barge_margin);
+    detector.setPlayThreshold(playTh);
+    detector.reset();
+    current = null; ring = [];
+    const db = x => Math.round(V.dbfs(x));
+    if (measured.length) {
+      note("回り込み " + db(V.percentile(measured, 95)) + " dBFS・再生中のしきい値 " + db(playTh) +
+           " dBFS（通常 " + db(detector.threshold) + " dBFS）");
+    } else {
+      note((reason || "回り込みを測れませんでした") + "。再生中も通常のしきい値で聞きます");
+    }
+    status(paused ? "マイクを一時停止しています" : "聞いています", paused ? "" : "listening");
+  }
+
   // ------------------------------------------------------------ 発話の検出
 
-  function onFrame(rms, samples) {
-    if (paused || !session || muted) return;  // 読み上げている間は聞かない（割り込みは T-1503）
+  // 再生している間（文の start から最後の文の終了の 0.3 秒後まで）は再生中のしきい値
+  function playingNow() {
+    return source !== null || performance.now() - lastEnd < AFTER_SPEECH_MS;
+  }
+
+  function onFrame(rms, samples, t) {
+    if (paused || !session) return;
     if (!detector) {
       background.push(rms);
       if (background.length < CALIBRATE_FRAMES) return;
       const threshold = V.thresholdFrom(background, config.threshold_factor, config.min_threshold);
       detector = V.createDetector({ threshold, silenceSeconds: config.silence_seconds,
                                     maxSeconds: config.max_seconds, prerollSeconds: config.preroll_seconds });
-      status("聞いています", "listening");
+      startCalibration();
       return;
     }
+    if (calibration) {                      // 測っている間は聞かない（あいさつの再生中の音量を集めるだけ）
+      if (calibration.playing) calibration.rms.push(rms);
+      return;
+    }
+    detector.setPlaying(playingNow());
     ring.push(samples);
     if (ring.length > detector.backFrames) ring.shift();
     if (current) current.push(samples);
@@ -149,6 +292,7 @@
     if (!ev) return;
     if (ev.type === "start") {
       current = ring.slice();               // 判定の窓と、その前の 0.3 秒を含める
+      if (awaiting) barge(t, ev.onsetFrames);   // 考えている間・話している間なら割り込み
       return;
     }
     const frames = current;
@@ -159,29 +303,76 @@
     send(frames);
   }
 
+  // 割り込み: サーバーの応答を待たずに再生を止め、待ちの音を捨て、まだ取りに行っていない音を取りに行かない。
+  // そのうえで /api/interrupt を送り、そのまま発話を録り続ける
+  function barge(t, onsetFrames) {
+    const detect = audio.currentTime;
+    const frameEnd = Number.isFinite(t) ? t : detect;
+    const onset = frameEnd - (onsetFrames + 1) * V.FRAME_SECONDS;   // 最初に超えたフレームの始まり
+    const wasPlaying = source !== null;
+    const stopCall = audio.currentTime;
+    discardPlayback();                      // AudioBufferSourceNode.stop
+    turnDone = true;                        // 割り込んだ発言の音は再生しない
+    awaiting = false;
+    answerEl = null;
+    if (pendingSend) {
+      cutSend = pendingSend;                // 番号の分からない発言（応答がまだ）。番号が分かったら割り込みを送る
+    } else {
+      cut = Math.max(cut, turn);
+      interrupt(turn);
+    }
+    status("聞いています（割り込み）", "listening");
+    if (wasPlaying) {
+      note(P.bargeNote(P.bargeTiming({ onset, detect, stopCall, outputLatency: audio.outputLatency || 0,
+                                       baseLatency: audio.baseLatency || 0 })));
+    }
+  }
+
+  function interrupt(t) {
+    const sid = session;
+    post(q("/api/interrupt"), JSON.stringify({ turn: t }), { "Content-Type": "application/json" })
+      .then(r => { if (r.status === 404) lost(sid); })   // 409（古い番号）は何もしない
+      .catch(() => lost(sid));
+  }
+
   async function send(frames) {
     const total = frames.reduce((n, f) => n + f.length, 0);
     const pcm = new Float32Array(total);
     let at = 0;
     for (const f of frames) { pcm.set(f, at); at += f.length; }
     const rate = audio.sampleRate;          // 16 kHz を仮定しない（サーバーで変換する）
-    const sid = session;
+    const sid = session, id = ++sendId;
+    pendingSend = id;
+    awaiting = true;
     status("考え中", "busy");
     try {
       const r = await post("/api/utterance?session=" + encodeURIComponent(sid) + "&rate=" + rate,
                            V.encodeWav(pcm, rate), { "Content-Type": "audio/wav" });
-      if (r.status === 409) {
-        note("前の発言を処理しているため、今の発言は送りませんでした");
-      } else if (r.ok) {
+      if (session !== sid) return;
+      if (pendingSend === id) pendingSend = 0;
+      if (r.ok) {
         const body = await r.json().catch(() => ({}));
-        if (session === sid && Number.isInteger(body.turn) && body.turn > turn) resetPlayback(body.turn);
+        if (session === sid && Number.isInteger(body.turn)) onTurnKnown(id, body.turn);
+      } else if (r.status === 404) {
+        lost(sid);                          // サーバーに会話がない
       } else {
+        if (sendId === id) awaiting = false;
         const body = await r.json().catch(() => ({}));
         status("音声を送れませんでした（" + r.status + " " + (body.message || body.error || "") + "）", "error");
       }
     } catch (e) {
-      status("音声を送れませんでした（通信の失敗）", "error");
+      lost(sid);
     }
+  }
+
+  function onTurnKnown(id, t) {
+    if (cutSend === id) {                   // 応答の前に割り込んだ発言
+      cutSend = 0;
+      cut = Math.max(cut, t);
+      interrupt(t);
+      return;
+    }
+    if (t > turn) resetPlayback(t);
   }
 
   // ------------------------------------------------------------ 読み上げ
@@ -191,25 +382,22 @@
     discardPlayback();
     next = 0;
     turnDone = false;
-    if (unmuteTimer) { clearTimeout(unmuteTimer); unmuteTimer = null; }
-    if (t > turn && muted) {                  // サーバーは前の発言を終えてから次を受け付ける（止めたままにしない）
-      muted = false;
-      if (detector) detector.reset();
-      current = null; ring = [];
-    }
     turn = t;
   }
 
-  // 再生中・取得中・再生待ちの音を捨てる（取った WAV の参照も外す）
+  // 再生中・取得中・再生待ちの音を捨てる（取りに行く途中の要求も止め、取った WAV の参照も外す）
   function discardPlayback() {
     if (source) {
       source.onended = null;
       try { source.stop(); } catch (e) { /* 止まっていれば何もしない */ }
       try { source.disconnect(); } catch (e) { /* 外れていれば何もしない */ }
-      lastEnd = performance.now();            // 止めた時刻から 0.3 秒は聞かない
+      lastEnd = performance.now();
     }
     source = null;
-    for (const item of items.values()) item.buffer = null;
+    for (const item of items.values()) {
+      item.buffer = null;
+      if (item.ctrl) item.ctrl.abort();
+    }
     items = new Map();
   }
 
@@ -217,38 +405,44 @@
   // 最初の再生の時刻を記録できない）
   function played(item, t, event) {
     if (!session) return;
-    const path = "/api/played?session=" + encodeURIComponent(session);
+    const sid = session;
+    const path = "/api/played?session=" + encodeURIComponent(sid);
     const body = JSON.stringify({ turn: t, id: item.id, event });
     playedQueue = playedQueue
       .then(() => post(path, body, { "Content-Type": "application/json" }))
-      .catch(() => { /* 届かなければサーバーが待つのをやめる */ });
+      .catch(() => lost(sid));
   }
 
   async function onAudio(ev) {
-    // 今の発言の番号と違う音、turn_done の後に届いた音（サーバーが待つのをやめた文）は取りに行かない
-    if (ev.turn !== turn || turnDone || !audio) return;
-    const item = { id: ev.id, buffer: null, state: "loading" };
+    // 今の発言の番号と違う音、割り込んだ発言の音、turn_done の後に届いた音は取りに行かない
+    if (ev.turn !== turn || ev.turn <= cut || turnDone || !audio) return;
+    const item = { id: ev.id, buffer: null, state: "loading", ctrl: new AbortController() };
     items.set(ev.index, item);
     const t = turn, sid = session;
-    const stale = () => t !== turn || turnDone || session !== sid || !audio || items.get(ev.index) !== item;
+    const stale = () => t !== turn || t <= cut || turnDone || session !== sid || !audio || items.get(ev.index) !== item;
     try {
       const r = await fetch("/api/audio/" + encodeURIComponent(ev.id) + "?session=" + encodeURIComponent(sid),
-                            { credentials: "same-origin", cache: "no-store" });
+                            { credentials: "same-origin", cache: "no-store", signal: item.ctrl.signal });
       if (!r.ok) throw new Error("音声を取れません（" + r.status + "）");
       const data = await r.arrayBuffer();
       if (stale()) return;
       const buffer = await audio.decodeAudioData(data);
-      if (stale()) return;                    // 復号の間に turn_done・次の発言が来たら捨てる
+      if (stale()) return;                    // 復号の間に turn_done・割り込み・次の発言が来たら捨てる
       item.buffer = buffer;
       item.state = "ready";
     } catch (e) {
       if (stale()) return;
       item.state = "error";
     }
+    item.ctrl = null;
     pump();
   }
 
-  // 順番（index）どおりに 1 文ずつ続けて再生する（全文を待たない）
+  function playbackFailed() {
+    showProblem(fails.fail() ? "playback_repeated" : "playback");
+  }
+
+  // 順番（index）どおりに 1 文ずつ続けて再生する（全文を待たない）。再生できない文は飛ばして続ける
   function pump() {
     while (!source && audio && !turnDone && items.has(next)) {
       const item = items.get(next), t = turn;
@@ -257,6 +451,7 @@
         items.delete(next);
         next += 1;
         played(item, t, "error");
+        playbackFailed();
         continue;
       }
       try {
@@ -269,62 +464,57 @@
           if (source === s) source = null;
           item.buffer = null;                   // 取った WAV の参照を外す
           lastEnd = performance.now();
+          fails.ok();
           played(item, t, "end");
           if (t === turn) pump();
         };
-        startSpeaking();
         s.start();
         source = s;
         items.delete(next);
         next += 1;
         played(item, t, "start");
+        if (!paused) status("話しています", "speaking");
       } catch (e) {
         item.buffer = null;
         items.delete(next);
         next += 1;
         played(item, t, "error");
+        playbackFailed();
       }
     }
   }
 
-  function startSpeaking() {
-    if (unmuteTimer) { clearTimeout(unmuteTimer); unmuteTimer = null; }
-    if (!muted) {
-      muted = true;                           // 最初の文の開始から、発話の検出を止める
-      if (detector) detector.reset();
-      current = null; ring = [];
-    }
-    if (!paused) status("話しています", "speaking");
-  }
-
-  // 発言の処理の終わり（最後の文の終了の 0.3 秒後から聞く）
+  // 発言の処理の終わり（サーバーは最後の文の再生の知らせを受けた、または待つのをやめた）
   function onTurnDone(t) {
-    if (t !== turn) return;                   // 新しい番号は onEvent で反映済み。古い番号の知らせは無視する
-    // サーバーは終えた（再生の知らせを待つ期限を過ぎた文は聞いていない扱い）。この発言の取得中・再生待ち・
-    // 再生中の音を捨て、後から届く同じ発言の音も再生しない（再生して発話の検出を止めたままにしない）
+    if (t !== turn) return;
+    // この発言の取得中・再生待ち・再生中の音を捨て、後から届く同じ発言の音も再生しない
     turnDone = true;
+    awaiting = false;
     discardPlayback();
-    const wait = muted ? Math.max(0, lastEnd + AFTER_SPEECH_MS - performance.now()) : 0;
-    if (unmuteTimer) clearTimeout(unmuteTimer);
-    unmuteTimer = setTimeout(() => {
-      unmuteTimer = null;
-      if (t !== turn || !session) return;
-      muted = false;
-      if (detector) detector.reset();
-      current = null; ring = [];
-      if ($("status").classList.contains("error")) return;   // 認識・回答の失敗の表示は残す（次に話せば消える）
-      status(paused ? "マイクを一時停止しています" : (detector ? "聞いています" : "背景の音を測っています"),
-             paused ? "" : "listening");
-    }, wait);
+    if ($("status").classList.contains("error")) return;   // 認識・回答の失敗の表示は残す（次に話せば消える）
+    status(paused ? "マイクを一時停止しています" : "聞いています", paused ? "" : "listening");
   }
 
   // ------------------------------------------------------------ イベント
 
   function onEvent(ev) {
     if (!session || ev.session !== session) return;
-    // /api/utterance の応答より先に、その発言のイベント（recognized・ignored・turn_done など）が届くことがある。
-    // 新しい番号はここで反映し、応答との到着順にかかわらず受付状態へ戻れるようにする
-    if (ev.type !== "ended" && Number.isInteger(ev.turn) && ev.turn > turn) resetPlayback(ev.turn);
+    if (!seqFilter.accept(ev)) return;        // 重複・順番の違うイベントは捨てる
+    if (ev.type === "ended") {
+      line("system", "", "会話を終えました");
+      status("会話を終えました", "");
+      cleanup();
+      return;
+    }
+    if (ev.type === "audio" && ev.calibration) { onCalibrationAudio(ev); return; }
+    if (ev.type === "notice") { note(ev.message); return; }
+    const d = P.turnDecision(ev, turn, cut);
+    if (d === "stale") return;                // 割り込んだ・古い発言のイベントは捨てる
+    if (d === "new") {
+      if (cutSend) return;                    // 番号の分からないまま割り込んだ発言のイベント
+      // /api/utterance の応答より先に、その発言のイベントが届くことがある。新しい番号はここで反映する
+      resetPlayback(ev.turn);
+    }
     switch (ev.type) {
       case "ready":
         break;
@@ -338,9 +528,6 @@
       case "audio":
         onAudio(ev);
         break;
-      case "notice":
-        note(ev.message);
-        break;
       case "turn_done":
         onTurnDone(ev.turn);
         break;
@@ -352,18 +539,12 @@
         if (!answerEl) answerEl = line("ai", "JARVIS", "");
         answerEl.textContent = ev.text;      // 逐次表示しなかった回答もここで全文を出す
         answerEl = null;
-        break;                                // 読み上げが終わるまで聞かない（turn_done で戻る）
-      case "error":
-        if (ev.kind === "playback") { note("読み上げの音を 1 文再生できませんでした（次の文に進みます）"); break; }
-        line("error", "エラー", ev.message || ev.kind);
-        status(ev.kind === "stt" ? "認識できませんでした。もう一度話してください" :
-               ev.kind === "answer" ? "答えを作れませんでした。もう一度話してください" :
-               "エラーがありました。もう一度話してください", "error");
         break;
-      case "ended":
-        line("system", "", "会話を終えました");
-        status("会話を終えました", "");
-        cleanup();
+      case "error":
+        if (ev.kind === "playback") break;    // ページで数えて表示済み
+        if (ev.kind === "tts") { showProblem("tts"); break; }   // 文字の回答は続ける
+        line("error", "エラー", ev.message || ev.kind);
+        showProblem(ev.kind === "stt" || ev.kind === "answer" ? ev.kind : "other");
         break;
     }
   }
@@ -378,7 +559,7 @@
     current = null; ring = [];
     if (stream) stream.getAudioTracks().forEach(t => { t.enabled = !paused; });
     $("pause").textContent = paused ? "マイクを再開" : "マイクを一時停止";
-    status(paused ? "マイクを一時停止しています" : muted ? "話しています" :
-           (detector ? "聞いています" : "背景の音を測っています"), paused ? "" : muted ? "speaking" : "listening");
+    status(paused ? "マイクを一時停止しています" : source ? "話しています" :
+           (detector ? "聞いています" : "背景の音を測っています"), paused ? "" : source ? "speaking" : "listening");
   };
 })();

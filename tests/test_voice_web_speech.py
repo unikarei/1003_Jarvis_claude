@@ -236,7 +236,7 @@ def test_not_streamed_answer_reads_summary():
     assert s.ctx.history[-1].text == summary
 
 
-def test_busy_until_browser_finishes_playing():
+def test_turn_lasts_until_browser_finishes_playing():
     browser = Browser(play=0)                             # 音を受けても再生を知らせない
     handle = Streamer(["一文目です。"], skill="general-chat")
     clock = Clock()
@@ -245,10 +245,7 @@ def test_busy_until_browser_finishes_playing():
     events.wait("answer_done")
     until(lambda: events.of("audio"))
     time.sleep(0.1)
-    assert not events.of("turn_done")
-    from voice.web.session import Busy
-    with pytest.raises(Busy):                             # 読み終えるまで次の発話は 409
-        s.submit(wav(), 48000)
+    assert not events.of("turn_done")                     # 読み終えるまで発言の処理は続く（次の発話は割り込み、T-1503）
     aid = events.of("audio")[0]["id"]
     assert s.played(1, aid, "start") == "ok"
     assert s.played(1, aid, "end") == "ok"
@@ -527,11 +524,11 @@ def test_played_endpoint_checks_origin_header_and_turn(served):
 def test_page_plays_audio_and_reports_played():
     from pathlib import Path
     js = (Path(__file__).resolve().parent.parent / "voice" / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    for needle in ('case "audio"', 'case "turn_done"', 'case "notice"', "decodeAudioData", "/api/played",
+    for needle in ('case "audio"', 'case "turn_done"', 'ev.type === "notice"', "decodeAudioData", "/api/played",
                    "/api/audio/", "話しています", "AFTER_SPEECH_MS = 300"):
         assert needle in js, needle
     # turn_done の後（サーバーが再生の知らせを待つ期限を過ぎた後）に届いた・取得中の音は再生しない
-    assert "turnDone = true;\n    discardPlayback();" in js
+    assert "turnDone = true;\n    awaiting = false;\n    discardPlayback();" in js
     assert "!source && audio && !turnDone" in js
     for banned in ("localStorage", "sessionStorage", "indexedDB", "caches."):
         assert banned not in js, banned

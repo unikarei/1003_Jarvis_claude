@@ -1,8 +1,10 @@
-"""ブラウザでの声の会話の HTTP サーバー（T-1501・T-1502、ADR-0031、../docs/browser-voice-spec.md §6・§7）。
+"""ブラウザでの声の会話の HTTP サーバー（T-1501〜T-1503、ADR-0031、../docs/browser-voice-spec.md §6・§7）。
 
 標準ライブラリの ThreadingHTTPServer で 127.0.0.1 だけに置く。ブラウザ → サーバーは POST、サーバー → ブラウザは
 SSE（EventSource）の 1 本。読み上げの音は文ごとに GET /api/audio/<id> で渡し、再生の始め・終わりを
-POST /api/played で受ける（T-1502）。起動ごとのトークンを HttpOnly の Cookie に移して認証する（acc/voice_settings.py と同じ形）。
+POST /api/played で受ける（T-1502）。回り込みの測定のあいさつは POST /api/calibrate、割り込みは POST /api/interrupt
+（T-1503）。SSE は 5 秒ごとに ping（event: ping）を送り、切れたら会話を終える（再接続しない、BV-11）。
+起動ごとのトークンを HttpOnly の Cookie に移して認証する（acc/voice_settings.py と同じ形）。
 VS Code のポート転送は別の番号になることがあるため、Host・Origin は localhost・127.0.0.1 ならポートを問わない。
 トークン・Cookie・本文・音声はログに出さない。
 """
@@ -28,7 +30,7 @@ CSRF_HEADER = "X-Jarvis-Voice"
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_BODY = 4 * 1024 * 1024        # 発話 1 回分の WAV の上限
 MAX_SMALL_BODY = 10_000           # 音声以外の POST の本文の上限
-PING_SECONDS = 15.0
+PING_SECONDS = 5.0                # ページは 15 秒イベントも ping も来なければ切断として扱う
 ATTACH_SECONDS = 30.0             # 会話を始めてから SSE をつなぐまでの猶予（つながなかった会話は次の開始で終える）
 WAV_TYPES = ("audio/wav", "audio/x-wav", "audio/wave")
 
@@ -46,14 +48,18 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 THRESHOLD_FACTOR = 4.0
 MIN_THRESHOLD = 0.002
 PREROLL_SECONDS = 0.3
+BARGE_MARGIN = 5.0                # 再生中のしきい値 = max(通常, 回り込みの p95 × これ)（§11.1 の試作の値、BV-07）
 
 
 def page_config() -> dict:
     silence = rec._env_float("JARVIS_VOICE_SILENCE_SECONDS", rec.SILENCE_SECONDS)
     if not silence > 0:
         silence = rec.SILENCE_SECONDS
+    margin = rec._env_float("JARVIS_VOICE_BARGE_MARGIN", BARGE_MARGIN)
+    if not 0 < margin < float("inf"):
+        margin = BARGE_MARGIN
     return {"silence_seconds": silence, "max_seconds": rec.MAX_SECONDS, "preroll_seconds": PREROLL_SECONDS,
-            "threshold_factor": THRESHOLD_FACTOR, "min_threshold": MIN_THRESHOLD}
+            "threshold_factor": THRESHOLD_FACTOR, "min_threshold": MIN_THRESHOLD, "barge_margin": margin}
 
 
 def default_session_factory(emit):
@@ -232,7 +238,8 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
                     try:
                         event = events.get(timeout=ping_seconds)
                     except queue.Empty:
-                        self.wfile.write(b": ping\n\n")
+                        # 名前付きのイベント（ページの onmessage・seq に入らない）。ページは切断の検出に使う
+                        self.wfile.write(b"event: ping\ndata: {}\n\n")
                         self.wfile.flush()
                         continue
                     self.wfile.write(b"data: " + json.dumps(event, ensure_ascii=False).encode("utf-8") + b"\n\n")
@@ -242,7 +249,7 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
             except OSError:              # ブラウザが閉じた・接続が切れた
                 pass
             finally:
-                session.end()            # 再接続は T-1503 で作る。それまでは切れたら会話を終える
+                session.end()            # 切れたら会話を終える（再接続・引き継ぎはしない。BV-11）
                 self.close_connection = True
 
         # -------------------------------------------------------- POST
@@ -259,6 +266,10 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
             body = self.rfile.read(length)
             if path == "/api/played":
                 return self._played(q, body)
+            if path == "/api/interrupt":
+                return self._interrupt(q, body)
+            if path == "/api/calibrate":
+                return self._calibrate(q)
             if path == "/api/session":
                 session = sessions.start()
                 if session is None:
@@ -297,6 +308,35 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
                 return self._json(404, {"error": "not_found"})
             self._json(200, {"ok": True})
 
+        def _interrupt(self, q, body: bytes):
+            """ブラウザの割り込み {"turn"}（T-1503）。今の発言の番号のときだけ受け付ける（違えば 409 で何もしない）。"""
+            session = sessions.get(q.get("session"))
+            if session is None:
+                return self._json(404, {"error": "no_session"})
+            try:
+                data = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                return self._json(400, {"error": "bad_json"})
+            turn = data.get("turn") if isinstance(data, dict) else None
+            if not isinstance(turn, int) or isinstance(turn, bool):
+                return self._json(400, {"error": "bad_request"})
+            if session.interrupt(turn) == "stale":
+                return self._json(409, {"error": "stale_turn"})
+            self._json(200, {"ok": True})
+
+        def _calibrate(self, q):
+            """回り込みの測定のあいさつを 1 回だけ合成して送る（T-1503）。{"audio": 送れたか}。2 回目・発言の後は 409。"""
+            from voice.web.session import Busy
+
+            session = sessions.get(q.get("session"))
+            if session is None:
+                return self._json(404, {"error": "no_session"})
+            try:
+                sent = session.calibrate()
+            except Busy:
+                return self._json(409, {"error": "calibrated"})
+            self._json(200, {"audio": sent})
+
         def _utterance(self, q):
             from voice.web.session import AudioError, Busy
 
@@ -321,8 +361,8 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float):
                 turn = session.submit(data, rate)
             except AudioError as e:
                 return self._json(e.status, {"error": "bad_audio", "message": str(e)})
-            except Busy:
-                return self._json(409, {"error": "thinking"})
+            except Busy:                          # 会話が終わっている（考えている間・話している間は割り込みにする）
+                return self._json(409, {"error": "ended"})
             self._json(202, {"turn": turn})
 
     return Handler

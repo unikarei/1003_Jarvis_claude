@@ -1,4 +1,4 @@
-// マイクの音を 10 ms ごとのフレームにして、RMS と音そのものをページへ送る（T-1501）。音は保存しない。
+// マイクの音を 10 ms ごとのフレームにして、RMS と音そのもの・時刻をページへ送る（T-1501・T-1503）。音は保存しない。
 class VadFrames extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -16,7 +16,9 @@ class VadFrames extends AudioWorkletProcessor {
         let sum = 0;
         for (let j = 0; j < this.size; j++) sum += this.buf[j] * this.buf[j];
         const frame = this.buf;
-        this.port.postMessage({ rms: Math.sqrt(sum / this.size), samples: frame }, [frame.buffer]);
+        // t: このフレームの終わりの時刻（AudioContext の時計、割り込みの時間の計測に使う、T-1503）
+        this.port.postMessage({ rms: Math.sqrt(sum / this.size), samples: frame,
+                                t: currentTime + (i + 1) / sampleRate }, [frame.buffer]);
         this.buf = new Float32Array(this.size);
         this.n = 0;
       }
