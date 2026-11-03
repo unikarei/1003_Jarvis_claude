@@ -444,6 +444,22 @@ def test_no_answer_does_not_call_llm(env, kids, monkeypatch):
     assert o["score_retrieval"] == 1.0
 
 
+def test_rank_matches_section_that_replaces_question_knowledge(env, kids, monkeypatch):
+    """移行で節になった知識（meta.replaces が問の knowledge_id）に当たれば、その順位で当たり（T-1419）。"""
+    old = "knowledge_minpaku_20261001_000000_old0"
+    sections = [db.insert_node("Knowledge", category="minpaku", title=f"spec.md › {i}", content="節",
+                               meta={"repo_path": "docs/spec.md", "section_key": f"## {i}/0", "section_index": i,
+                                     "replaces": old}) for i in range(2)]
+    q1, q2 = "大洗の物件の所在地は？", "大洗の物件の広さは？"
+    fake_search(monkeypatch, {q1: [kids[1], kids[2], sections[1], sections[0]], q2: [kids[3], kids[0]]})
+    result = runner.run([item("q1", q1, old), item("q2", q2, kids[0])], answer=False, log=lambda m: None)
+    r1, r2 = result["items"]
+    assert (r1["rank"], r1["recall@3"], r1["recall@8"]) == (3, 1, 1)
+    assert r2["rank"] == 2                                                  # ID が同じなら今までどおり
+    miss = runner.run([item("q3", q1, "knowledge_none")], answer=False, log=lambda m: None)["items"][0]
+    assert miss["rank"] is None
+
+
 def test_provider_allow_list(env, kids, fake_llm):
     for bad in ("anthropic_api", "claude", ""):
         with pytest.raises(runner.EvalError):
