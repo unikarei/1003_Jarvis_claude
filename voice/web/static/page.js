@@ -99,13 +99,49 @@
     return { detectMs, stopMs, totalMs: detectMs + stopMs };
   }
 
-  function bargeNote(timing) {
-    return "割り込み: 話し始めから停止まで約 " + timing.totalMs + " ms（検出 " + timing.detectMs + "・停止 " +
-      timing.stopMs + "）";
+  // playing: 再生中に割り込んだか（false なら考えている間。止める音はなく、停止は待ちの音を捨てた時刻）
+  function bargeNote(timing, playing) {
+    return "割り込み" + (playing === false ? "（考えている間）" : "") + ": 話し始めから停止まで約 " +
+      timing.totalMs + " ms（検出 " + timing.detectMs + "・停止 " + timing.stopMs + "）";
+  }
+
+  // POST の応答の扱い。"ok": 成功、"expected": 想定内の失敗（会話を続ける）、"lost": 想定外（会話を終える）。
+  // kind は送り先（played / interrupt / calibrate / utterance）、error は応答の本文の error
+  function postOutcome(kind, status, error) {
+    if (status >= 200 && status < 300) return "ok";
+    if (kind === "played") {
+      if (status === 409) return "expected";                          // 古い発言の番号
+      if (status === 404 && error === "not_found") return "expected"; // もう保持していない音
+      return "lost";
+    }
+    if (kind === "interrupt" || kind === "calibrate") return status === 409 ? "expected" : "lost";
+    if (kind === "utterance") return status === 400 || status === 413 ? "expected" : "lost";   // 受け付けない音声
+    return "lost";
+  }
+
+  // 番号の分からないまま（/api/utterance の応答の前に）割り込んだ発言。分かるまで、新しい番号のイベントを保持する
+  // （割り込んだ発言のイベントか、その次の発言のイベントかを決められないため）。
+  // known(id) は {cut: 割り込んだ発言か, release: 保持をやめて渡し直すイベント}
+  function createCutHold() {
+    const ids = new Set();
+    let held = [];
+    return {
+      cut(id) { ids.add(id); },
+      get holding() { return ids.size > 0; },
+      hold(ev) { held.push(ev); },
+      known(id) {
+        const cut = ids.delete(id);
+        if (ids.size > 0) return { cut, release: [] };
+        const release = held;
+        held = [];
+        return { cut, release };
+      },
+      clear() { ids.clear(); held = []; },
+    };
   }
 
   const api = { PLAYBACK_FAILS_TO_WARN, SILENCE_LIMIT_MS, PROBLEMS, problem, micErrorKind, createSeqFilter,
-                turnDecision, createFailCounter, bargeTiming, bargeNote };
+                turnDecision, createFailCounter, bargeTiming, bargeNote, postOutcome, createCutHold };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JarvisPage = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

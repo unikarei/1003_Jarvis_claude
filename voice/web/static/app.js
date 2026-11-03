@@ -19,7 +19,8 @@
   let turn = 0, cut = -1, items = new Map(), next = 0, source = null, lastEnd = -Infinity;
   let turnDone = false;                     // 今の発言の turn_done が届いた（その後の同じ発言の音は再生しない）
   let awaiting = false;                     // 送った発言の turn_done を待っている（考えている間・話している間）
-  let sendId = 0, pendingSend = 0, cutSend = 0;   // 送った発言の通し番号。cutSend は番号の分からないまま割り込んだ発言
+  let sendId = 0, pendingSend = 0;          // 送った発言の通し番号。pendingSend は応答（番号）を待っている発言
+  let cutHold = P.createCutHold();          // 番号の分からないまま割り込んだ発言と、その間に届いた新しい番号のイベント
   let playedQueue = Promise.resolve();      // /api/played を送る順番（start → end）を守る
   let seqFilter = P.createSeqFilter(), fails = P.createFailCounter();
   let calibration = null;                   // 回り込みの測定 {rms, playing, source, ctrl, timer}
@@ -60,6 +61,15 @@
                          credentials: "same-origin" });
   }
 
+  // POST の応答を分類する（page.js の postOutcome）。想定外の失敗なら会話を終える。
+  // 返り値は {outcome, body}（body は応答の JSON。読めなければ {}）
+  async function checked(kind, r, sid) {
+    const body = await r.json().catch(() => ({}));
+    const outcome = P.postOutcome(kind, r.status, body && body.error);
+    if (outcome === "lost") lost(sid);
+    return { outcome, body: body || {} };
+  }
+
   function q(path) { return path + (path.includes("?") ? "&" : "?") + "session=" + encodeURIComponent(session); }
 
   // 通信の切断（SSE の切断・POST の失敗）: 会話を終え、マイクを解放する。自動で再開しない・古い発言を送り直さない
@@ -76,7 +86,7 @@
     note("");
     seqFilter = P.createSeqFilter();
     fails = P.createFailCounter();
-    turn = 0; cut = -1; sendId = 0; pendingSend = 0; cutSend = 0;
+    turn = 0; cut = -1; sendId = 0; pendingSend = 0; cutHold.clear();
     try {
       if (!config) config = await (await fetch("/api/config", { credentials: "same-origin" })).json();
       const r = await post("/api/session");
@@ -163,7 +173,7 @@
     resetPlayback(0);
     if (audio) { audio.close().catch(() => {}); audio = null; }
     detector = null; current = null; ring = []; background = []; paused = false;
-    awaiting = false; lastEnd = -Infinity; cut = -1; cutSend = 0; pendingSend = 0;
+    awaiting = false; lastEnd = -Infinity; cut = -1; cutHold.clear(); pendingSend = 0;
     $("start").disabled = false;
     $("pause").disabled = true;
     $("pause").textContent = "マイクを一時停止";
@@ -180,8 +190,9 @@
     try {
       const r = await post(q("/api/calibrate"));
       if (session !== sid) return;
-      if (r.status === 404) return lost(sid);
-      ok = r.ok && (await r.json().catch(() => ({}))).audio === true;
+      const { outcome, body } = await checked("calibrate", r, sid);
+      if (outcome === "lost" || session !== sid) return;
+      ok = outcome === "ok" && body.audio === true;   // 409（測定済み）は回り込み 0 で続ける
     } catch (e) {
       return lost(sid);
     }
@@ -316,22 +327,21 @@
     awaiting = false;
     answerEl = null;
     if (pendingSend) {
-      cutSend = pendingSend;                // 番号の分からない発言（応答がまだ）。番号が分かったら割り込みを送る
+      cutHold.cut(pendingSend);             // 番号の分からない発言（応答がまだ）。番号が分かったら割り込みを送る
     } else {
       cut = Math.max(cut, turn);
       interrupt(turn);
     }
     status("聞いています（割り込み）", "listening");
-    if (wasPlaying) {
-      note(P.bargeNote(P.bargeTiming({ onset, detect, stopCall, outputLatency: audio.outputLatency || 0,
-                                       baseLatency: audio.baseLatency || 0 })));
-    }
+    // 考えている間の割り込みも記録する（止める音はなく、停止は待ちの音を捨てた時刻）
+    note(P.bargeNote(P.bargeTiming({ onset, detect, stopCall, outputLatency: audio.outputLatency || 0,
+                                     baseLatency: audio.baseLatency || 0 }), wasPlaying));
   }
 
   function interrupt(t) {
     const sid = session;
     post(q("/api/interrupt"), JSON.stringify({ turn: t }), { "Content-Type": "application/json" })
-      .then(r => { if (r.status === 404) lost(sid); })   // 409（古い番号）は何もしない
+      .then(r => checked("interrupt", r, sid))   // 409（古い番号）は何もしない。それ以外の失敗は会話を終える
       .catch(() => lost(sid));
   }
 
@@ -350,14 +360,13 @@
                            V.encodeWav(pcm, rate), { "Content-Type": "audio/wav" });
       if (session !== sid) return;
       if (pendingSend === id) pendingSend = 0;
-      if (r.ok) {
-        const body = await r.json().catch(() => ({}));
-        if (session === sid && Number.isInteger(body.turn)) onTurnKnown(id, body.turn);
-      } else if (r.status === 404) {
-        lost(sid);                          // サーバーに会話がない
-      } else {
+      const { outcome, body } = await checked("utterance", r, sid);
+      if (session !== sid) return;
+      if (outcome === "ok") {
+        onTurnKnown(id, Number.isInteger(body.turn) ? body.turn : null);
+      } else {                              // 受け付けない音声（400・413）。この発言は捨てて聞き続ける
+        onTurnKnown(id, null);
         if (sendId === id) awaiting = false;
-        const body = await r.json().catch(() => ({}));
         status("音声を送れませんでした（" + r.status + " " + (body.message || body.error || "") + "）", "error");
       }
     } catch (e) {
@@ -365,14 +374,20 @@
     }
   }
 
+  // 送った発言の番号が分かった（t は受け付けられなければ null）。応答の前に割り込んだ発言なら割り込みを送り、
+  // 番号が分かるまで保持していたイベントを渡し直す（割り込んだ発言のものは捨て、次の発言のものは使う）
   function onTurnKnown(id, t) {
-    if (cutSend === id) {                   // 応答の前に割り込んだ発言
-      cutSend = 0;
+    const { cut: wasCut, release } = cutHold.known(id);
+    if (wasCut && t !== null) {
       cut = Math.max(cut, t);
       interrupt(t);
-      return;
+    } else if (!wasCut && t !== null && t > turn) {
+      resetPlayback(t);
     }
-    if (t > turn) resetPlayback(t);
+    for (const ev of release) {
+      if (!session) return;
+      dispatch(ev);
+    }
   }
 
   // ------------------------------------------------------------ 読み上げ
@@ -410,6 +425,7 @@
     const body = JSON.stringify({ turn: t, id: item.id, event });
     playedQueue = playedQueue
       .then(() => post(path, body, { "Content-Type": "application/json" }))
+      .then(r => checked("played", r, sid))   // 古い番号（409）・保持していない音（404 not_found）は想定内
       .catch(() => lost(sid));
   }
 
@@ -508,10 +524,15 @@
     }
     if (ev.type === "audio" && ev.calibration) { onCalibrationAudio(ev); return; }
     if (ev.type === "notice") { note(ev.message); return; }
+    dispatch(ev);
+  }
+
+  function dispatch(ev) {
     const d = P.turnDecision(ev, turn, cut);
     if (d === "stale") return;                // 割り込んだ・古い発言のイベントは捨てる
     if (d === "new") {
-      if (cutSend) return;                    // 番号の分からないまま割り込んだ発言のイベント
+      // 番号の分からないまま割り込んだ発言があれば、番号が分かるまで保持する（次の発言のイベントを失わない）
+      if (cutHold.holding) { cutHold.hold(ev); return; }
       // /api/utterance の応答より先に、その発言のイベントが届くことがある。新しい番号はここで反映する
       resetPlayback(ev.turn);
     }

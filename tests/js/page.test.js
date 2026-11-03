@@ -77,6 +77,51 @@ test("割り込みの時間: 話し始め → 検出 → 停止（出力の遅�
   assert.deepStrictEqual(t, { detectMs: 130, stopMs: 52, totalMs: 182 });
   assert.strictEqual(P.bargeNote(t), "割り込み: 話し始めから停止まで約 182 ms（検出 130・停止 52）");
   assert.deepStrictEqual(P.bargeTiming({ onset: 1, detect: 1.2, stopCall: 1.2 }), { detectMs: 200, stopMs: 0, totalMs: 200 });
+  // 考えている間の割り込みも、検出と停止の時間を出す
+  assert.strictEqual(P.bargeNote(t, true), "割り込み: 話し始めから停止まで約 182 ms（検出 130・停止 52）");
+  assert.strictEqual(P.bargeNote(t, false), "割り込み（考えている間）: 話し始めから停止まで約 182 ms（検出 130・停止 52）");
+});
+
+test("POST の応答: 想定内の失敗（古い番号など）と、会話を終える想定外の失敗を分ける", () => {
+  for (const kind of ["played", "interrupt", "calibrate", "utterance"]) {
+    assert.strictEqual(P.postOutcome(kind, 200), "ok", kind);
+    assert.strictEqual(P.postOutcome(kind, 500), "lost", kind);
+    assert.strictEqual(P.postOutcome(kind, 502), "lost", kind);
+    assert.strictEqual(P.postOutcome(kind, 404, "no_session"), "lost", kind);
+  }
+  assert.strictEqual(P.postOutcome("utterance", 202), "ok");
+  assert.strictEqual(P.postOutcome("played", 409, "stale_turn"), "expected");
+  assert.strictEqual(P.postOutcome("played", 404, "not_found"), "expected");
+  assert.strictEqual(P.postOutcome("played", 400, "bad_request"), "lost");
+  assert.strictEqual(P.postOutcome("interrupt", 409, "stale_turn"), "expected");
+  assert.strictEqual(P.postOutcome("interrupt", 400, "bad_request"), "lost");
+  assert.strictEqual(P.postOutcome("calibrate", 409, "calibrated"), "expected");
+  assert.strictEqual(P.postOutcome("utterance", 400, "bad_audio"), "expected");
+  assert.strictEqual(P.postOutcome("utterance", 413, "too_large"), "expected");
+  assert.strictEqual(P.postOutcome("utterance", 409, "ended"), "lost");
+});
+
+test("番号の分からないまま割り込んだ発言: 番号が分かるまで新しい番号のイベントを保持し、分かったら渡し直す", () => {
+  const h = P.createCutHold();
+  assert.strictEqual(h.holding, false);
+  h.cut(1);                                       // 発言 1（応答の前）に割り込んだ
+  assert.strictEqual(h.holding, true);
+  h.hold({ turn: 2, type: "recognized" });        // 次の発言のイベントが応答より先に届いた
+  h.hold({ turn: 2, type: "audio" });
+  // 割り込んでいない発言の番号が分かっても、割り込んだ発言が残る間は保持を続ける
+  assert.deepStrictEqual(h.known(9), { cut: false, release: [] });
+  assert.strictEqual(h.holding, true);
+  const r = h.known(1);
+  assert.strictEqual(r.cut, true);
+  assert.deepStrictEqual(r.release.map(e => e.type), ["recognized", "audio"]);   // 失わない
+  assert.strictEqual(h.holding, false);
+  // 2 つ割り込んだら、両方の番号が分かるまで渡さない
+  h.cut(3); h.cut(4); h.hold({ turn: 5 });
+  assert.deepStrictEqual(h.known(3), { cut: true, release: [] });
+  assert.deepStrictEqual(h.known(4), { cut: true, release: [{ turn: 5 }] });
+  h.cut(6); h.hold({ turn: 7 }); h.clear();
+  assert.strictEqual(h.holding, false);
+  assert.deepStrictEqual(h.known(6), { cut: false, release: [] });
 });
 
 test("切断とみなすまでの時間は ping の間隔（5 秒）より長い", () => {

@@ -587,3 +587,12 @@ def test_page_js_with_node(name):
     r = subprocess.run(["node", "--test", str(ROOT / "tests" / "js" / name)], cwd=ROOT,
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node がない")
+@pytest.mark.parametrize("name", ["app.js", "vad-worklet.js"])
+def test_page_js_syntax(name):
+    """DOM に触れるため Node で動かせないページの JS も、構文だけは確かめる。"""
+    r = subprocess.run(["node", "--check", str(ROOT / "voice" / "web" / "static" / name)], cwd=ROOT,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
