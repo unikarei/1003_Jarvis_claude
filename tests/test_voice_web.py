@@ -1,0 +1,483 @@
+"""ブラウザでの声の会話の土台（T-1501、../docs/testing.md §13）のテスト。
+
+偽の認識・偽の orchestrator.handle・一時の DB で動かし、本物の LLM・Whisper・音声の機器を使わない。
+"""
+
+import http.client
+import io
+import json
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import wave
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+import orchestrator
+from ckc.models import Speaker as Who
+from voice.web import server as web
+from voice.web.session import AudioError, Busy, WebSession, decode_wav
+
+ROOT = Path(__file__).resolve().parent.parent
+TOKEN = "test-token-123"
+
+
+def wav(seconds=0.5, rate=48000, channels=1, value=1000) -> bytes:
+    n = int(seconds * rate)
+    samples = np.full(n * channels, value, dtype="<i2")
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(samples.tobytes())
+    return buf.getvalue()
+
+
+def outcome(text="答えです", skill="general-chat", ok=True, error=None):
+    return orchestrator.Outcome(skill, "rule", {}, text, ok, 0.1, [], error)
+
+
+class Fake:
+    """偽の認識と handle。呼ばれた値を覚える。"""
+
+    def __init__(self, text="こんにちは", answer="答えです", chunks=("答え", "です")):
+        self.text, self.answer, self.chunks = text, answer, chunks
+        self.heard, self.asked, self.handled, self.recorded = [], [], [], []
+        self.gate = None          # threading.Event を入れると認識をそこで止める
+
+    def transcribe(self, audio):
+        self.heard.append(audio)
+        if self.gate is not None:
+            self.gate.wait(5)
+        if isinstance(self.text, Exception):
+            raise self.text
+        return self.text
+
+    def handle(self, text, ctx, ask=None):
+        self.handled.append(text)
+        for c in self.chunks:
+            ctx.stream(c)
+        return outcome(self.answer)
+
+    def record(self, text, out):
+        self.recorded.append((text, out.text))
+
+
+class Events(list):
+    def __init__(self):
+        super().__init__()
+        self.cond = threading.Condition()
+
+    def __call__(self, event):
+        with self.cond:
+            self.append(event)
+            self.cond.notify_all()
+
+    def wait(self, type_, count=1, timeout=5.0):
+        end = time.monotonic() + timeout
+        with self.cond:
+            while sum(e["type"] == type_ for e in self) < count:
+                left = end - time.monotonic()
+                if left <= 0:
+                    raise AssertionError(f"{type_} が来ません: {[e['type'] for e in self]}")
+                self.cond.wait(left)
+
+
+def make_session(fake=None, **kw):
+    fake = fake or Fake()
+    events = Events()
+    s = WebSession(transcribe=fake.transcribe, handle=kw.get("handle", fake.handle), emit=events,
+                   record=kw.get("record", fake.record))
+    return s, events, fake
+
+
+# ---------------------------------------------------------------- WAV
+
+def test_decode_wav_checks_format_rate_and_length():
+    assert decode_wav(wav(0.1, 16000), 16000).dtype == np.float32
+    with pytest.raises(AudioError) as e:
+        decode_wav(wav(0.1, 48000), 44100)                   # WAV の中のレートと違う
+    assert e.value.status == 400
+    with pytest.raises(AudioError) as e:
+        decode_wav(wav(0.1, 16000, channels=2), 16000)       # ステレオ
+    assert e.value.status == 400
+    with pytest.raises(AudioError) as e:
+        decode_wav(wav(21, 8000), 8000)                      # 20.5 秒を超える
+    assert e.value.status == 413
+    for rate in (7999, 96001):
+        with pytest.raises(AudioError) as e:
+            decode_wav(wav(0.1, 16000), rate)
+        assert e.value.status == 400
+    with pytest.raises(AudioError):
+        decode_wav(b"not a wav", 16000)
+
+
+# ---------------------------------------------------------------- WebSession
+
+def test_48k_wav_is_resampled_to_16k_and_events_in_order():
+    s, events, fake = make_session()
+    assert s.submit(wav(0.5, 48000), 48000) == 1
+    events.wait("answer_done")
+    audio = fake.heard[0]
+    assert audio.dtype == np.float32 and len(audio) == 8000      # 0.5 秒の 16 kHz
+    assert abs(float(audio.mean()) - 1000 / 32768) < 1e-4
+    assert [e["type"] for e in events] == ["ready", "recognized", "answer_chunk", "answer_chunk", "answer_done"]
+    assert [e["seq"] for e in events] == [1, 2, 3, 4, 5]
+    assert all(e["session"] == s.id for e in events)
+    assert all(e["turn"] == 1 for e in events[1:])
+    assert events[1]["text"] == "こんにちは"
+    assert [e["text"] for e in events[2:4]] == ["答え", "です"]
+    assert (events[4]["text"], events[4]["skill"], events[4]["ok"]) == ("答えです", "general-chat", True)
+    assert fake.recorded == [("こんにちは", "答えです")]
+    assert [(t.speaker, t.text) for t in s.ctx.history] == [(Who.OWNER, "こんにちは"), (Who.AI, "答えです")]
+    assert s.ctx.voice is True and s.ctx.stream is None
+
+
+@pytest.mark.parametrize("text,reason", [("ご視聴ありがとうございました", "noise"), ("", "empty"), ("。", "empty")])
+def test_noise_is_ignored(text, reason):
+    s, events, fake = make_session(Fake(text=text))
+    s.submit(wav(), 48000)
+    events.wait("ignored")
+    assert events[-1]["reason"] == reason and events[-1]["turn"] == 1
+    assert fake.handled == []
+
+
+def test_quit_word_ends_session():
+    s, events, fake = make_session(Fake(text="終了。"))
+    s.submit(wav(), 48000)
+    events.wait("ended")
+    assert [e["type"] for e in events] == ["ready", "recognized", "ended"]
+    assert events[-1]["turn"] == 1               # 発言による終了には発言の番号を付ける
+    assert s.closed and fake.handled == []
+    with pytest.raises(Busy):
+        s.submit(wav(), 48000)
+
+
+def test_skill_needing_confirmation_is_not_executed():
+    fake = Fake()
+    answers = []
+
+    def handle(text, ctx, ask=None):
+        answer = ask("「theme-register」を実行します。実行しますか？ [y/N] > ")
+        answers.append(answer)
+        return outcome("実行しませんでした。" if answer != "y" else "実行しました", error="declined")
+
+    s, events, _ = make_session(fake, handle=handle)
+    s.submit(wav(), 48000)
+    events.wait("answer_done")
+    assert answers == ["n"]
+    assert events[-1]["text"] == "実行しませんでした。"
+
+
+def test_stt_error_is_reported_and_session_continues():
+    fake = Fake(text=RuntimeError("whisper failed"))
+    s, events, _ = make_session(fake)
+    s.submit(wav(), 48000)
+    events.wait("error")
+    assert events[-1]["kind"] == "stt" and events[-1]["turn"] == 1
+    fake.text = "もう一度"
+    assert s.submit(wav(), 48000) == 2
+    events.wait("answer_done")
+    assert events[-1]["turn"] == 2 and not s.closed
+
+
+def test_answer_error_and_record_error_do_not_stop_session():
+    def broken(text, ctx, ask=None):
+        raise RuntimeError("boom")
+
+    s, events, fake = make_session(handle=broken)
+    s.submit(wav(), 48000)
+    events.wait("error")
+    assert events[-1]["kind"] == "answer"
+
+    def bad_record(text, out):
+        raise RuntimeError("db is locked")
+
+    s2, events2, _ = make_session(record=bad_record)
+    s2.submit(wav(), 48000)
+    events2.wait("answer_done")
+    assert len(s2.ctx.history) == 2
+
+
+def test_second_utterance_while_thinking_is_busy():
+    fake = Fake()
+    fake.gate = threading.Event()
+    s, events, _ = make_session(fake)
+    s.submit(wav(), 48000)
+    with pytest.raises(Busy):
+        s.submit(wav(), 48000)
+    fake.gate.set()
+    events.wait("answer_done")
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            assert s.submit(wav(), 48000) == 2
+            break
+        except Busy:
+            time.sleep(0.01)
+    else:
+        raise AssertionError("処理の後も受け付けません")
+
+
+def test_bad_audio_emits_error_event():
+    s, events, _ = make_session()
+    with pytest.raises(AudioError):
+        s.submit(wav(0.1, 16000, channels=2), 16000)
+    assert events[-1]["type"] == "error" and events[-1]["kind"] == "bad_audio"
+    assert s.turn == 0
+
+
+# ---------------------------------------------------------------- サーバー
+
+@pytest.fixture
+def served():
+    fake = Fake()
+    made = []
+
+    def factory(emit):
+        s = WebSession(transcribe=fake.transcribe, handle=fake.handle, emit=emit, record=fake.record)
+        made.append(s)
+        return s
+
+    srv, token = web.make_server(0, factory, token=TOKEN, ping_seconds=0.2)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield srv.server_address[1], fake, made
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def call(port, method, path, body=None, headers=None, cookie=True, host=None, origin=True, csrf=True):
+    h = {"Host": host or f"localhost:{port}"}
+    if cookie:
+        h["Cookie"] = f"jv={TOKEN}"
+    if method == "POST":
+        if origin:
+            h["Origin"] = origin if isinstance(origin, str) else f"http://localhost:{port}"
+        if csrf:
+            h["X-Jarvis-Voice"] = "1"
+    h.update(headers or {})
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request(method, path, body=body, headers=h)
+    r = conn.getresponse()
+    data = r.read()
+    conn.close()
+    return r, data
+
+
+def test_token_sets_cookie_and_redirects(served):
+    port, _, _ = served
+    r, _ = call(port, "GET", f"/?token={TOKEN}", cookie=False)
+    assert r.status == 303 and r.getheader("Location") == "/"
+    assert r.getheader("Set-Cookie") == f"jv={TOKEN}; HttpOnly; SameSite=Strict; Path=/"
+    assert call(port, "GET", "/?token=wrong", cookie=False)[0].status == 403
+    assert call(port, "GET", "/", cookie=False)[0].status == 403
+    assert call(port, "GET", "/api/config", headers={"Cookie": "jv=wrong"}, cookie=False)[0].status == 403
+    r, body = call(port, "GET", "/")
+    assert r.status == 200 and b"vad.js" in body and "default-src 'self'" in r.getheader("Content-Security-Policy")
+
+
+def test_host_is_checked_but_port_is_free(served):
+    port, _, _ = served
+    assert call(port, "GET", "/", host="127.0.0.1:65000")[0].status == 200     # VS Code が別の番号に転送する
+    assert call(port, "GET", "/", host="localhost")[0].status == 200
+    for host in ("evil.example", "localhost.evil.example", "127.0.0.2:8771"):
+        assert call(port, "GET", "/", host=host)[0].status == 400
+    assert call(port, "GET", f"/?token={TOKEN}", host="evil.example", cookie=False)[0].status == 400
+
+
+def test_post_requires_origin_and_header(served):
+    port, _, _ = served
+    assert call(port, "POST", "/api/session", origin=False)[0].status == 403
+    assert call(port, "POST", "/api/session", origin="http://evil.example")[0].status == 403
+    assert call(port, "POST", "/api/session", origin="https://localhost:8771")[0].status == 403
+    assert call(port, "POST", "/api/session", csrf=False)[0].status == 403
+    assert call(port, "POST", "/api/session", cookie=False)[0].status == 403
+    r, body = call(port, "POST", "/api/session", origin="http://127.0.0.1:12345")
+    assert r.status == 200 and json.loads(body)["session"]
+
+
+def test_static_files_only_inside_static(served):
+    port, _, _ = served
+    for name in ("app.js", "vad.js", "vad-worklet.js", "index.html"):
+        r, _ = call(port, "GET", f"/static/{name}")
+        assert r.status == 200
+    assert call(port, "GET", "/static/app.js")[0].getheader("Content-Type").startswith("text/javascript")
+    for path in ("/static/../server.py", "/static/..%2fserver.py", "/static/%2e%2e/server.py",
+                 "/static/nope.js", "/static/", "/static/sub/app.js", "/static/.hidden.js", "/server.py"):
+        assert call(port, "GET", path)[0].status == 404, path
+
+
+def test_config(served, monkeypatch):
+    port, _, _ = served
+    monkeypatch.delenv("JARVIS_VOICE_SILENCE_SECONDS", raising=False)
+    assert json.loads(call(port, "GET", "/api/config")[1]) == {
+        "silence_seconds": 0.8, "max_seconds": 20, "preroll_seconds": 0.3, "threshold_factor": 4.0,
+        "min_threshold": 0.002}
+    monkeypatch.setenv("JARVIS_VOICE_SILENCE_SECONDS", "1.2")
+    assert json.loads(call(port, "GET", "/api/config")[1])["silence_seconds"] == 1.2
+
+
+def test_second_session_is_busy(served):
+    port, _, made = served
+    r, body = call(port, "POST", "/api/session")
+    sid = json.loads(body)["session"]
+    r, body = call(port, "POST", "/api/session")
+    assert r.status == 409 and json.loads(body) == {"error": "busy"}
+    assert not made[0].closed                                 # 既存の会話を奪わない
+    assert call(port, "POST", f"/api/end?session={sid}")[0].status == 200
+    assert call(port, "POST", "/api/session")[0].status == 200
+
+
+def _utter(port, sid, body, rate=48000, ctype="audio/wav"):
+    return call(port, "POST", f"/api/utterance?session={sid}&rate={rate}", body=body,
+                headers={"Content-Type": ctype})
+
+
+def test_utterance_limits(served):
+    port, _, _ = served
+    sid = json.loads(call(port, "POST", "/api/session")[1])["session"]
+    assert _utter(port, sid, wav(0.1, 48000), rate=44100)[0].status == 400            # レートの不一致
+    assert _utter(port, sid, wav(0.1, 48000), rate="abc")[0].status == 400
+    assert _utter(port, sid, wav(0.1, 7000), rate=7000)[0].status == 400              # 範囲の外
+    assert _utter(port, sid, wav(0.1, 48000), ctype="application/octet-stream")[0].status == 400
+    assert _utter(port, sid, wav(21, 8000), rate=8000)[0].status == 413               # 長すぎる
+    assert _utter(port, "other", wav())[0].status == 404
+
+    # 4 MB を超える本文は読まずに 413
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.putrequest("POST", f"/api/utterance?session={sid}&rate=48000", skip_host=True)
+    for k, v in {"Host": f"localhost:{port}", "Cookie": f"jv={TOKEN}", "Origin": f"http://localhost:{port}",
+                 "X-Jarvis-Voice": "1", "Content-Type": "audio/wav",
+                 "Content-Length": str(4 * 1024 * 1024 + 1)}.items():
+        conn.putheader(k, v)
+    conn.endheaders()
+    assert conn.getresponse().status == 413
+    conn.close()
+
+
+def test_utterance_while_thinking_is_409(served):
+    port, fake, _ = served
+    fake.gate = threading.Event()
+    sid = json.loads(call(port, "POST", "/api/session")[1])["session"]
+    r, body = _utter(port, sid, wav())
+    assert r.status == 202 and json.loads(body) == {"turn": 1}
+    r, body = _utter(port, sid, wav())
+    assert r.status == 409 and json.loads(body) == {"error": "thinking"}
+    fake.gate.set()
+
+
+def _read_events(resp, until, timeout=5.0):
+    out, pings = [], 0
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        line = resp.readline()
+        if not line:
+            break
+        line = line.decode("utf-8").rstrip("\n")
+        if line.startswith(": ping"):
+            pings += 1
+        elif line.startswith("data: "):
+            out.append(json.loads(line[6:]))
+            if out[-1]["type"] == until:
+                break
+    return out, pings
+
+
+def _open_events(port, sid):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request("GET", f"/api/events?session={sid}", headers={"Host": f"localhost:{port}", "Cookie": f"jv={TOKEN}"})
+    return conn, conn.getresponse()
+
+
+def test_sse_events_and_end(served):
+    port, fake, made = served
+    sid = json.loads(call(port, "POST", "/api/session")[1])["session"]
+    assert call(port, "GET", "/api/events?session=wrong")[0].status == 404
+    conn, resp = _open_events(port, sid)
+    assert resp.status == 200 and resp.getheader("Content-Type").startswith("text/event-stream")
+    conn2, resp2 = _open_events(port, sid)                    # 2 本目の SSE はつながない
+    assert resp2.status == 404
+    conn2.close()
+
+    assert _utter(port, sid, wav())[0].status == 202
+    events, _ = _read_events(resp, "answer_done")
+    assert [e["type"] for e in events] == ["ready", "recognized", "answer_chunk", "answer_chunk", "answer_done"]
+    assert [e["seq"] for e in events] == [1, 2, 3, 4, 5]
+    assert {e["session"] for e in events} == {sid}
+
+    time.sleep(0.5)
+    assert call(port, "POST", f"/api/end?session={sid}")[0].status == 200
+    events, pings = _read_events(resp, "ended")
+    assert pings >= 1                                         # 待っている間は : ping を送る
+    assert events[-1]["type"] == "ended" and events[-1]["seq"] == 6
+    assert resp.readline() == b"\n" and resp.readline() == b""   # 終えたら閉じる
+    conn.close()
+    assert made[0].closed
+    assert _utter(port, sid, wav())[0].status == 404
+
+
+def test_sse_disconnect_ends_session(served):
+    port, _, made = served
+    sid = json.loads(call(port, "POST", "/api/session")[1])["session"]
+    conn, resp = _open_events(port, sid)
+    _read_events(resp, "ready")
+    resp.close()
+    conn.close()
+    deadline = time.monotonic() + 5
+    while not made[0].closed and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert made[0].closed
+    assert call(port, "POST", "/api/session")[0].status == 200
+
+
+def test_session_without_sse_is_replaced_after_grace(served, monkeypatch):
+    port, _, made = served
+    call(port, "POST", "/api/session")
+    assert call(port, "POST", "/api/session")[0].status == 409
+    monkeypatch.setattr(web, "ATTACH_SECONDS", 0)
+    assert call(port, "POST", "/api/session")[0].status == 200
+    assert made[0].closed and not made[1].closed
+
+
+def test_log_message_is_silent(capsys, served):
+    port, _, _ = served
+    call(port, "GET", f"/?token={TOKEN}", cookie=False)
+    call(port, "GET", "/?token=wrong", cookie=False)
+    captured = capsys.readouterr()
+    assert TOKEN not in captured.err and TOKEN not in captured.out
+
+
+# ---------------------------------------------------------------- 起動の経路・ページの判定
+
+def test_startup_path_does_not_import_sounddevice():
+    code = """
+import sys, http.server
+import speech_to_text, orchestrator
+speech_to_text.load_model = lambda: None
+orchestrator.start_warm_up = lambda: None
+def stop(self, *a, **k):
+    raise KeyboardInterrupt
+http.server.ThreadingHTTPServer.serve_forever = stop
+from voice.web.__main__ import main
+assert main(["--port", "0"]) == 0
+assert "sounddevice" not in sys.modules, "sounddevice was imported"
+print("OK")
+"""
+    r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert "http://localhost:" in r.stdout and "/?token=" in r.stdout and r.stdout.rstrip().endswith("OK")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node がない")
+def test_vad_js_with_node():
+    r = subprocess.run(["node", "--test", str(ROOT / "tests" / "js" / "vad.test.js")], cwd=ROOT,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr

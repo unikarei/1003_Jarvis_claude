@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JARVIS 声の会話</title>
+<style>
+:root { --bg:#f8fafc; --fg:#0f172a; --muted:#64748b; --card:#fff; --line:#e2e8f0; --ok:#16a34a; --ng:#dc2626; --busy:#d97706; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0b1120; --fg:#e2e8f0; --muted:#94a3b8; --card:#111827; --line:#1f2937; } }
+* { box-sizing:border-box; }
+body { margin:0; font-family:-apple-system, "Segoe UI", "Hiragino Sans", "Meiryo", "Noto Sans JP", sans-serif; background:var(--bg); color:var(--fg); }
+header { padding:16px 24px; border-bottom:1px solid var(--line); }
+header h1 { margin:0; font-size:19px; }
+main { padding:16px 24px 48px; max-width:900px; margin:0 auto; }
+.muted { color:var(--muted); font-size:13px; }
+.controls { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+button { font:inherit; padding:6px 14px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
+button:disabled { opacity:.5; cursor:default; }
+.status { font-weight:600; padding:8px 12px; border-radius:8px; background:var(--card); border:1px solid var(--line); }
+.status.listening { color:var(--ok); } .status.busy { color:var(--busy); } .status.error { color:var(--ng); }
+#note { min-height:1.4em; margin:6px 0; }
+#log { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 12px; min-height:200px; }
+.line { padding:6px 0; border-bottom:1px solid var(--line); white-space:pre-wrap; word-break:break-word; }
+.line:last-child { border-bottom:0; }
+.who { display:inline-block; min-width:5.5em; color:var(--muted); font-size:13px; }
+.line.error .text { color:var(--ng); } .line.system .text { color:var(--muted); }
+@media (max-width:600px) { main, header { padding-left:16px; padding-right:16px; } }
+</style></head><body>
+<header><h1>JARVIS 声の会話</h1>
+<div class="muted">「会話を始める」を 1 回押してマイクを許可すると、話すたびに自動で区切って送ります。認識した文と回答を文字で表示します（読み上げはまだありません）。「終了」と話しても終わります。</div></header>
+<main>
+<div class="controls">
+  <button id="start">会話を始める</button>
+  <button id="pause" disabled>マイクを一時停止</button>
+  <button id="end" disabled>会話を終える</button>
+</div>
+<div id="status" class="status">待機中</div>
+<div id="note" class="muted"></div>
+<div id="log" aria-live="polite"></div>
+</main>
+<script src="/static/vad.js"></script>
+<script src="/static/app.js"></script>
+</body></html>
