@@ -1,4 +1,4 @@
-"""ブラウザでの声の会話の 1 つ分の処理（T-1501〜T-1503）。
+"""ブラウザでの声の会話の 1 つ分の処理（T-1501〜T-1504）。
 
 ブラウザが区切った発話 1 回分の WAV を受け、16 kHz にして文字にし、orchestrator.handle で答える。
 回答は voice.duplex.DuplexSpeaker で文ごとに合成し、voice.web.player.BrowserPlayer がブラウザに渡す（再生は
@@ -8,8 +8,13 @@
 確定して、次の発話を受け付ける。割り込まれた発言のイベントはその後に送らない（turn_done interrupted の 1 回だけ）。
 途中の経過はイベント（dict）として emit に渡す（送り方は server.py が決める）。音声はメモリ上だけで扱い、
 ファイル・DB・ログに残さない。sounddevice は import しない（Mac の音声の機器を使わない）。
+画面での承認（T-1504、BV-09）: 確認の要るスキルは、発言ごとの承認の要求（使い捨ての ID・発言の番号・期限 60 秒）を
+イベント approval で送り、画面の「実行する」（/api/approve）が期限内に届いたときだけ実行する。声の発言は承認にならない
+（話せば新しい発言として割り込みになり、待っている要求は取り消される）。端末の入力を待つスキルは実行しない
+（Context.terminal=False）。
 """
 
+import hmac
 import io
 import secrets
 import sys
@@ -34,6 +39,9 @@ POLL_SECONDS = 0.02           # 読み上げの終わりを確かめる間隔
 CALIBRATION_TEXT = "ジャービスです。どうぞ。"   # 回り込みの測定のあいさつ（voice_chat.run_barge_in と同じ）
 CALIBRATION_TURN = 0          # あいさつの番号（発言は 1 から。履歴・遅延の記録に入れない）
 CALIBRATE_TIMEOUT = 60.0      # あいさつの合成を待つ上限（最初の合成はエンジンの起動を待つ）
+APPROVAL_SECONDS = 60         # 承認の要求の期限（T-1504）
+APPROVAL_SPOKEN = "書き込みがあります。画面で確認してください。"
+DECISIONS = {"run": "run", "decline": "declined"}   # /api/approve の decision → approval_done の result
 
 
 class AudioError(Exception):
@@ -58,6 +66,28 @@ class _TurnState:
         self.text: str | None = None      # 認識した Owner の発言（雑音・認識の前なら None）
         self.outcome = None               # handle の結果（まだなら None）
         self.record = True                # 遅延を記録するか（雑音・「終了」は答えていないので記録しない）
+
+
+class _Approval:
+    """承認の要求 1 つ（T-1504）。answer は Owner の答え（run / declined）、result は確定した結果（approval_done の
+    result）。どちらも 1 回だけ決まる。"""
+
+    __slots__ = ("id", "turn", "deadline", "answer", "result", "event")
+
+    def __init__(self, turn: int, deadline: float):
+        self.id = secrets.token_urlsafe(16)
+        self.turn, self.deadline = turn, deadline
+        self.answer: str | None = None
+        self.result: str | None = None
+        self.event = threading.Event()
+
+
+def confirm_prompt(prompt: str) -> str:
+    """orchestrator.confirm_text の文から、末尾のキーボード向けの「[y/N] >」を除く。"""
+    text = prompt.rstrip()
+    if text.endswith("[y/N] >"):
+        text = text[: -len("[y/N] >")].rstrip()
+    return text
 
 
 def decode_wav(data: bytes, rate: int) -> np.ndarray:
@@ -134,7 +164,7 @@ class _FirstSynth:
 class WebSession:
     """会話 1 つ分。認識（transcribe）・回答（handle）・イベントの送り先（emit）・記録（record）・合成（synth:
     (文, 取り消し) → 16 kHz の float32）・エンジンの起動と停止（launcher: voice.engine_process.EngineProcess と同じ形）・
-    再生の待つ期限の時計（clock）を差し替えられる。launcher を渡さなければエンジンを起動・停止しない。"""
+    再生の待つ期限・承認の期限の時計（clock）を差し替えられる。launcher を渡さなければエンジンを起動・停止しない。"""
 
     def __init__(self, transcribe=None, handle=None, emit=None, record=None, synth=None, launcher=None,
                  clock=time.monotonic):
@@ -144,7 +174,8 @@ class WebSession:
         self.emit = emit if emit is not None else (lambda event: None)
         self.record = record or _record
         self.launcher = launcher
-        self.ctx = orchestrator.Context(voice=True)
+        self.ctx = orchestrator.Context(voice=True, terminal=False)
+        self.clock = clock
         self.closed = False
         self.turn = 0
         self._seq = 0
@@ -155,6 +186,7 @@ class WebSession:
         self._calibration_audio = threading.Event()
         self._tts_failed: int | None = None        # 合成の失敗を知らせた発言の番号（発言ごとに 1 回だけ知らせる）
         self._latency: tuple[int, latency.Turn] | None = None   # （発言の番号, その発言の遅延の記録）
+        self._approval: _Approval | None = None    # 答えを待っている承認の要求（T-1504、同時に 1 つだけ）
         self.player = BrowserPlayer(emit=self._player_event, clock=clock)
         self.speaker = DuplexSpeaker(self.player, voice=voice_chat.VOICE,
                                      synth=_FirstSynth(launcher, synth, self._notice, lambda: self.closed,
@@ -301,6 +333,7 @@ class WebSession:
         with self._lock:
             if self.closed:
                 return
+            self._cancel_approval_locked()    # 待っている承認の要求を取り消す（実行しない）
             self.closed = True
         try:
             self.speaker.new_turn()           # 生成・合成を取り消す（ctx.cancel が True になる）
@@ -313,6 +346,62 @@ class WebSession:
                 except Exception as e:  # noqa: BLE001
                     print(f"[音声] エンジンを止められませんでした（{type(e).__name__}）", file=sys.stderr)
 
+    def approve(self, turn: int, approval_id: str, decision: str) -> str:
+        """画面の「実行する」（decision="run"）・「実行しない」（"decline"）。返り値は "ok" / "stale"。
+        待っている要求と ID・発言の番号が一致し、期限内で、まだ答えていないときだけ受け付ける。stale は何もしない
+        （server.py が 409 にする）。実行するかは要求を待っている側（_ask）が、割り込み・終了と合わせて決める。"""
+        answer = DECISIONS.get(decision)
+        with self._lock:
+            req = self._approval
+            if (answer is None or self.closed or req is None or req.answer is not None or req.result is not None
+                    or turn != req.turn or turn in self._cut
+                    or not hmac.compare_digest(req.id.encode(), str(approval_id).encode())
+                    or self.clock() >= req.deadline):
+                return "stale"
+            req.answer = answer
+            req.event.set()
+        return "ok"
+
+    # ------------------------------------------------------------ 承認（T-1504）
+
+    def _ask(self, turn: int, prompt: str) -> str:
+        """orchestrator.execute の確認。発言 turn 専用の承認の要求を作って画面に出し、答え・期限・割り込み・終了の
+        どれかまで待つ。「実行する」が、その ID・その発言・期限内・会話が続いている・割り込まれていない、のすべてを
+        満たしたときだけ "y"。それ以外はすべて "n"。"""
+        with self._lock:
+            if self.closed or turn in self._cut or self._approval is not None:
+                return "n"                    # 割り込まれた・終えた発言には要求を出さない。要求は同時に 1 つだけ
+            req = _Approval(turn, self.clock() + APPROVAL_SECONDS)
+            self._approval = req
+            self._send_locked("approval", turn, id=req.id, text=confirm_prompt(prompt), expires_in=APPROVAL_SECONDS)
+        self.speaker.say(APPROVAL_SPOKEN, turn=turn)   # 割り込まれていれば番号が違うので読まない
+        while True:
+            with self._lock:
+                if req.result is None:        # 割り込み・終了の側で取り消されていなければ、ここで確定する
+                    if req.answer is not None:
+                        req.result = req.answer
+                    elif self.clock() >= req.deadline:
+                        req.result = "expired"
+                    if req.result is not None:
+                        if self._approval is req:
+                            self._approval = None
+                        self._send_locked("approval_done", turn, id=req.id, result=req.result)
+                if req.result is not None:
+                    return "y" if req.result == "run" else "n"
+            req.event.wait(POLL_SECONDS)      # 時計を差し替えられるように、短い間隔で期限を確かめる
+
+    def _cancel_approval_locked(self, turn: int | None = None) -> None:
+        """待っている承認の要求を取り消す（self._lock の中で呼ぶ）。turn を渡せば、その発言の要求だけ。
+        approval_done（cancelled）は、割り込み・終了のイベントより先に送る（その後は送れないため）。"""
+        req = self._approval
+        if req is None or (turn is not None and req.turn != turn):
+            return
+        self._approval = None
+        if req.result is None:
+            req.result = "cancelled"
+            self._emit_locked("approval_done", req.turn, id=req.id, result="cancelled")
+        req.event.set()
+
     # ------------------------------------------------------------ 割り込み
 
     def _interrupt_locked(self, st: _TurnState) -> _TurnState:
@@ -320,6 +409,7 @@ class WebSession:
         音を捨て（生成は ctx.cancel・stream で止まる）、履歴に Owner の発言と、ブラウザが再生し終えた文に割り込みの印を
         付けたもの（聞いた文がなければ AI の行を入れない）を入れる。まだ答えを作っている（取り消せない処理かもしれない）
         なら、文脈を分けて切り離す（結果は使わない）。最後に turn_done（interrupted）を 1 回だけ送る。"""
+        self._cancel_approval_locked(st.turn)   # 待っている承認の要求を取り消す（声の「はい」も、ここで取り消しになる）
         self._cut.add(st.turn)                # これより後、この発言のイベントは送らない
         self._active = None                   # 次の発話を受け付ける
         if self._latency is not None and self._latency[0] == st.turn:
@@ -328,7 +418,7 @@ class WebSession:
         self.speaker.new_turn()               # 残りの合成・保持した音を捨てる
         if st.text is not None:
             if st.outcome is None:
-                self.ctx = orchestrator.Context(voice=True, history=list(self.ctx.history))
+                self.ctx = orchestrator.Context(voice=True, terminal=False, history=list(self.ctx.history))
             self.ctx.history.append(Turn(Who.OWNER, st.text))
             if heard:                         # 聞いた文だけを履歴に残す
                 self.ctx.history.append(Turn(Who.AI, "".join(heard) + voice_chat.INTERRUPTED_MARK))
@@ -436,8 +526,7 @@ class WebSession:
         ctx.stream = stream
         ctx.cancel = lambda t=turn: self.closed or t != self.speaker.turn   # voice_chat.run_barge_in と同じ
         try:
-            # 確認の要るスキルは、画面での承認（T-1504）までは実行しない
-            outcome = self.handle(text, ctx, ask=lambda prompt: "n")
+            outcome = self.handle(text, ctx, ask=lambda prompt: self._ask(turn, prompt))   # 確認は画面で（T-1504）
         except Exception as e:  # noqa: BLE001
             result["last"] = ("error", {"kind": "answer", "message": f"答えを作れませんでした（{type(e).__name__}: {e}）"})
             return

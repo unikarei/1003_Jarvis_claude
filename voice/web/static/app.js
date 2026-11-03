@@ -2,7 +2,8 @@
 // 回答を文ごとに受け取って最初の文から順に読み上げる。考えている間・話している間も聞き続け、Owner が話し始めたら
 // サーバーの応答を待たずに読み上げを止めて新しい発言を聞く（割り込み、ADR-0028）。再生中だけしきい値を上げる
 // （会話の開始時のあいさつで回り込みを測る、BV-07）。異常は種類ごとに表示し、切断したら会話を終える（BV-10・BV-11）。
-// 音声・本文はブラウザの保存領域に置かない。画面での承認（T-1504）はまだない。
+// 音声・本文はブラウザの保存領域に置かない。確認の要るスキルは、画面の「実行する」「実行しない」で答える（T-1504、
+// BV-09）。声の「はい」は承認にならない（話せば割り込みになり、サーバーが要求を取り消す）。
 (function () {
   "use strict";
   const V = window.JarvisVad;
@@ -26,6 +27,7 @@
   let seqFilter = P.createSeqFilter(), fails = P.createFailCounter();
   let calibration = null;                   // 回り込みの測定 {rms, playing, source, ctrl, timer}
   let watchdog = null;
+  let approval = null;                      // 画面に出している承認の要求 {turn, id, timer}
 
   function status(text, kind) {
     $("status").textContent = text;
@@ -169,6 +171,7 @@
     if (watchdog) { clearTimeout(watchdog); watchdog = null; }
     if (events) { events.close(); events = null; }
     stopCalibration();
+    clearApproval();
     if (node) { node.port.onmessage = null; node.disconnect(); node = null; }
     if (stream) { stream.getTracks().forEach(t => { t.onended = null; t.stop(); }); stream = null; }
     resetPlayback(0);
@@ -324,6 +327,7 @@
     const wasPlaying = source !== null;
     const stopCall = audio.currentTime;
     discardPlayback();                      // AudioBufferSourceNode.stop
+    clearApproval();                        // 待っている承認はサーバーが割り込みで取り消す（声は承認にならない）
     turnDone = true;                        // 割り込んだ発言の音は再生しない
     awaiting = false;
     answerEl = null;
@@ -402,6 +406,7 @@
   // 新しい発言を始める（前の発言の音を捨てる。取った WAV の参照も外す）
   function resetPlayback(t) {
     discardPlayback();
+    if (approval && approval.turn !== t) clearApproval();   // 前の発言の承認は出さない
     next = 0;
     turnDone = false;
     turn = t;
@@ -518,6 +523,55 @@
     status(paused ? "マイクを一時停止しています" : "聞いています", paused ? "" : "listening");
   }
 
+  // ------------------------------------------------------------ 画面での承認（T-1504）
+
+  // 確認の文・「実行する」「実行しない」・残りの秒数を出す。今の発言の番号と違う要求は出さない
+  function showApproval(ev) {
+    if (!P.approvalShown(ev, turn, cut) || turnDone) return;
+    clearApproval();
+    const started = performance.now();
+    const a = { turn: ev.turn, id: ev.id, timer: null };
+    approval = a;
+    $("approval-text").textContent = ev.text;
+    $("approve-run").disabled = false;
+    $("approve-decline").disabled = false;
+    const tick = () => {
+      $("approval-left").textContent = "残り " + P.secondsLeft(ev.expires_in, started, performance.now()) + " 秒";
+    };
+    tick();
+    a.timer = setInterval(tick, 250);
+    $("approval").hidden = false;
+    status("確認を待っています（画面のボタンで答えてください）", "busy");
+  }
+
+  // 押したら 1 回だけ送り、ボタンを無効にする（結果は approval_done で出す）
+  function answerApproval(decision) {
+    const a = approval;
+    if (!a || !session) return;
+    $("approve-run").disabled = true;
+    $("approve-decline").disabled = true;
+    const sid = session;
+    post(q("/api/approve"), JSON.stringify({ turn: a.turn, id: a.id, decision }), { "Content-Type": "application/json" })
+      .then(r => checked("approve", r, sid))   // 409（期限切れ・取り消し・使用済み）は何も実行しない
+      .catch(() => lost(sid));
+  }
+
+  function onApprovalDone(ev) {
+    if (!approval || approval.id !== ev.id || approval.turn !== ev.turn) return;
+    clearApproval();
+    line("system", "", "確認: " + P.approvalResultText(ev.result));
+  }
+
+  function clearApproval() {
+    if (approval && approval.timer) clearInterval(approval.timer);
+    approval = null;
+    $("approval").hidden = true;
+    $("approval-text").textContent = "";
+    $("approval-left").textContent = "";
+    $("approve-run").disabled = true;
+    $("approve-decline").disabled = true;
+  }
+
   // ------------------------------------------------------------ イベント
 
   function onEvent(ev) {
@@ -559,6 +613,12 @@
       case "turn_done":
         onTurnDone(ev.turn);
         break;
+      case "approval":
+        showApproval(ev);
+        break;
+      case "approval_done":
+        onApprovalDone(ev);
+        break;
       case "answer_chunk":
         if (!answerEl) answerEl = line("ai", "JARVIS", "");
         answerEl.textContent += ev.text;
@@ -580,6 +640,8 @@
   // ------------------------------------------------------------ ボタン
 
   $("start").onclick = start;
+  $("approve-run").onclick = () => answerApproval("run");
+  $("approve-decline").onclick = () => answerApproval("decline");
   $("end").onclick = () => { status("会話を終えました", ""); end(true); };
   $("pause").onclick = () => {
     paused = !paused;

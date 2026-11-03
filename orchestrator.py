@@ -41,6 +41,7 @@ class Context:
     voice: bool = False                           # 声の会話（答えを短い話し言葉にする、ADR-0026）
     cancel: Callable[[], bool] | None = None      # True を返したら答えの生成を止める（声の割り込み、ADR-0028）
     last_provider: str | None = None              # 直前の答えに使った LLM のプロバイダー（切り替えの記録、T-1403）
+    terminal: bool = True                         # 端末で入力できる（ブラウザの会話は False、T-1504）
 
 
 @dataclass
@@ -547,6 +548,10 @@ def effective(skill: skills.Skill) -> tuple[str, bool]:
     return perm, perm == "local_write" or skill.confirm or floor_confirm
 
 
+NEEDS_TERMINAL_TEXT = ("このスキルは端末での対話が要るため、ブラウザの会話では実行しません。"
+                       "chat.py か voice_chat.py で実行してください。")
+
+
 def _interactive(name: str) -> bool:
     return FLOOR.get(name, ("read", False, False))[2]
 
@@ -589,6 +594,9 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
     if perm == "external":
         return done(f"スキル {skill.name} は外部への書き込みを含むため、会話からは実行しません。", ok=False,
                     error="external")
+    if needs_confirm and _interactive(skill.name) and not ctx.terminal:
+        # 承認の後もキーボードで候補ごとの承認・修正を求めるため、端末のない会話では確認を求めずに実行しない（T-1504）
+        return done(NEEDS_TERMINAL_TEXT, ok=True, items=ctx.items, error="needs_terminal")
     if needs_confirm:
         ask = ask or input
         if ask(confirm_text(skill, r.inputs)).strip().lower() != "y":
