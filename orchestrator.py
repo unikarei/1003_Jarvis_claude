@@ -14,7 +14,6 @@ import json
 import re
 import threading
 import time
-import warnings
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -627,13 +626,11 @@ def warm_up() -> None:
     """会話の最初の 1 回を速くするため、使う LLM を読み込ませておく（T-1405）。索引に general-chat があれば
     Ollama のモデル、knowledge-answer があれば待機させる claude。失敗しても何も出さずに続ける。"""
     try:
-        with warnings.catch_warnings(record=True) as warned:   # 索引の読み込みの警告もここでは出さない
-            warnings.simplefilter("always")
-            active = skills.active()
+        # 索引の読み込みの警告はここでは出さず、結果も残さない（警告は会話の側の読み込みで従来どおり 1 回出す）。
+        # warnings.catch_warnings はスレッドをまたいで安全でなく、会話の側の警告を横取りしていた
+        active = skills.active(quiet=True)
     except Exception:  # noqa: BLE001  索引が読めなくても会話は始める
         return
-    if warned:
-        skills.reset_cache()      # 警告は会話の側の読み込みで従来どおり 1 回出す（ここで黙って読んだ結果を残さない）
     for name, load in ((CHAT_SKILL, llm.warm_up_ollama), (DEFAULT_SKILL, llm.warm_up_claude)):
         if name in active:
             try:
