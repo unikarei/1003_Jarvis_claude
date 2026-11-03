@@ -25,7 +25,7 @@ button:disabled { opacity:.5; cursor:default; }
 @media (max-width:600px) { main, header { padding-left:16px; padding-right:16px; } }
 </style></head><body>
 <header><h1>JARVIS 声の会話</h1>
-<div class="muted">「会話を始める」を 1 回押してマイクを許可すると、話すたびに自動で区切って送ります。認識した文と回答を文字で表示し、回答を文ごとに読み上げます。読み上げている間は聞きません（読み終えたら「聞いています」に戻ります）。「終了」と話しても終わります。</div></header>
+<div class="muted">「会話を始める」を 1 回押してマイクを許可すると、話すたびに自動で区切って送ります。認識した文と回答を文字で表示し、回答を文ごとに読み上げます。考えている間・読み上げている間に話し始めると、読み上げを止めて新しい発言を聞きます。始めに短いあいさつを流してスピーカーからの回り込みを測ります（黙っていてください）。接続が切れたら会話を終えます（もう一度「会話を始める」で新しい会話）。「終了」と話しても終わります。</div></header>
 <main>
 <div class="controls">
   <button id="start">会話を始める</button>
@@ -37,5 +37,6 @@ button:disabled { opacity:.5; cursor:default; }
 <div id="log" aria-live="polite"></div>
 </main>
 <script src="/static/vad.js"></script>
+<script src="/static/page.js"></script>
 <script src="/static/app.js"></script>
 </body></html>

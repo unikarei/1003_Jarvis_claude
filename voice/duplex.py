@@ -329,10 +329,13 @@ class DuplexSpeaker(Speaker):
                 pass
         self.player.stop()
 
-    def speaking(self) -> bool:
+    def synthesizing(self) -> bool:
+        """合成を待っている・合成している文があれば True（再生の側は見ない）。"""
         with self._lock:
-            busy = self._busy or self._pending > 0
-        return busy or self.player.speaking()
+            return self._busy or self._pending > 0
+
+    def speaking(self) -> bool:
+        return self.synthesizing() or self.player.speaking()
 
     def wait(self) -> None:
         while self.speaking():
