@@ -1,4 +1,4 @@
-"""ブラウザでの声の会話を起動する（T-1501）。
+"""ブラウザでの声の会話を起動する（T-1501・T-1502）。
 
 使い方: python -m voice.web [--port 8771]
 表示された URL を手元の PC のブラウザで開く（VS Code のポート転送で別の番号になったら、その番号に読み替える）。
@@ -32,6 +32,7 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        server.sessions.end_current()      # この会話が起動した音声のエンジンを止める
         server.server_close()
     return 0
 

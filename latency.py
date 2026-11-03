@@ -4,7 +4,7 @@
   今の Turn がなければ mark・set は何もしない（記録しない呼び出し元・テストに影響しない）。
   発言・答えの本文・音声は記録しない（段階の経過ミリ秒と、決まった名前の属性だけ）。
 
-集計: python -m latency report [--days N] [--mode voice|text] [--skill NAME]
+集計: python -m latency report [--days N] [--mode voice|text|web] [--skill NAME]
 """
 
 import argparse
@@ -19,11 +19,11 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# 段階（この順の想定。ない段階は記録しない）
-STAGES = ("segment", "stt", "route", "search", "llm_ready", "first_text", "first_audio", "done")
+# 段階（この順の想定。ない段階は記録しない）。audio_ready はブラウザでの声の会話で最初の文の音を保持した時刻（T-1502）
+STAGES = ("segment", "stt", "route", "search", "llm_ready", "first_text", "audio_ready", "first_audio", "done")
 # 属性と、受け付ける値の型（本文が入らないよう、名前と真偽だけ）
 ATTRS = {"mode": str, "skill": str, "provider": str, "warm": bool, "fallback": bool, "ok": bool}
-MODES = ("voice", "text")
+MODES = ("voice", "text", "web")    # web はブラウザでの声の会話（T-1502）
 NAME_MAX = 64                       # skill・provider の名前の長さの上限
 MAX_BYTES = 5 * 1024 * 1024         # これを超えたら .1 に回す（1 世代だけ残す）
 

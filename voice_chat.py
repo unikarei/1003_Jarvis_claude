@@ -349,17 +349,28 @@ def _nullcontext():
 
 def _finish_answer_locked(outcome, state: dict, ctx, speaker, extra: dict) -> None:
     if state["started"] and ctx.shown and outcome.text.startswith(ctx.shown):
-        speaker.flush(**extra)
+        speak_rest(outcome, True, ctx, speaker, extra)
         rest = outcome.text[len(ctx.shown):].strip()
         print(("\n\n" + rest if rest else "") + "\n")
         return
     if state["started"]:
-        speaker.flush(**extra)
         print()
     print(f"\nJARVIS > {outcome.text}\n")
-    if outcome.skill not in STREAMED_SKILLS or not state["started"]:
+    if speak_rest(outcome, state["started"], ctx, speaker, extra):
         state["status"] = "SPEAKING"
+
+
+def speak_rest(outcome, started: bool, ctx, speaker, extra: dict) -> bool:
+    """答えの残りを読む（表示はしない。声の会話とブラウザでの声の会話で同じ規則、T-1502）。逐次表示した答えは
+    区切りの途中の残りを読み、逐次表示しなかった答え（一覧など）は短い要約を読む。要約を読んだら True。"""
+    if started:
+        speaker.flush(**extra)
+        if ctx.shown and outcome.text.startswith(ctx.shown):
+            return False                      # 出典は表示だけ
+    if outcome.skill not in STREAMED_SKILLS or not started:
         speaker.say(speech_summary(outcome.skill, outcome.text), **extra)
+        return True
+    return False
 
 
 def _record(text: str, outcome) -> None:
