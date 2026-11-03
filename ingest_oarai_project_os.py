@@ -560,7 +560,8 @@ def _project_os_knowledge(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def rollback_sections(backup_path: Path) -> dict:
-    """Project OS の節の Knowledge とその辺を消し、バックアップから Project OS のファイル単位の Knowledge と
+    """Project OS の Knowledge をバックアップの時点の状態にそろえる: 今の Project OS の Knowledge（節も
+    ファイル単位も）とその辺を消し、バックアップにある Project OS の Knowledge（移行の前から節だったものを含む）と
     その derived_from の辺を同じ ID のまま戻す。ほかの知識には触れない。1 つのトランザクション。"""
     backup_path = Path(backup_path)
     if not backup_path.is_file():
@@ -568,12 +569,18 @@ def rollback_sections(backup_path: Path) -> dict:
     src = sqlite3.connect(backup_path.resolve().as_uri() + "?mode=ro", uri=True)
     src.row_factory = sqlite3.Row
     try:
-        restore = [k for k in _project_os_knowledge(src) if "section_key" not in _meta(k)]
+        restore = _project_os_knowledge(src)
         edges = {k["id"]: src.execute("SELECT * FROM edges WHERE src_id = ? AND type = 'derived_from' ORDER BY id",
                                       (k["id"],)).fetchall() for k in restore}
+        ids = [k["id"] for k in restore]
+        marks = ",".join("?" * len(ids))
+        # derived_from 以外で Project OS の Knowledge につながる辺（消すときに一緒に消えるもの）も戻す
+        other_edges = src.execute(f"SELECT * FROM edges WHERE (src_id IN ({marks}) OR dst_id IN ({marks})) "
+                                  f"AND NOT (type = 'derived_from' AND src_id IN ({marks})) ORDER BY id",
+                                  ids * 3).fetchall() if ids else []
     finally:
         src.close()
-    if not restore:
+    if not any("section_key" not in _meta(k) for k in restore):
         # 移行を 2 回目以降に実行したときのバックアップなど。節を消すと Project OS の知識がなくなるので、何も変えない
         raise ValueError(f"このバックアップには戻すファイル単位の Project OS の Knowledge がありません: {backup_path}。"
                          "最初に移行したとき（ファイル数が 1 件以上）に表示されたバックアップを指定してください")
@@ -583,18 +590,20 @@ def rollback_sections(backup_path: Path) -> dict:
     try:
         with conn:
             for k in _project_os_knowledge(conn):
-                if "section_key" in _meta(k):
-                    _delete_knowledge(conn, k["id"])
-                    deleted.append(k["id"])
+                _delete_knowledge(conn, k["id"])
+                deleted.append(k["id"])
             for k in restore:
-                # 同じ ID が残っていれば、ノードと derived_from の辺をバックアップの内容に置き換える
-                conn.execute("DELETE FROM edges WHERE src_id = ? AND type = 'derived_from'", (k["id"],))
-                conn.execute("DELETE FROM nodes WHERE id = ?", (k["id"],))
                 conn.execute("INSERT INTO nodes (id, type, category, title, content, url, created_at, meta) "
                              "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                              (k["id"], k["type"], k["category"], k["title"], k["content"], k["url"],
                               k["created_at"], k["meta"]))
                 for e in edges[k["id"]]:
+                    conn.execute("INSERT INTO edges (src_id, dst_id, type, created_at) VALUES (?, ?, ?, ?)",
+                                 (e["src_id"], e["dst_id"], e["type"], e["created_at"]))
+            for e in other_edges:
+                ends = conn.execute("SELECT COUNT(*) FROM nodes WHERE id IN (?, ?)",
+                                    (e["src_id"], e["dst_id"])).fetchone()[0]
+                if ends == len({e["src_id"], e["dst_id"]}):      # 相手のノードが今もあるときだけ
                     conn.execute("INSERT INTO edges (src_id, dst_id, type, created_at) VALUES (?, ?, ?, ?)",
                                  (e["src_id"], e["dst_id"], e["type"], e["created_at"]))
     finally:

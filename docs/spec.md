@@ -223,8 +223,9 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
   - 移行 `--migrate-sections`: GitHub は呼ばない。DB を `data/backups/jarvis-<日時>-before-sections.db`（DB と同じ
     フォルダの下。日時はマイクロ秒まで、同じ名前があれば番号を付け、既存のバックアップを上書きしない）に sqlite3 の backup API で写してから、Project OS の Source ごとにファイル単位の Knowledge を節の
     Knowledge に置き換える（全体で 1 トランザクション、節になっているファイルは飛ばす）
-  - 戻し方 `--rollback-sections <バックアップ>`: Project OS の節の Knowledge と辺を消し、バックアップから Project OS の
-    ファイル単位の Knowledge と `derived_from` の辺を同じ ID で戻す（ほかの知識には触れない。1 トランザクション）。
+  - 戻し方 `--rollback-sections <バックアップ>`: Project OS の Knowledge をバックアップの時点の状態にそろえる。今の Project OS の
+    Knowledge（節もファイル単位も）と辺を消し、バックアップにある Project OS の Knowledge（移行の前から節だったものを含む）と
+    `derived_from` の辺、ほかのノードとの辺（相手が今もあるもの）を同じ ID で戻す（ほかの知識には触れない。1 トランザクション）。
     戻すファイル単位の Knowledge が 1 件もないバックアップ（2 回目以降の移行のときのものなど）は、何も変えずに断る。
     移行したファイルが 0 件のときは、そのバックアップは戻し方に使えず、最初の移行のときのバックアップを使うよう表示する
   - 集計（`knowledge_engine.stats`）は節の Knowledge を根拠の Source ごとに 1 件と数える。評価（`evaluation/runner.py`）

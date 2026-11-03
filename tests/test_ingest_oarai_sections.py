@@ -468,6 +468,27 @@ def test_rollback_restores_project_os_and_keeps_other_knowledge(legacy, tmp_path
     assert db.get_node(added) is not None and db.get_node(legacy["other"]) is not None
 
 
+def test_rollback_keeps_files_that_were_sections_before_migration(legacy, tmp_path):
+    """移行の前から節だったファイル（新しい方式で取り込んだもの）と、ほかの知識からの辺も、戻すと移行の前と同じになる。"""
+    raw = "# 新しい\n\n" + "\n\n".join(f"## 見出し{i}\n\n" + _para("新", 300) for i in range(5))
+    src_id = db.insert_node("Source", category="minpaku", title="new.md", content=raw,
+                            url=f"{ipo.BLOB_PREFIX}docs/new.md", meta={"repo_path": "docs/new.md"})
+    conn = db.get_connection()
+    with conn:
+        sections = ipo._create_sections(conn, src_id, "docs/new.md", raw)
+    conn.close()
+    assert len(sections) > 1
+    db.insert_edge(legacy["other"], sections[0], "depends_on")          # ほかの知識から節への辺
+    db.insert_edge(legacy["other"], legacy["kids"]["README.md"], "depends_on")
+    edges_before = sorted((r["src_id"], r["dst_id"], r["type"]) for r in db._fetchall("SELECT * FROM edges"))
+    before = _project_os_state()
+    backup = ipo.migrate_sections(tmp_path / "bk")["backup"]
+    assert all(db.get_node(k) is not None for k in sections)          # 移行は節のファイルを飛ばす
+    ipo.rollback_sections(backup)
+    assert _project_os_state() == before
+    assert sorted((r["src_id"], r["dst_id"], r["type"]) for r in db._fetchall("SELECT * FROM edges")) == edges_before
+
+
 def test_cli_prints_counts(legacy, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(ipo, "backup_dir", lambda: tmp_path / "bk")
     ipo.main(["--migrate-sections"])
