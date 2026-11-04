@@ -77,6 +77,27 @@ def test_general_knowledge_question_goes_to_general_chat_even_with_high_score(in
     assert orc.route(text, orc.Context(), use_llm=False).skill == "general-chat"
 
 
+@pytest.mark.parametrize("text", ["ああ、なんか大分、保養みたいな感じやね。", "あなたの声は自然です。", "はい、久しぶり。",
+                                  "ちょっと書き換えられるかどうか調べてみるんで。"])
+def test_chat_without_question_form_goes_to_general_chat_even_with_high_score(index, monkeypatch, text):
+    """ナレッジ・プロジェクトの語がなく、質問・依頼の形でない雑談は、検索の点数が高くても通常の会話（2026-11-04 Owner 指示）。"""
+    from types import SimpleNamespace
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [SimpleNamespace(score=100.0)])
+    assert not orc.is_knowledge_question(text)
+    assert orc.route(text, orc.Context(), use_llm=False).skill == "general-chat"
+
+
+@pytest.mark.parametrize("text", ["プールはどうなってる", "新しいAI関係のやつがあったら教えて", "あれ住所なんだっけ",
+                                  "講演のことを聞きたい", "料金の一覧を見せて", "倒産件数を調べて"])
+def test_question_or_request_form_is_left_to_the_score(index, monkeypatch, text):
+    """質問・依頼の形なら、従来どおり検索の点数で決める。"""
+    from types import SimpleNamespace
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [SimpleNamespace(score=100.0)])
+    assert orc.is_knowledge_question(text)
+    monkeypatch.setattr(ke, "search", lambda *a, **k: [])
+    assert not orc.is_knowledge_question(text)
+
+
 @pytest.mark.parametrize("text", ["新しい趣味を始めたい", "この文章をまとめて", "最近疲れてる"])
 def test_broad_words_are_left_to_the_score(index, monkeypatch, text):
     """「新しい」「まとめて」「最近」だけではナレッジの質問にしない（点数が低ければ通常の会話）。"""
