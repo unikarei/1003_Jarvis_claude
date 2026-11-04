@@ -4,7 +4,10 @@ import os
 
 from faster_whisper import WhisperModel
 
-WHISPER_MODEL_SIZE = "small"
+# 2026-11-04 Owner 指示「高精度に変更」: small → large-v3-turbo。Mac mini（CPU・int8・8 スレッド）で say の 8 文の
+# 一致 4/8 → 7/8、1 回の認識 1.0 → 2.7 秒、起動時の読み込み約 36 秒。JARVIS_WHISPER_MODEL=small で戻せる
+WHISPER_MODEL_SIZE = os.environ.get("JARVIS_WHISPER_MODEL", "large-v3-turbo")
+WHISPER_THREADS = int(os.environ.get("JARVIS_WHISPER_THREADS", "8"))
 # 認識のヒントにする語（固有名詞・Jarvis の言い回し）。2026-10-14 の計測で「ミンパク→民泊」「大洗い→大洗」「物点→物件」
 # 「終点→出典」「なれじか→ナレッジ化」が直った。JARVIS_VOICE_VOCAB で差し替えられる
 VOCABULARY = os.environ.get("JARVIS_VOICE_VOCAB",
@@ -17,7 +20,7 @@ _model: WhisperModel | None = None
 def _get_model() -> WhisperModel:
     global _model
     if _model is None:
-        _model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
+        _model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8", cpu_threads=WHISPER_THREADS)
     return _model
 
 
