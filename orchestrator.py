@@ -215,17 +215,23 @@ RECENT_SCORE_FACTOR = 0.25
 # 「とは」は文末か「とは何・どういう」の形だけ（「分かったことは？」「あとは」に当てない）
 GENERAL_QUESTION = re.compile(r"って(何|なに|なん)|(?<![こあも])とは(?:[?？。]?$|何|なに|なん|どういう|どんな)"
                               r"|って(どんな|どういう)|の仕組み|の使い方|の意味|を説明して|の違い")
+# 質問・依頼の形。ナレッジ・プロジェクトの語がなく検索の点数だけで決めるときは、この形の文だけをナレッジの質問にする
+# （「保養みたいな感じやね」などの雑談が、関係のないニュースの記事に 8〜13 点で当たっていた。2026-11-04 Owner 指示
+# 「雑談はナレッジ不要」）。「調べてみる」のような自分の予定は依頼にしない
+QUESTION_FORM = re.compile(r"[?？]|か[。．.！!、]?$|かな|かね|っけ|何|なに|なん[でだの]|どこ|(?<!か)どう|どれ|どの|どんな|いつ|誰|だれ"
+                           r"|なぜ|いくら|いくつ|教えて|知りたい|聞きたい|調べて(?!み)|探して|まとめて|一覧|について|を見せ")
 
 
 def is_knowledge_question(text: str) -> bool:
-    """ナレッジの語・プロジェクトの語を含むなら True。一般知識の質問の形なら False。それ以外は、検索の最上位の
-    点数がしきい値以上なら True（最近の出来事を聞く語があれば、その語を除いて検索し、しきい値は RECENT_SCORE_FACTOR 倍）。
+    """ナレッジの語・プロジェクトの語を含むなら True。一般知識の質問の形・質問や依頼の形でない文（雑談）なら False。
+    それ以外は、検索の最上位の点数がしきい値以上なら True（最近の出来事を聞く語があれば、その語を除いて検索し、
+    しきい値は RECENT_SCORE_FACTOR 倍）。
     迷えば False（通常の会話）。しきい値・加える語・検索の同義語は tuning.current()（既定は今の値、T-1411）。"""
     t = tuning.current()
     if any(w in text for w in KNOWLEDGE_WORDS + PROJECT_WORDS + tuple(t.extra_knowledge_words)) \
             or _has_project_id(text):
         return True
-    if GENERAL_QUESTION.search(text):
+    if GENERAL_QUESTION.search(text) or not QUESTION_FORM.search(text):
         return False
     query = text
     threshold = config.KNOWLEDGE_SCORE_THRESHOLD if t.score_threshold is None else t.score_threshold
