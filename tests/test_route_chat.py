@@ -391,3 +391,10 @@ def test_engine_answer_default_provider_is_unchanged(db_path, monkeypatch):
     monkeypatch.setattr(llm, "complete", lambda prompt, provider=None, timeout=None: seen.append(provider) or "答え")
     ke.answer("補助金は？")
     assert seen == [None]      # 省くと設定（JARVIS_LLM_PROVIDER）のまま
+
+
+def test_chat_prompt_forbids_claiming_actions():
+    """雑談は何も操作しないので、操作を引き受けたように答えないよう指示する（2026-11-05 Owner の実機）。"""
+    import orchestrator
+    assert "操作を引き受けたように言わない" in orchestrator.CHAT_PROMPT
+    assert "この会話では" in orchestrator.CHAT_PROMPT
