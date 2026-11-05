@@ -128,7 +128,7 @@
 - macOS（python.org 版 Python）では「Install Certificates.command」で CA ファイルを用意しておく（Mac mini は実行済み）。feedparser は証明書エラーを例外にせず空の結果を返すため、未実行だと RSS 取得が 0 件になる
 - 今後: Docker 化（独立した `Dockerfile` / `compose.yaml`、永続データは Volume）と HTTP API 化（`/health`、`/api/v1/`）を全体計画に沿って行う（MAP Phase 4〜5）
 - LLM: 機密性の高い処理はローカルLLM、高精度が必要な処理はクラウドAPI（Claude）のハイブリッド
-- 音声（Phase 3）: 認識はfaster-whisper等、合成はVOICEVOX等をローカル実行
+- 音声（Phase 3）: 認識はfaster-whisper等、合成はVOICEVOX等をローカル実行。Apple Silicon の Mac では認識を mlx-whisper（GPU）で動かす（ADR-0032、使えなければ faster-whisper）
 
 ## 5. エージェント・APIルーティング（コスト最適化優先）
 
