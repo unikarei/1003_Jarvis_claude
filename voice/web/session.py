@@ -182,6 +182,7 @@ class WebSession:
         self._lock = threading.Lock()
         self._active: _TurnState | None = None     # 処理している発言（考えている間・話している間）
         self._cut: set[int] = set()                # 割り込まれた発言の番号（その後のイベントは送らない）
+        self._ran: set[int] = set()                # 「実行する」で実行を始めた発言の番号（割り込まれても結果を画面に出す）
         self._calibrated = False
         self._calibration_audio = threading.Event()
         self._tts_failed: int | None = None        # 合成の失敗を知らせた発言の番号（発言ごとに 1 回だけ知らせる）
@@ -400,6 +401,7 @@ class WebSession:
             if req is None or req.turn != turn or req.result != "run" or self.closed or turn in self._cut:
                 return False
             self._approval = None
+            self._ran.add(turn)
             self._send_locked("approval_done", turn, id=req.id, result="run")
             return True
 
@@ -555,6 +557,10 @@ class WebSession:
             if turn == self.speaker.turn and not self.closed:
                 voice_chat.speak_rest(outcome, started["value"], ctx, self.speaker, {"turn": turn})
         self._send("answer_done", turn, text=outcome.text, skill=outcome.skill, ok=outcome.ok)
+        with self._lock:
+            if turn in self._ran and turn in self._cut:   # 承認して実行した後に割り込まれた: 結果は文脈に使わないが、
+                self._emit_locked("run_result", turn, text=outcome.text, skill=outcome.skill, ok=outcome.ok)   # 画面には出す
+            self._ran.discard(turn)
         try:
             self.record(text, outcome)        # 割り込まれた後でも、結果が出ていれば記録する
         except Exception as e:  # noqa: BLE001  記録の失敗で会話を止めない（本文は出さない）

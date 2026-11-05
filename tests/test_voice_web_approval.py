@@ -225,6 +225,7 @@ def test_cut_after_run_but_before_execution_does_not_execute(fake_skills, how):
         events.wait("turn_done", 2 if how == "utterance" else 1)   # 割り込みは turn_done（interrupted）の 1 回だけ
     time.sleep(0.2)
     assert not [e for e in events.of("answer_done") if e["turn"] == 1]   # 割り込んだ発言の結果は送らない
+    assert not events.of("run_result")                   # 実行していない発言の結果は出さない
     assert done(events) == ["cancelled"]                                 # 「実行しました」とは出さない
     assert s._approval is None
     assert fake_skills["write"].calls == 0
@@ -260,7 +261,7 @@ def test_cut_while_handing_skill_to_its_thread_does_not_execute(fake_skills, mon
     assert fake_skills["write"].calls == 0
 
 
-def test_cut_after_commit_runs_once_and_discards_result(fake_skills, monkeypatch):
+def test_cut_after_commit_runs_once_and_shows_result_only_on_screen(fake_skills, monkeypatch):
     """実行の確定（_before_run が要求を使い切った時点）より後の割り込みは、動き始めたスキルへの割り込みと同じ扱い:
     スキルは止まらず 1 回だけ実行され、その結果は会話に使わない（取り消せない処理、BV-06）。"""
     write, session, cut = fake_skills["write"], {}, []
@@ -279,6 +280,8 @@ def test_cut_after_commit_runs_once_and_discards_result(fake_skills, monkeypatch
     assert done(events) == ["run"]                       # 確定は「実行する」のまま（取り消しは出ない）
     assert [e.get("interrupted") for e in events.of("turn_done") if e["turn"] == 1] == [True]
     assert not [e for e in events.of("answer_done") if e["turn"] == 1]   # 割り込んだ発言の結果は送らない
+    results = [e for e in events.of("run_result") if e["turn"] == 1]   # 実行した結果は画面にだけ出す（2026-11-05）
+    assert len(results) == 1 and results[0]["skill"] == "fake-write"
 
 
 def test_before_run_is_checked_in_the_skill_thread_right_before_handler(fake_skills):

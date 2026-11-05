@@ -611,6 +611,10 @@
     }
     if (ev.type === "audio" && ev.calibration) { onCalibrationAudio(ev); return; }
     if (ev.type === "notice") { note(ev.message); return; }
+    if (ev.type === "run_result") {           // 承認して実行した後に割り込まれた発言の結果（読み上げはしない）
+      setLinked(line("ai", "JARVIS（実行の結果）", ""), ev.text);
+      return;
+    }
     if (ev.type === "approval_done" && P.approvalMatches(ev, withdrawn)) {   // 割り込んだ発言の確認の結果
       withdrawn = null;
       line("system", "", "確認: " + P.approvalResultText(ev.result));
