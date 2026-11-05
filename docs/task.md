@@ -301,6 +301,7 @@
 - [x] 音声認識を高精度に（2026-11-04 Owner 指示）: faster-whisper のモデルを small → large-v3-turbo（`JARVIS_WHISPER_MODEL`、8 スレッド `JARVIS_WHISPER_THREADS`）。say の 8 文で一致 4/8 → 7/8、認識 1.0 → 2.7 秒
 - [x] 音声認識を GPU で（2026-11-05 Owner 承認、ADR-0032）: Apple Silicon では mlx-whisper（large-v3-turbo）、声の区間だけを Silero VAD で渡す。認識 2.7 → 0.5 秒、一致 7/8 は同じ。使えなければ faster-whisper
 - [x] ブラウザの会話の管理画面（2026-11-05 Owner 指摘「OK を押しても切り替わらない」）: Mac mini で `open` せず、tailnet の URL をリンクで返す
+- [x] 承認して実行した後に割り込まれた発言の結果を、画面にだけ出す（`run_result`。2026-11-05 Owner の実機「管理画面のリンクが出ない」）
 
 ## ナレッジ回答の評価部門（`../docs/spec.md` §3.4.10、ADR-0030、`../docs/tasks.md` §15）
 
