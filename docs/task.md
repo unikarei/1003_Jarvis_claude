@@ -299,6 +299,7 @@
 - [x] T-1506 tailnet 内のブラウザで声の会話を開く（2026-11-03 Owner 指示、Owner 事前承認）: `--allow-host`・`JARVIS_VOICE_ALLOWED_HOSTS` の DNS 名を Host と HTTPS Origin に追加し、`--tailnet-port` の URL を表示する。`python -m voice.web --port 8772 --allow-host ohidemac-mini.taild8cb51.ts.net`、`tailscale serve --bg --https=8446 http://127.0.0.1:8772`。ACL に tcp:8446 の許可が必要。インターネットには公開しない。静的ページの相対 URL を確認し、HTTP・CLI のテストと全体テストを実行する。Tailscale と ACL の設定は別作業。
 - [x] 雑談をナレッジの回答に回さない（2026-11-04 Owner 指示「雑談はナレッジ不要」）: ナレッジ・プロジェクトの語がなく検索の点数だけで決める文は、質問・依頼の形（`orchestrator.QUESTION_FORM`）のときだけナレッジの質問にする。本番の索引での試算: 評価セット 125 問の振り分けは変化なし、過去の会話 85 件のうち雑談 18 件が通常の会話に
 - [x] 音声認識を高精度に（2026-11-04 Owner 指示）: faster-whisper のモデルを small → large-v3-turbo（`JARVIS_WHISPER_MODEL`、8 スレッド `JARVIS_WHISPER_THREADS`）。say の 8 文で一致 4/8 → 7/8、認識 1.0 → 2.7 秒
+- [x] 音声認識を GPU で（2026-11-05 Owner 承認、ADR-0032）: Apple Silicon では mlx-whisper（large-v3-turbo）、声の区間だけを Silero VAD で渡す。認識 2.7 → 0.5 秒、一致 7/8 は同じ。使えなければ faster-whisper
 
 ## ナレッジ回答の評価部門（`../docs/spec.md` §3.4.10、ADR-0030、`../docs/tasks.md` §15）
 

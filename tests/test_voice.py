@@ -117,6 +117,7 @@ def test_transcribe_array_uses_hotwords(monkeypatch):
             calls.append(kwargs)
             return iter([type("S", (), {"text": " 民泊の件数は？"})()]), None
     monkeypatch.setattr(speech_to_text, "_model", FakeModel())
+    monkeypatch.setattr(speech_to_text, "_backend", "faster")      # faster-whisper の経路（mlx は test_speech_to_text_mlx）
     assert speech_to_text.transcribe_array(np.zeros(10, dtype=np.float32)) == "民泊の件数は？"
     assert calls[0]["hotwords"] == speech_to_text.VOCABULARY and "initial_prompt" not in calls[0]
     if "JARVIS_VOICE_VOCAB" not in os.environ:                       # 環境変数で差し替えていなければ既定の語

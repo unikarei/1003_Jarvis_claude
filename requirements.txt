@@ -12,3 +12,6 @@ numpy>=1.26
 google-auth>=2.30
 google-api-python-client>=2.140
 google-analytics-data>=0.18
+# Apple Silicon の Mac だけ: GPU（MLX）での音声認識（2026-11-05 Owner 承認、ADR-0032）。ほかの環境は faster-whisper
+mlx-whisper==0.4.3; sys_platform == "darwin" and platform_machine == "arm64"
+mlx==0.32.4; sys_platform == "darwin" and platform_machine == "arm64"
