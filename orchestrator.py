@@ -11,6 +11,7 @@ Owner の発言から使うスキルと入力を決め、権限を確かめて�
 
 import contextvars
 import json
+import os
 import re
 import threading
 import time
@@ -493,6 +494,11 @@ def _improvement(inputs, ctx, text):
     return improve.to_markdown(improve.build(_registry_dir(), skip_prs=not inputs.get("include_prs"))), []
 
 
+# 管理画面（reports/acc/index.html）の tailnet の URL。Tailscale の :8443 がワークスペースの docs/ を配信し、
+# docs/acc は reports/acc へのリンク（tailnet の中だけ）。JARVIS_ACC_URL で変える
+ACC_URL = os.environ.get("JARVIS_ACC_URL", "https://ohidemac-mini.taild8cb51.ts.net:8443/acc/")
+
+
 def _control_center(inputs, ctx, text):
     import subprocess
     from acc import build as acc
@@ -504,6 +510,8 @@ def _control_center(inputs, ctx, text):
         improvement = None
     acc.DEFAULT_OUT.parent.mkdir(parents=True, exist_ok=True)
     acc.DEFAULT_OUT.write_text(acc.build_html(registry, collect(registry), improvement), encoding="utf-8")
+    if not ctx.terminal:                  # ブラウザの会話: Mac mini の画面ではなく、話している端末で開けるリンクを返す
+        return f"管理画面を最新にしました。画面のリンクから開いてください。\n{ACC_URL}", []
     subprocess.run(["open", str(acc.DEFAULT_OUT)], check=False)
     return f"管理画面を作って開きました: {acc.DEFAULT_OUT}", []
 
