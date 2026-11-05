@@ -157,3 +157,30 @@ def test_run_tolerates_missing_command_and_timeout(monkeypatch):
     monkeypatch.setattr(subprocess, "run", slow)
     out = collect.run(["sleep", "10"], timeout=1)
     assert out.returncode == 124 and "時間切れ" in out.stderr
+
+
+def test_collect_runs_resources_in_parallel_and_keeps_id_order(no_network, monkeypatch, tmp_path):
+    """資産ごとの調査は同時に行う（順に行うと 17 秒かかっていた、2026-11-05）。結果は資産の ID の順。"""
+    import threading
+    import time
+
+    monkeypatch.setattr(settings, "WORKSPACE_DIR", tmp_path)
+    monkeypatch.setattr(settings, "VAULT_PARENT", tmp_path)
+    active, peak, lock = [0], [0], threading.Lock()
+
+    def slow(resource):
+        with lock:
+            active[0] += 1
+            peak[0] = max(peak[0], active[0])
+        time.sleep(0.2)
+        with lock:
+            active[0] -= 1
+        return {"name": resource["resource_id"]}
+    monkeypatch.setattr(collect, "collect_data_store", slow)
+    ids = [f"data-{c}" for c in "dcba"]
+    registry = {"resources": {i: _resource(i, "data_store", locator="/x", format="sqlite", backup="b") for i in ids}}
+    started = time.monotonic()
+    snap = collect.collect(registry)
+    assert time.monotonic() - started < 0.6 and peak[0] > 1
+    assert list(snap["resources"]) == sorted(ids)
+    assert [r["facts"]["name"] for r in snap["resources"].values()] == sorted(ids)
