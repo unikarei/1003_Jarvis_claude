@@ -9,6 +9,7 @@ import os
 import platform
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -200,31 +201,42 @@ def find_unregistered(resources: dict[str, dict], jobs: dict[str, dict]) -> tupl
 
 # ---------------------------------------------------------------- 全体
 
+# 資産ごとの調査を同時に行う数。git ls-remote・gh・HTTP の待ちが大半で、順に行うと 17 秒かかっていた（2026-11-05、
+# 管理画面の作り直しが遅い）。結果は資産の ID の順に並べるので、同時に行っても中身は順に行ったときと同じ
+COLLECT_WORKERS = 8
+
+
+def collect_one(r: dict, jobs: dict[str, dict]) -> dict:
+    """1 つの Resource を調べる。1 件の失敗で全体を止めない。"""
+    kind = r.get("resource_type")
+    try:
+        if kind == "repository":
+            facts = collect_repository(r)
+        elif kind == "vault":
+            facts = collect_vault(r)
+        elif kind in ("service", "scheduled_job"):
+            facts = collect_launchd(r, jobs)
+        elif kind in ("website", "api"):
+            facts = collect_http(r)
+        elif kind == "data_store":
+            facts = collect_data_store(r)
+        elif kind == "host":
+            facts = collect_host(r)
+        else:
+            facts = {"skipped": "この種類は Phase 3 では調べない"}
+    except Exception as e:  # noqa: BLE001 1件の失敗で全体を止めない
+        facts = {"error": f"{type(e).__name__}: {e}"[:200]}
+    return {"resource_type": kind, "checked_at": now_iso(), "facts": facts}
+
+
 def collect(registry: dict) -> dict:
     """Registry（registry.json の内容）の全 Resource を調べたスナップショットを返す。"""
     resources = registry["resources"]
     jobs = launchd_jobs()
-    results = {}
-    for rid, r in sorted(resources.items()):
-        kind = r.get("resource_type")
-        try:
-            if kind == "repository":
-                facts = collect_repository(r)
-            elif kind == "vault":
-                facts = collect_vault(r)
-            elif kind in ("service", "scheduled_job"):
-                facts = collect_launchd(r, jobs)
-            elif kind in ("website", "api"):
-                facts = collect_http(r)
-            elif kind == "data_store":
-                facts = collect_data_store(r)
-            elif kind == "host":
-                facts = collect_host(r)
-            else:
-                facts = {"skipped": "この種類は Phase 3 では調べない"}
-        except Exception as e:  # noqa: BLE001 1件の失敗で全体を止めない
-            facts = {"error": f"{type(e).__name__}: {e}"[:200]}
-        results[rid] = {"resource_type": kind, "checked_at": now_iso(), "facts": facts}
+    items = sorted(resources.items())
+    with ThreadPoolExecutor(max_workers=COLLECT_WORKERS) as pool:
+        found = list(pool.map(lambda item: collect_one(item[1], jobs), items))
+    results = {rid: res for (rid, _), res in zip(items, found)}
     unregistered, out_of_scope = find_unregistered(resources, jobs)
     return {"checked_at": now_iso(), "host": config.HOST_ID, "resources": results,
             "unregistered": unregistered, "out_of_scope": out_of_scope}
