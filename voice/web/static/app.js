@@ -37,6 +37,24 @@
 
   function note(text) { $("note").textContent = text || ""; }
 
+  // 文を表示し、https の URL を新しいタブで開くリンクにする（管理画面の URL など。innerHTML は使わない）
+  function setLinked(el, text) {
+    el.textContent = "";
+    const re = /https:\/\/[^\s<>"'）」]+/g;
+    let last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+      el.append(text.slice(last, m.index));
+      const a = document.createElement("a");
+      a.href = m[0];
+      a.textContent = m[0];
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      el.append(a);
+      last = m.index + m[0].length;
+    }
+    el.append(text.slice(last));
+  }
+
   function line(cls, label, text) {
     const div = document.createElement("div");
     div.className = "line " + cls;
@@ -638,7 +656,7 @@
         break;
       case "answer_done":
         if (!answerEl) answerEl = line("ai", "JARVIS", "");
-        answerEl.textContent = ev.text;      // 逐次表示しなかった回答もここで全文を出す
+        setLinked(answerEl, ev.text);        // 逐次表示しなかった回答もここで全文を出す（URL はリンクに）
         answerEl = null;
         break;
       case "error":

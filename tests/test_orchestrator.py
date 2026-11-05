@@ -254,3 +254,29 @@ def test_answer_shows_only_cited_sources(monkeypatch):
     seen["reply"] = "一般的には、こうです。"
     text, items = orc._answer({"question": "q"}, ctx, "q")
     assert text == "一般的には、こうです。" and items == []
+
+
+@pytest.mark.parametrize("terminal", [True, False])
+def test_control_center_opens_on_mac_only_from_terminal(monkeypatch, tmp_path, terminal):
+    """ブラウザの会話（terminal=False）では Mac mini の画面で開かず、話している端末で開ける URL を返す。"""
+    import subprocess
+
+    from acc import build as acc
+    import discovery.collect
+
+    (tmp_path / "generated").mkdir()
+    (tmp_path / "generated" / "registry.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(orc, "_registry_dir", lambda: tmp_path)
+    monkeypatch.setattr(discovery.collect, "collect", lambda registry: {})
+    monkeypatch.setattr(acc, "build_html", lambda *a, **k: "<html></html>")
+    monkeypatch.setattr(acc, "DEFAULT_OUT", tmp_path / "acc" / "index.html")
+    monkeypatch.setattr(acc, "IMPROVEMENT_JSON", tmp_path / "none.json")
+    opened = []
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **k: opened.append(cmd))
+    text, _ = orc._control_center({}, orc.Context(terminal=terminal), "管理画面")
+    assert (tmp_path / "acc" / "index.html").read_text(encoding="utf-8") == "<html></html>"
+    if terminal:
+        assert opened and opened[0][0] == "open"
+    else:
+        assert opened == []
+        assert orc.ACC_URL in text
