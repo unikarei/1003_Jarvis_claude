@@ -42,6 +42,8 @@ CALIBRATE_TIMEOUT = 60.0      # あいさつの合成を待つ上限（最初の
 APPROVAL_SECONDS = 60         # 承認の要求の期限（T-1504）
 APPROVAL_SPOKEN = "書き込みがあります。画面で確認してください。"
 DECISIONS = {"run": "run", "decline": "declined"}   # /api/approve の decision → approval_done の result
+MAX_TYPED = 16                # 2 段目の確認で入力する語の長さの上限（T-1702）
+OBSIDIAN_SKILL = orchestrator.OBSIDIAN_SKILL
 
 
 class AudioError(Exception):
@@ -59,24 +61,27 @@ class Busy(Exception):
 class _TurnState:
     """発言 1 回分の状態（割り込みのときに履歴・遅延の記録を確定するために使う）。"""
 
-    __slots__ = ("turn", "lat", "text", "outcome", "record")
+    __slots__ = ("turn", "lat", "text", "outcome", "record", "done", "ctx")
 
     def __init__(self, turn: int, lat: "latency.Turn"):
         self.turn, self.lat = turn, lat
         self.text: str | None = None      # 認識した Owner の発言（雑音・認識の前なら None）
         self.outcome = None               # handle の結果（まだなら None）
         self.record = True                # 遅延を記録するか（雑音・「終了」は答えていないので記録しない）
+        self.done = threading.Event()     # この発言の処理（_process）が終わった（T-1702）
+        self.ctx = None                   # この発言が使った文脈（割り込みの判定に使う、T-1702）
 
 
 class _Approval:
     """承認の要求 1 つ（T-1504）。answer は Owner の答え（run / declined）、result は確定した結果（approval_done の
     result）。どちらも 1 回だけ決まる。"""
 
-    __slots__ = ("id", "turn", "deadline", "answer", "result", "event")
+    __slots__ = ("id", "turn", "deadline", "answer", "result", "event", "expect")
 
-    def __init__(self, turn: int, deadline: float):
+    def __init__(self, turn: int, deadline: float, expect: str | None = None):
         self.id = secrets.token_urlsafe(16)
         self.turn, self.deadline = turn, deadline
+        self.expect = expect              # 2 段目の確認で求める語（サーバーが決めて照合する、T-1702）
         self.answer: str | None = None
         self.result: str | None = None
         self.event = threading.Event()
@@ -188,6 +193,8 @@ class WebSession:
         self._tts_failed: int | None = None        # 合成の失敗を知らせた発言の番号（発言ごとに 1 回だけ知らせる）
         self._latency: tuple[int, latency.Turn] | None = None   # （発言の番号, その発言の遅延の記録）
         self._approval: _Approval | None = None    # 答えを待っている承認の要求（T-1504、同時に 1 つだけ）
+        # 割り込まれた、Obsidian のノートの編集の途中の発言（T-1702）。次の発言は、この処理の終わりを待つ
+        self._after: _TurnState | None = None
         self.player = BrowserPlayer(emit=self._player_event, clock=clock)
         self.speaker = DuplexSpeaker(self.player, voice=voice_chat.VOICE,
                                      synth=_FirstSynth(launcher, synth, self._notice, lambda: self.closed,
@@ -347,10 +354,12 @@ class WebSession:
                 except Exception as e:  # noqa: BLE001
                     print(f"[音声] エンジンを止められませんでした（{type(e).__name__}）", file=sys.stderr)
 
-    def approve(self, turn: int, approval_id: str, decision: str) -> str:
+    def approve(self, turn: int, approval_id: str, decision: str, text: str | None = None) -> str:
         """画面の「実行する」（decision="run"）・「実行しない」（"decline"）。返り値は "ok" / "stale"。
         待っている要求と ID・発言の番号が一致し、期限内で、まだ答えていないときだけ受け付ける。stale は何もしない
-        （server.py が 409 にする）。実行するかは要求を待っている側（_ask）が、割り込み・終了と合わせて決める。"""
+        （server.py が 409 にする）。実行するかは要求を待っている側（_ask）が、割り込み・終了と合わせて決める。
+        求める語のある要求（2 段目の確認、T-1702）の "run" は、text の前後の空白を除いたものが語に一致するときだけ
+        run。違う・ない・長すぎるときは declined で確定する（やり直しは受け付けない）。入力した語は残さない。"""
         answer = DECISIONS.get(decision)
         with self._lock:
             req = self._approval
@@ -359,23 +368,31 @@ class WebSession:
                     or not hmac.compare_digest(req.id.encode(), str(approval_id).encode())
                     or self.clock() >= req.deadline):
                 return "stale"
+            if req.expect is not None and answer == "run":
+                typed = text.strip() if isinstance(text, str) and len(text) <= MAX_TYPED else None
+                if typed is None or not hmac.compare_digest(typed.encode(), req.expect.encode()):
+                    answer = "declined"
             req.answer = answer
             req.event.set()
         return "ok"
 
     # ------------------------------------------------------------ 承認（T-1504）
 
-    def _ask(self, turn: int, prompt: str) -> str:
+    def _ask(self, turn: int, prompt: str, spoken: str | None = None, expect: str | None = None) -> str:
         """orchestrator.execute の確認。発言 turn 専用の承認の要求を作って画面に出し、答え・期限・割り込み・終了の
         どれかまで待つ。「実行する」が、その ID・その発言・期限内・会話が続いている・割り込まれていない、のすべてを
-        満たしたときだけ "y"。それ以外はすべて "n"。"""
+        満たしたときだけ "y"。それ以外はすべて "n"。
+        expect（2 段目の確認の語、T-1702）があれば入力欄つきの要求にし、語が一致したときだけ expect を返す。
+        spoken は読み上げる確認の要点（なければ決まった文）。"""
         with self._lock:
             if self.closed or turn in self._cut or self._approval is not None:
                 return "n"                    # 割り込まれた・終えた発言には要求を出さない。要求は同時に 1 つだけ
-            req = _Approval(turn, self.clock() + APPROVAL_SECONDS)
+            req = _Approval(turn, self.clock() + APPROVAL_SECONDS, expect)
             self._approval = req
-            self._send_locked("approval", turn, id=req.id, text=confirm_prompt(prompt), expires_in=APPROVAL_SECONDS)
-        self.speaker.say(APPROVAL_SPOKEN, turn=turn)   # 割り込まれていれば番号が違うので読まない
+            extra = {"input": True, "word": expect} if expect is not None else {}
+            self._send_locked("approval", turn, id=req.id, text=confirm_prompt(prompt), expires_in=APPROVAL_SECONDS,
+                              **extra)
+        self.speaker.say(spoken or APPROVAL_SPOKEN, turn=turn)   # 割り込まれていれば番号が違うので読まない
         while True:
             with self._lock:
                 if req.result is None:        # 割り込み・終了の側で取り消されていなければ、ここで確定する
@@ -389,7 +406,9 @@ class WebSession:
                         self._send_locked("approval_done", turn, id=req.id, result=req.result)
                     # run は実行の直前（_before_run）まで要求を残し、それまでの割り込み・終了で取り消せるようにする
                 if req.result is not None:
-                    return "y" if req.result == "run" else "n"
+                    if req.result != "run":
+                        return "n"
+                    return req.expect if req.expect is not None else "y"
             req.event.wait(POLL_SECONDS)      # 時計を差し替えられるように、短い間隔で期限を確かめる
 
     def _before_run(self, turn: int) -> bool:
@@ -433,13 +452,28 @@ class WebSession:
         heard = self.speaker.heard(st.turn)
         self.speaker.new_turn()               # 残りの合成・保持した音を捨てる
         if st.text is not None:
-            if st.outcome is None:
-                self.ctx = orchestrator.Context(voice=True, terminal=False, history=list(self.ctx.history))
-            self.ctx.history.append(Turn(Who.OWNER, st.text))
+            lines = [Turn(Who.OWNER, st.text)]
             if heard:                         # 聞いた文だけを履歴に残す
-                self.ctx.history.append(Turn(Who.AI, "".join(heard) + voice_chat.INTERRUPTED_MARK))
+                lines.append(Turn(Who.AI, "".join(heard) + voice_chat.INTERRUPTED_MARK))
+            ctx = st.ctx or self.ctx
+            if voice_chat.obsidian_busy(ctx, st.outcome, st.text):
+                # Obsidian のノートの編集の途中（T-1702）: 文脈を作り直さず、履歴に入れない。次の発言は処理の終わりを待つ
+                self._after = st
+            else:
+                if st.outcome is None:
+                    self.ctx = orchestrator.Context(voice=True, terminal=False, history=list(self.ctx.history))
+                if not getattr(st.outcome, "private", False):
+                    self.ctx.history.extend(lines)
         self._emit_locked("turn_done", st.turn, interrupted=True)
         return st
+
+    def _settle_after(self) -> None:
+        """割り込まれた発言が Obsidian のノートの編集の途中なら、その処理が終わるまで待つ（文脈を作り直さず、
+        途中の依頼を次の発言に使う、T-1702）。"""
+        with self._lock:
+            st, self._after = self._after, None
+        if st is not None:
+            st.done.wait()
 
     def _finish_interrupted(self, st: _TurnState) -> None:
         if st.record:
@@ -451,13 +485,16 @@ class WebSession:
         latency.use(st.lat)                   # handle を呼ぶこのスレッドで今の記録にする
         result = {"last": None}
         try:
-            self._answer(st, audio, result)
-        except Exception as e:  # noqa: BLE001  例外で会話を止めない
-            result["last"] = ("error", {"kind": "internal", "message": f"{type(e).__name__}: {e}"})
-        try:
-            self._wait_spoken(st.turn)        # ブラウザが最後の文を再生し終えるまで（割り込まれたら待たない）
+            try:
+                self._answer(st, audio, result)
+            except Exception as e:  # noqa: BLE001  例外で会話を止めない
+                result["last"] = ("error", {"kind": "internal", "message": f"{type(e).__name__}: {e}"})
+            try:
+                self._wait_spoken(st.turn)    # ブラウザが最後の文を再生し終えるまで（割り込まれたら待たない）
+            finally:
+                self._finish_turn(st, result)
         finally:
-            self._finish_turn(st, result)
+            st.done.set()
 
     def _finish_turn(self, st: _TurnState, result: dict) -> None:
         # 割り込みの判定・履歴・受付の再開・最後の知らせを同じロックの中で行う: submit・interrupt も同じロックを取るので、
@@ -498,6 +535,8 @@ class WebSession:
         outcome = st.outcome
         if outcome is not None and outcome.skill == "knowledge-capture" and outcome.method == "rule":
             return
+        if getattr(outcome, "private", False):
+            return                            # Obsidian のノートの編集などは履歴に入れない（T-1702）
         self.ctx.history.append(Turn(Who.OWNER, st.text))
         if outcome is None:
             return
@@ -518,11 +557,13 @@ class WebSession:
             st.record = False
             result["last"] = ("ignored", {"reason": "noise" if text.strip(" 　。、.!！?？") else "empty"})
             return
+        self._settle_after()                  # 前の発言が Obsidian のノートの編集の途中なら、その終わりを待つ（T-1702）
         with self._lock:
             if self.closed or turn in self._cut:
                 return                        # 認識している間に割り込まれた・終えた（答えない）
             st.text = text                    # 回答が失敗しても Owner の発言は履歴に残す
             ctx = self.ctx                    # 割り込みで文脈が切り離されても、この発言はこの文脈だけを使う
+            st.ctx = ctx
             self._send_locked("recognized", turn, text=text)
         if any(w in text for w in QUIT_WORDS) and len(text) <= 10:
             st.record = False
@@ -543,7 +584,8 @@ class WebSession:
         ctx.cancel = lambda t=turn: self.closed or t != self.speaker.turn   # voice_chat.run_barge_in と同じ
         ctx.before_run = lambda t=turn: self._before_run(t)   # 承認の後、実行の直前にもう一度確かめる（T-1504）
         try:
-            outcome = self.handle(text, ctx, ask=lambda prompt: self._ask(turn, prompt))   # 確認は画面で（T-1504）
+            outcome = self.handle(text, ctx, ask=lambda prompt, spoken=None, expect=None:   # 確認は画面で（T-1504）
+                                  self._ask(turn, prompt, spoken=spoken, expect=expect))
         except Exception as e:  # noqa: BLE001
             result["last"] = ("error", {"kind": "answer", "message": f"答えを作れませんでした（{type(e).__name__}: {e}）"})
             return

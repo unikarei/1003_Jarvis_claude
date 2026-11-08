@@ -319,3 +319,7 @@
 
 - [x] 送信先を `JARVIS_OARAI_API_BASE`（既定 `http://127.0.0.1:8010`）に。`submit_or_hold()` が API の応答の status で "submitted" を上書きしていた不具合を修正（API の状態は `api_status`）。保留・再送・送信のテスト
 - [ ] Mac mini のローカルの API の常駐（Project OS 側の PR と launchd の登録の後に受け入れ）
+
+## 会話からの Obsidian のノートの編集（`../docs/tasks.md` T-1702、spec 4-6）
+
+- [x] スキル `obsidian-note`（`obsidian_note.py`）: 聞き返し・確認（削除と全体の書き直しは 2 段）・追加／作成／書き直し／削除、`requires_any` の振り分け・途中の依頼、`vault.py` の守りの強化・`list_notes`・`delete_file`、削除した知識の後始末、CKC のノートの本文の更新、書いた後の取り込み直し、声の会話とブラウザ（2 段目は入力欄の語をサーバーで照合）。jarvis-skills の宣言は T-1703

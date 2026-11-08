@@ -29,6 +29,7 @@ class Skill:
     phrases: tuple[str, ...] = ()
     verify: str | None = None
     confirm: bool = False                            # true なら read でも実行のたびに確認する（課金・外部への送信）
+    requires_any: tuple[str, ...] = ()               # あれば、phrases のどれかとこのどれかの両方を含む発言だけに当たる（T-1702）
 
     def required_inputs(self) -> list[str]:
         return [k for k, v in self.inputs.items() if v.get("required")]
@@ -92,8 +93,16 @@ def _parse(name: str, raw: dict) -> Skill:
     confirm = raw.get("confirm", False)
     if not isinstance(confirm, bool):
         raise ValueError("confirm が真偽値ではない")
+    requires_any = raw.get("requires_any")
+    if requires_any is None:
+        requires_any = ((raw.get("metadata") or {}).get("jarvis") or {}).get("requires_any") \
+            if isinstance(raw.get("metadata"), dict) else None
+    requires_any = requires_any or []
+    if not isinstance(requires_any, list) or not all(isinstance(w, str) and w for w in requires_any):
+        raise ValueError("requires_any が不正")
     return Skill(name, str(raw.get("description") or ""), raw["status"], raw["permission"], dict(entry),
-                 {k: dict(v) for k, v in inputs.items()}, tuple(phrases), raw.get("verify"), confirm)
+                 {k: dict(v) for k, v in inputs.items()}, tuple(phrases), raw.get("verify"), confirm,
+                 tuple(requires_any))
 
 
 def load(quiet: bool = False) -> dict[str, Skill]:

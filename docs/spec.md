@@ -125,7 +125,7 @@
 
 #### 4-6. 民泊: Obsidianボルトへの書き込み（新規ノート作成・既存ノートへの追記）
 
-JARVIS側からもボルトを更新できるようにする。自動実行はせず、手動トリガー（CLI実行）でのみ書き込む。
+JARVIS側からもボルトを更新できるようにする。自動実行はせず、手動の CLI と、会話のスキル（毎回の確認つき）でのみ書き込む。
 
 - `update_obsidian.py`:
   - `create_note(path, content)`: 新規ノートを作成する（同名ファイルが既に存在する場合はエラー）
@@ -134,6 +134,8 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
   - 認証は`ingest_obsidian.py`と同様に`gh auth token`を使う。トークンや認証情報は本リポジトリに保存しない
 - `ingest_obsidian.py` を拡張し、既存ノートの内容が変わっていたらSource/Knowledgeのcontentを更新する（上記4-5に追記済み）。これにより、JARVISでの書き込み後に再取り込みすれば最新内容がask.pyの検索対象になる
 - **ローカル Vault への改修（4-10 の前提、`../docs/decisions.md` ADR-0016）**: 書き込み先を GitHub Contents API から Mac mini のローカル Vault（`~/work/obsidian/<Vault>`）に変える。`create_note` / `append_note` の関数名・引数・CLI・追記の書式は変えない。sha 照合の代わりに、読み込み時と書き込み直前の内容のハッシュ、対象ファイルの未コミット変更、Git の操作中（merge・rebase・ロック）を確認し、一時ファイルから原子的に置き換える。Git の commit・push はしない（Obsidian Git に任せる）。書き込みの共通部分は `vault.py` に置き、CKC と共用する
+- **会話のスキル `obsidian-note`**（統合ワークスペースの spec §3.4.11・ADR-0033、T-1702）: 「Obsidian」と操作の語の両方を含む発言で使い、操作（追加・作成・部分／全体の書き直し・削除）・Vault・ノート・場所・内容のうち足りないものを 1 つずつ聞き返す（`orchestrator.Context.pending`、2 分・同じ項目 3 回で中止）。書く前に内容を示して確認し、削除と全体の書き直しは 2 段目に「削除」「置き換え」の入力を求める（ブラウザでの声の会話では画面の入力欄に入力し、語の照合はサーバー）。取り出しはローカル LLM（Ollama）だけで、このスキルの発言・答えは会話の履歴に入れず、記録には操作・Vault・パスと短い結果だけを残す。
+  - 本体は `obsidian_note.py`。書き込みは `vault.py`（どの階層でも `.git`・`.obsidian`・`.trash` を拒否、Markdown だけ、`list_notes`・`delete_file`・`restore_file` を追加）を通す。削除はノートから取り込んだ知識（Knowledge・ほかから参照されない Source・エッジ）も JSON に残してから消し、DB の削除に失敗したらノートを戻す。CKC のノート（`_jarvis/`）は本文だけを変え、その Knowledge の本文を更新する。それ以外は書いた後に `ingest_obsidian` で取り込み直す
 - 受け入れ条件:
   - 新規ノートを作成できる（既存パスと衝突する場合はエラーになる）
   - 既存ノートに追記できる

@@ -25,10 +25,11 @@ button:disabled { opacity:.5; cursor:default; }
 .approval { margin:8px 0; padding:10px 12px; border-radius:8px; background:var(--card); border:2px solid var(--busy); }
 .approval-text { white-space:pre-wrap; word-break:break-word; margin-bottom:8px; }
 .approval .controls { margin-bottom:0; align-items:center; }
+.approval input { font-size:16px; padding:6px 8px; width:9em; }
 @media (max-width:600px) { main, header { padding-left:16px; padding-right:16px; } }
 </style></head><body>
 <header><h1>JARVIS 声の会話</h1>
-<div class="muted">「会話を始める」を 1 回押してマイクを許可すると、話すたびに自動で区切って送ります。認識した文と回答を文字で表示し、回答を文ごとに読み上げます。考えている間・読み上げている間に話し始めると、読み上げを止めて新しい発言を聞きます。始めに短いあいさつを流してスピーカーからの回り込みを測ります（黙っていてください）。接続が切れたら会話を終えます（もう一度「会話を始める」で新しい会話）。「終了」と話しても終わります。書き込みのある操作は、画面の「実行する」を 60 秒以内に押したときだけ実行します（声の「はい」では実行しません。話すと確認は取り消されます）。</div></header>
+<div class="muted">「会話を始める」を 1 回押してマイクを許可すると、話すたびに自動で区切って送ります。認識した文と回答を文字で表示し、回答を文ごとに読み上げます。考えている間・読み上げている間に話し始めると、読み上げを止めて新しい発言を聞きます。始めに短いあいさつを流してスピーカーからの回り込みを測ります（黙っていてください）。接続が切れたら会話を終えます（もう一度「会話を始める」で新しい会話）。「終了」と話しても終わります。書き込みのある操作は、画面の「実行する」を 60 秒以内に押したときだけ実行します（声の「はい」では実行しません。話すと確認は取り消されます）。Obsidian のノートの削除・全体の置き換えは、続けて入力欄に「削除」「置き換え」と入力して送ったときだけ実行します。</div></header>
 <main>
 <div class="controls">
   <button id="start">会話を始める</button>
@@ -41,6 +42,8 @@ button:disabled { opacity:.5; cursor:default; }
   <div id="approval-text" class="approval-text"></div>
   <div class="controls">
     <button id="approve-run">実行する</button>
+    <input id="approve-word" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="16" hidden aria-label="確認の語">
+    <button id="approve-send" hidden>送る</button>
     <button id="approve-decline">実行しない</button>
     <span id="approval-left" class="muted"></span>
   </div>

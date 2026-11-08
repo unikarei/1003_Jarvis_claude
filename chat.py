@@ -36,6 +36,11 @@ def _stream(chunk: str) -> None:
     print(chunk, end="", flush=True)
 
 
+def ask(prompt: str, spoken: str | None = None, expect: str | None = None) -> str:
+    """書き込みの確認（キーボードの入力）。spoken（読み上げの文）・expect（2 段目の語）は文字の会話では使わない。"""
+    return input(prompt)
+
+
 def main():
     print(GREETING)
     init_db()
@@ -58,7 +63,7 @@ def main():
         started = [False]
         _STREAM_STATE["started"] = started
         latency.start("text")             # 段階ごとの時間を記録する（本文は記録しない、T-1405）
-        outcome = orchestrator.handle(user_input, ctx)
+        outcome = orchestrator.handle(user_input, ctx, ask=ask)
         if started[0] and ctx.shown and outcome.text.startswith(ctx.shown):
             rest = outcome.text[len(ctx.shown):].strip()          # 答えは表示済み。出典などの残りだけ
             print(("\n\n" + rest if rest else "") + "\n")
@@ -72,7 +77,10 @@ def main():
         except Exception as e:  # 記録の失敗で対話を止めない
             print(f"[記録できませんでした] {type(e).__name__}: {e}\n")
         # ナレッジ化の材料にする対話。Owner の発言は、応答が失敗・時間切れでも残す（決定や好みは Owner の発言にある）。
-        # Jarvis の応答は成功したものだけ。ナレッジ化そのものは材料にしない
+        # Jarvis の応答は成功したものだけ。ナレッジ化そのものは材料にしない。
+        # private（Obsidian のノートの編集など）は発言も答えも入れない（後の質問で Claude に渡るため、T-1702）
+        if getattr(outcome, "private", False):
+            continue
         if not (outcome.skill == "knowledge-capture" and outcome.method == "rule"):
             ctx.history.append(Turn(Speaker.OWNER, user_input))
             if outcome.ok and outcome.error is None:

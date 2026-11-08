@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import unicodedata
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
@@ -19,7 +20,8 @@ import config
 import registry
 
 GIT_BUSY_MARKERS = ["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD", "index.lock"]
-PROTECTED_TOP_DIRS = {".git", ".obsidian", ".trash"}
+PROTECTED_TOP_DIRS = {".git", ".obsidian", ".trash"}   # どの階層にあっても書かない・一覧に出さない（T-1702）
+WRITABLE_SUFFIX = ".md"                                  # 作成・変更・削除は Markdown だけ（T-1702）
 
 
 class VaultError(Exception):
@@ -56,15 +58,50 @@ def check_ready(vault: Path) -> None:
         raise VaultError(f"Vault で Git の操作中のため書き込みません（{', '.join(busy)}）: {vault}")
 
 
+def _protected(parts) -> bool:
+    """パスのどこかの階層が .git・.obsidian・.trash か。macOS の通常のファイルシステムは大文字・小文字を区別しない
+    ため、各階層を NFC にしてから casefold して比べる（.OBSIDIAN も .obsidian の下を指す）。"""
+    return any(unicodedata.normalize("NFC", p).casefold() in PROTECTED_TOP_DIRS for p in parts)
+
+
 def target_path(vault: Path, relpath: str) -> Path:
-    """Vault 内の相対パスを絶対パスにする。Vault の外や .git などを指すパスは拒否する。"""
+    """Vault 内の相対パスを絶対パスにする。Vault の外や、どの階層でも .git・.obsidian・.trash の下を指すパス
+    （記号のリンクで入るものを含む）は拒否する。"""
     rel = PurePosixPath(relpath)
-    if rel.is_absolute() or ".." in rel.parts or not rel.parts or rel.parts[0] in PROTECTED_TOP_DIRS:
+    if rel.is_absolute() or ".." in rel.parts or not rel.parts or _protected(rel.parts):
         raise VaultError(f"書き込めないパスです: {relpath}")
     path = (vault / rel).resolve()
-    if vault.resolve() not in path.parents:
+    root = vault.resolve()
+    if root not in path.parents:
         raise VaultError(f"Vault の外を指すパスです: {relpath}")
+    if _protected(path.relative_to(root).parts):
+        raise VaultError(f"書き込めないパスです: {relpath}")
     return path
+
+
+def _writable_path(vault: Path, relpath: str) -> Path:
+    """書き込み（作成・変更・削除）の対象。target_path の条件に加え、Markdown だけを許す。"""
+    path = target_path(vault, relpath)
+    if path.suffix.lower() != WRITABLE_SUFFIX or PurePosixPath(relpath).suffix.lower() != WRITABLE_SUFFIX:
+        raise VaultError(f"Markdown（.md）以外には書き込みません: {relpath}")
+    return path
+
+
+def list_notes(resource_id: str) -> list[str]:
+    """Vault の中の Markdown の相対パス（POSIX 形式・NFC・昇順）。.git・.obsidian・.trash の下（どの階層でも）と、
+    記号のリンクで Vault の外・保護の場所を指すものは含めない。"""
+    vault = resolve_vault(resource_id)
+    root = vault.resolve()
+    notes = []
+    for path in vault.rglob("*.md"):
+        rel = path.relative_to(vault)
+        if _protected(rel.parts) or not path.is_file():
+            continue
+        real = path.resolve()
+        if root not in real.parents or _protected(real.relative_to(root).parts):
+            continue
+        notes.append(unicodedata.normalize("NFC", rel.as_posix()))
+    return sorted(notes)
 
 
 def has_uncommitted_changes(vault: Path, path: Path) -> bool:
@@ -96,7 +133,7 @@ def create_file(resource_id: str, relpath: str, content: str, number_if_exists: 
     """新しいファイルを作る。既存ファイルは上書きしない（number_if_exists なら _2, _3 … を付ける）。"""
     vault = resolve_vault(resource_id)
     check_ready(vault)
-    base = target_path(vault, relpath)
+    base = _writable_path(vault, relpath)
     base.parent.mkdir(parents=True, exist_ok=True)
     tmp = _write_temp(content)
     try:
@@ -135,7 +172,7 @@ def modify_file(resource_id: str, relpath: str, new_content: str, expected_diges
     """既存ファイルを置き換える。未コミットの変更がある、または読み込み後に変わっていたら中止する。"""
     vault = resolve_vault(resource_id)
     check_ready(vault)
-    path = target_path(vault, relpath)
+    path = _writable_path(vault, relpath)
     if not path.is_file():
         raise FileNotFoundError(f"見つかりません: {relpath}")
     if has_uncommitted_changes(vault, path):
@@ -148,6 +185,45 @@ def modify_file(resource_id: str, relpath: str, new_content: str, expected_diges
         check_ready(vault)
         if digest(path.read_text(encoding="utf-8")) != expected_digest:  # 置き換え直前にもう一度確認
             raise VaultError(f"{relpath} は読み込み後に変更されています。読み込み直してから再実行してください。")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return path
+
+
+def delete_file(resource_id: str, relpath: str, expected_digest: str) -> Path:
+    """既存のファイルを削除する（T-1702）。modify_file と同じ確認（Git の状態・パス・未同期の変更・読み込み後の変更、
+    削除の直前にもう一度）をし、変更前のファイルを残してから消す。バックアップのパスを返す。"""
+    vault = resolve_vault(resource_id)
+    check_ready(vault)
+    path = _writable_path(vault, relpath)
+    if not path.is_file():
+        raise FileNotFoundError(f"見つかりません: {relpath}")
+    if has_uncommitted_changes(vault, path):
+        raise VaultError(f"{relpath} に未同期の変更があるため削除しません。Obsidian Git の同期後に再実行してください。")
+    if digest(path.read_text(encoding="utf-8")) != expected_digest:
+        raise VaultError(f"{relpath} は読み込み後に変更されています。読み込み直してから再実行してください。")
+    backup = _backup(resource_id, path)
+    check_ready(vault)
+    if digest(path.read_text(encoding="utf-8")) != expected_digest:  # 削除の直前にもう一度確認
+        raise VaultError(f"{relpath} は読み込み後に変更されています。読み込み直してから再実行してください。")
+    path.unlink()
+    return backup
+
+
+def restore_file(resource_id: str, relpath: str, content: str, expected_digest: str) -> Path:
+    """書いた直後のファイルを、書く前の内容に戻す（T-1702。書いた後の DB の更新に失敗したとき）。
+    今の内容が expected_digest（自分が書いた内容）のときだけ置き換える。書いた直後なので未同期の変更は確かめない
+    （自分の書き込みが未同期の変更になっているため）。ほかの端末で変わっていたら VaultError で戻さない。"""
+    vault = resolve_vault(resource_id)
+    check_ready(vault)
+    path = _writable_path(vault, relpath)
+    if not path.is_file() or digest(path.read_text(encoding="utf-8")) != expected_digest:
+        raise VaultError(f"{relpath} は書いた後に変更されたため、元に戻していません。")
+    tmp = _write_temp(content)
+    try:
+        if digest(path.read_text(encoding="utf-8")) != expected_digest:
+            raise VaultError(f"{relpath} は書いた後に変更されたため、元に戻していません。")
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)

@@ -352,7 +352,7 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float, allowed_ho
             self._json(200, {"ok": True})
 
         def _approve(self, q, body: bytes):
-            """画面での承認 {"turn", "id", "decision": run|decline}（T-1504、BV-09）。待っている要求と ID・発言の番号が
+            """画面での承認 {"turn", "id", "decision": run|decline, "text"（2 段目の確認の語、任意）}（T-1504、BV-09、T-1702）。待っている要求と ID・発言の番号が
             一致し、期限内のときだけ 200。違う・期限切れ・使用済み・会話が違うなら 409（何も実行しない）。"""
             session = sessions.get(q.get("session"))
             if session is None:
@@ -364,10 +364,12 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float, allowed_ho
             if not isinstance(data, dict):
                 return self._json(400, {"error": "bad_json"})
             turn, approval_id, decision = data.get("turn"), data.get("id"), data.get("decision")
+            text = data.get("text")           # 2 段目の確認で入力した語（T-1702。照合は session、記録しない）
             if (not isinstance(turn, int) or isinstance(turn, bool) or not isinstance(approval_id, str)
-                    or not 0 < len(approval_id) <= 64 or decision not in ("run", "decline")):
+                    or not 0 < len(approval_id) <= 64 or decision not in ("run", "decline")
+                    or (text is not None and not isinstance(text, str))):
                 return self._json(400, {"error": "bad_request"})
-            if session.approve(turn, approval_id, decision) != "ok":
+            if session.approve(turn, approval_id, decision, text) != "ok":
                 return self._json(409, {"error": "stale_approval"})
             self._json(200, {"ok": True})
 
