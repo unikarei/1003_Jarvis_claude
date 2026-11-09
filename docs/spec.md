@@ -119,6 +119,7 @@
 - 受け入れ条件:
   - `ingest_obsidian.py` 実行で、対象ノート分のSource・Knowledgeが作られる
   - 再実行してもURL重複により新規ノードが増えない
+- **毎日の定期の取り込み**（T-1801、統合ワークスペースの spec §3.3.13・ADR-0034、2026-11-10 Owner 承認）: launchd の `com.ohide.jarvis.ingest-obsidian`（`scripts/launchd/`）が毎日 05:45 に `ingest_obsidian.py --scheduled` を動かす。Vault ごとに新規・更新・消えたノートの件数をログ（`~/Library/Logs/jarvis/ingest-obsidian.log`）に出す（本文は出さない）。Vault から消えたノートの知識は消さず、相対パスを記録するだけ。読めない Vault は飛ばしてほかを続け、終了コード 1 と Mac の通知センター（`discovery.notify.notify_failure`）で知らせる
   - `ask.py` で大洗の物件・設備等について質問すると、該当ノートの内容と出典URL（GitHub上のノートへのリンク）付きで回答される
 
 - 2026-10（T-202）: 取り込みは GitHub API ではなく Mac mini のローカルの Vault を読む（`../docs/decisions.md` ADR-0016）。対象に汎用 Vault `jarvis-knowledge`（`_jarvis/` を除く）を加えた。ノードの URL は従来の GitHub の blob URL と同じ形を保つ

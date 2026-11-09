@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Obsidian の Vault の毎日の取り込み（T-1801、統合ワークスペースの spec §3.3.13・ADR-0034、2026-11-10 Owner 承認）。
+     06:00 のニュース・06:30 のスナップショットより前に動かす。登録:
+     cp scripts/launchd/com.ohide.jarvis.ingest-obsidian.plist ~/Library/LaunchAgents/
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ohide.jarvis.ingest-obsidian.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.ohide.jarvis.ingest-obsidian</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/ohide/work/0002_Jarvis2/1003_Jarvis_claude/.venv/bin/python</string>
+    <string>/Users/ohide/work/0002_Jarvis2/1003_Jarvis_claude/ingest_obsidian.py</string>
+    <string>--scheduled</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/ohide/work/0002_Jarvis2/1003_Jarvis_claude</string>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>5</integer><key>Minute</key><integer>45</integer></dict>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/Users/ohide/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+  <key>StandardOutPath</key><string>/Users/ohide/Library/Logs/jarvis/ingest-obsidian.log</string>
+  <key>StandardErrorPath</key><string>/Users/ohide/Library/Logs/jarvis/ingest-obsidian.log</string>
+</dict>
+</plist>
