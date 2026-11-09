@@ -306,3 +306,9 @@ def delete_nodes(node_ids: list[str]) -> int:
             return conn.execute(f"DELETE FROM nodes WHERE id IN ({marks})", node_ids).rowcount
     finally:
         conn.close()
+
+
+def source_urls_with_prefix(prefix: str) -> list[str]:
+    """URL が prefix で始まる Source の URL（Obsidian の定期の取り込みで、消えたノートを探す。T-1801）。"""
+    return [r["url"] for r in _fetchall("SELECT url FROM nodes WHERE type = 'Source' AND substr(url, 1, ?) = ?",
+                                        (len(prefix), prefix))]

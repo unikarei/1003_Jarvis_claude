@@ -177,6 +177,10 @@ launchctl print gui/$(id -u)/com.ohide.jarvis.daily-news | grep -E "state|last e
 launchctl bootout gui/$(id -u)/com.ohide.jarvis.daily-news                                  # 登録解除
 ```
 
+### Obsidian の毎日の取り込み（T-1801）
+
+`com.ohide.jarvis.ingest-obsidian`（`scripts/launchd/com.ohide.jarvis.ingest-obsidian.plist`）で毎日 5:45 に `.venv/bin/python ingest_obsidian.py --scheduled` を実行し、Obsidian に書いたノートを Jarvis の知識に取り込む（新規・変わったノートだけ。消えたノートは記録だけで知識は消さない）。ログは `~/Library/Logs/jarvis/ingest-obsidian.log`。登録・確認は上と同じ `launchctl` の手順（ラベルを読み替える）。
+
 ## 定期実行（タスクスケジューラ、Windows。2026-10-11 に停止済み）
 
 `config.py` はすべてのパスを `__file__` 基準で解決するため、作業ディレクトリに依存しない。PowerShellで以下を実行してタスクを登録する（`python.exe`のパスは環境に合わせて変更）。

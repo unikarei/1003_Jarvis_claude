@@ -7,14 +7,19 @@ Vault の場所は Architecture Registry から得る（registry.py）。Vault �
 - vault-oarai-obsidian: `民泊@大洗/` の下（カテゴリ minpaku）
 - vault-jarvis-knowledge: Vault 全体。ただし `_jarvis/`（CKC が保存した知識は保存時にナレッジグラフへ登録済み）は除く
 
+毎日 05:45 に launchd（`com.ohide.jarvis.ingest-obsidian`）が `--scheduled` で動かす（T-1801、統合ワークスペースの spec §3.3.13）。
+
 ノードの URL は従来の GitHub の blob URL と同じ形にする（既存のノードと重複させないため）。ファイル名は NFC に正規化する。
 """
 
+import sys
 import unicodedata
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-from db import find_knowledge_by_url, find_source_by_url, insert_edge, insert_node, update_node_content
+from db import find_knowledge_by_url, find_source_by_url, insert_edge, insert_node, source_urls_with_prefix, \
+    update_node_content
 from vault import VaultError, resolve_vault
 
 BRANCH = "main"
@@ -100,7 +105,47 @@ def ingest_all() -> dict[str, list[str]]:
     return result
 
 
+def missing_notes(source: VaultSource, vault_dir: Path) -> list[str]:
+    """取り込み済みなのに、今の Vault の取り込みの範囲にないノートの相対パス（消えた・移動した・範囲の外に出た）。
+    知識は消さない（データの削除は Owner の判断、spec §3.3.13）。"""
+    prefix = f"https://github.com/{source.repo}/blob/{BRANCH}/"
+    present = set(list_notes(source, vault_dir))
+    return sorted(url[len(prefix):] for url in source_urls_with_prefix(prefix) if url[len(prefix):] not in present)
+
+
+JOB_NAME = "Obsidian の取り込み"
+
+
+def run_scheduled(sources: list[VaultSource] | None = None, notify=None, out=print) -> int:
+    """毎日の定期の取り込み（launchd の com.ohide.jarvis.ingest-obsidian、T-1801、spec §3.3.13）。
+    Vault ごとに取り込み、新規・更新・消えたノートの件数（と消えたノートの相対パス）だけを出す（本文は出さない）。
+    読めない Vault・失敗した Vault は飛ばしてほかを続け、最後に失敗を通知して 1 を返す。すべて成功なら 0。"""
+    if notify is None:
+        from discovery.notify import notify_failure as notify
+    stamp = datetime.now().isoformat(timespec="seconds")
+    failed = []
+    for source in sources if sources is not None else SOURCES:
+        try:
+            vault_dir = resolve_vault(source.resource_id)
+            result = ingest_vault(source)
+            gone = missing_notes(source, vault_dir)
+        except Exception as e:  # noqa: BLE001  1 つの Vault の失敗で、ほかの Vault を止めない
+            failed.append(f"{source.resource_id}: {type(e).__name__}")
+            out(f"{stamp} {source.resource_id} 失敗: {type(e).__name__}: {str(e)[:200]}")
+            continue
+        out(f"{stamp} {source.resource_id} 新規 {len(result['created'])} 件・更新 {len(result['updated'])} 件・"
+            f"消えたノート {len(gone)} 件")
+        for rel in gone:
+            out(f"{stamp} {source.resource_id}   消えたノート（知識は残しています）: {rel}")
+    if failed:
+        notify(JOB_NAME, "、".join(failed))
+        return 1
+    return 0
+
+
 if __name__ == "__main__":
+    if "--scheduled" in sys.argv[1:]:
+        sys.exit(run_scheduled())
     result = ingest_all()
     print(f"新規Knowledge: {len(result['created'])}件 / 更新: {len(result['updated'])}件")
     for kid in result["created"]:

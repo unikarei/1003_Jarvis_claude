@@ -323,3 +323,7 @@
 ## 会話からの Obsidian のノートの編集（`../docs/tasks.md` T-1702、spec 4-6）
 
 - [x] スキル `obsidian-note`（`obsidian_note.py`）: 聞き返し・確認（削除と全体の書き直しは 2 段）・追加／作成／書き直し／削除、`requires_any` の振り分け・途中の依頼、`vault.py` の守りの強化・`list_notes`・`delete_file`、削除した知識の後始末、CKC のノートの本文の更新、書いた後の取り込み直し、声の会話とブラウザ（2 段目は入力欄の語をサーバーで照合）。jarvis-skills の宣言は T-1703
+
+## Obsidian の毎日の取り込み（`../docs/tasks.md` T-1801、spec 4-5）
+
+- [x] `ingest_obsidian.py --scheduled`（件数のログ・消えたノートの記録・失敗の通知と終了コード）と launchd の plist（毎日 05:45）。本番の登録は Owner のマージの後
