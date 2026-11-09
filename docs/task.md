@@ -327,3 +327,7 @@
 ## Obsidian の毎日の取り込み（`../docs/tasks.md` T-1801、spec 4-5）
 
 - [x] `ingest_obsidian.py --scheduled`（件数のログ・消えたノートの記録・失敗の通知と終了コード）と launchd の plist（毎日 05:45）。本番の登録は Owner のマージの後
+
+## ブラウザでの声の会話でのナレッジ化（`../docs/tasks.md` T-1802）
+
+- [x] 候補を 1 件ずつ画面の「保存する」「保存しない」「あとで」で確認（`ckc.review.decide_each`・`chat_actions.run_ckc_with_cards`・`orchestrator.Context.review`・`WebSession._review`、承認の `choices: "review"`・decision `later`）

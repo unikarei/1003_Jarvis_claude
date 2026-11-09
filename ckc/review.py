@@ -150,3 +150,49 @@ def _projects(answer: str) -> list[str] | None:
     if answer == "-":
         return []
     return [p.strip() for p in answer.split(",") if p.strip()]
+
+
+SAVE, REJECT, LATER, STOP = "save", "reject", "later", "stop"
+
+
+def card_text(c: Candidate, index: int, total: int) -> str:
+    """画面で 1 件ずつ答えるときの表示（ブラウザでの声の会話、T-1802）。似た既存の知識は題名で示す。"""
+    lines = [f"知識の候補 {index}/{total}: {c.title}",
+             f"種類: {KIND_LABELS[c.kind]}（{c.kind.value}） / プロジェクト: {', '.join(c.projects) or '-'}"
+             f" / 保存先: {vault_display_name(c.resource_id)}", "", c.body]
+    if c.similar:
+        import db
+        titles = [(db.get_node(s) or {"title": s})["title"] for s in c.similar]
+        lines += ["", "似た既存の知識（置き換えは ckc_cli.py review で）: " + "、".join(titles)]
+    return "\n".join(lines)
+
+
+def decide_each(candidates: list[Candidate], decide: Callable[[Candidate, int, int], str],
+                gate: Callable[[], bool] | None = None) -> dict:
+    """候補を 1 件ずつ decide に聞き、「保存する」はその場で保存、「保存しない」は却下、それ以外は保存待ちのまま残す
+    （T-1802）。decide が STOP を返したら、残りはすべて保存待ち。gate があれば保存の直前に呼び、False なら保存しない
+    （ブラウザの承認を使い切る）。置き換え・修正はしない。{"saved", "rejected", "later", "failed"} の件数を返す。"""
+    counts = {"saved": 0, "rejected": 0, "later": 0, "failed": 0}
+    for i, c in enumerate(candidates):
+        choice = decide(c, i + 1, len(candidates))
+        if choice == SAVE:
+            if gate is not None and not gate():
+                counts["later"] += len(candidates) - i
+                break
+            try:
+                approve(c)
+                publish(c.candidate_id)
+            except (ReviewError, PublishError, store.StoreError, vault.VaultError, OSError):
+                counts["failed"] += 1      # 承認済みのまま残す（ckc_cli.py publish でやり直せる）
+                continue
+            counts["saved"] += 1
+        elif choice == REJECT:
+            reject(c)
+            counts["rejected"] += 1
+        elif choice == STOP:
+            counts["later"] += len(candidates) - i
+            break
+        else:
+            counts["later"] += 1
+    return counts
+

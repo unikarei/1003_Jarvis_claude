@@ -550,7 +550,7 @@
     if (!P.approvalShown(ev, turn, cut) || turnDone) return;
     clearApproval();
     const started = performance.now();
-    const a = { turn: ev.turn, id: ev.id, timer: null, input: ev.input === true };
+    const a = { turn: ev.turn, id: ev.id, timer: null, input: ev.input === true, review: ev.choices === "review" };
     approval = a;
     $("approval-text").textContent = ev.text;
     // 2 段目の確認（T-1702）: 「実行する」の代わりに入力欄と「送る」を出す。語の照合はサーバーが行う
@@ -562,6 +562,11 @@
     $("approve-word").disabled = !a.input;
     $("approve-send").disabled = !a.input;
     $("approve-decline").disabled = false;
+    // 知識の候補の確認（T-1802）: 「保存する」「保存しない」「あとで」
+    $("approve-run").textContent = a.review ? "保存する" : "実行する";
+    $("approve-decline").textContent = a.review ? "保存しない" : "実行しない";
+    $("approve-later").hidden = !a.review;
+    $("approve-later").disabled = !a.review;
     if (a.input) $("approve-word").focus();
     const tick = () => {
       $("approval-left").textContent = "残り " + P.secondsLeft(ev.expires_in, started, performance.now()) + " 秒";
@@ -581,6 +586,7 @@
     $("approve-decline").disabled = true;
     $("approve-send").disabled = true;
     $("approve-word").disabled = true;
+    $("approve-later").disabled = true;
     const body = { turn: a.turn, id: a.id, decision };
     if (a.input && decision === "run") body.text = $("approve-word").value;   // 入力した語は送るだけ（残さない）
     $("approve-word").value = "";
@@ -616,6 +622,10 @@
     $("approve-word").disabled = true;
     $("approve-send").hidden = true;
     $("approve-send").disabled = true;
+    $("approve-later").hidden = true;
+    $("approve-later").disabled = true;
+    $("approve-run").textContent = "実行する";
+    $("approve-decline").textContent = "実行しない";
   }
 
   // ------------------------------------------------------------ イベント
@@ -698,6 +708,7 @@
   $("approve-run").onclick = () => answerApproval("run");
   $("approve-decline").onclick = () => answerApproval("decline");
   $("approve-send").onclick = () => answerApproval("run");
+  $("approve-later").onclick = () => answerApproval("later");
   $("approve-word").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); answerApproval("run"); } });
   $("end").onclick = () => { status("会話を終えました", ""); end(true); };
   $("pause").onclick = () => {
