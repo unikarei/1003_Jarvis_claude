@@ -21,6 +21,7 @@ from typing import Callable
 import config
 import latency
 import llm
+import obsidian_note
 import skills
 import tuning
 
@@ -44,6 +45,19 @@ class Context:
     last_provider: str | None = None              # 直前の答えに使った LLM のプロバイダー（切り替えの記録、T-1403）
     terminal: bool = True                         # 端末で入力できる（ブラウザの会話は False、T-1504）
     before_run: Callable[[], bool] | None = None  # 承認の後、実行の直前に呼ぶ。False なら実行しない（ブラウザ、T-1504）
+    pending: "Pending | None" = None              # 途中の依頼（聞き返しの答えを待っているスキル、T-1702）
+    ask: Callable | None = None                   # 自分で確認するスキル（SELF_CONFIRM）にだけ渡す確認（T-1702）
+    active_skill: str | None = None               # 振り分けが決まってから終わるまでのスキル名（声の会話の割り込み、T-1702）
+    note_meta: dict | None = None                 # private な結果の記録に残す項目（op・vault・path・結果の短い文）
+
+
+@dataclass
+class Pending:
+    """途中の依頼（T-1702）。次の発言を、振り分けの前にこのスキルへ渡す。"""
+    skill: str
+    state: dict
+    updated: float                                # 最後に聞いた時刻（time.monotonic）
+    asks: dict = field(default_factory=dict)      # 項目ごとの聞いた回数
 
 
 @dataclass
@@ -63,6 +77,7 @@ class Outcome:
     seconds: float
     items: list[dict] = field(default_factory=list)
     error: str | None = None
+    private: bool = False      # 発言・答えを会話の履歴に入れず、記録には定型文だけを残す（T-1702）
 
 
 class SkillError(Exception):
@@ -88,9 +103,24 @@ def _rule_inputs(skill: skills.Skill, text: str, phrase: str) -> dict | None:
     return {required[0]: value} if value else None
 
 
+def _norm(text: str) -> str:
+    """requires_any を持つスキルの比べるための形（NFKC・英字の小文字化・空白の除去、T-1702）。"""
+    return obsidian_note.normalize(text)
+
+
 def route_by_rule(text: str, active: dict[str, skills.Skill]) -> Route | None:
-    """発言に含まれる最も長い発言の例のスキル。入力を作れなければ None。"""
-    matches = sorted(((len(p), p, s) for s in active.values() for p in s.phrases if p in text),
+    """発言に含まれる最も長い発言の例のスキル。入力を作れなければ None。
+    requires_any を持つスキルは、発言の例のどれかと requires_any のどれかの両方を含むときだけ当たり、
+    ほかのスキルの発言の例だけの一致より優先する（T-1702）。"""
+    norm = _norm(text)
+    strict = sorted(((len(p), p, s) for s in active.values() if s.requires_any for p in s.phrases
+                     if _norm(p) in norm and any(_norm(w) in norm for w in s.requires_any)),
+                    key=lambda m: m[0], reverse=True)
+    for _, phrase, skill in strict:
+        inputs = _rule_inputs(skill, text, phrase)
+        if inputs is not None:
+            return Route(skill.name, inputs, "rule")
+    matches = sorted(((len(p), p, s) for s in active.values() if not s.requires_any for p in s.phrases if p in text),
                      key=lambda m: m[0], reverse=True)
     for _, phrase, skill in matches:
         inputs = _rule_inputs(skill, text, phrase)
@@ -253,6 +283,10 @@ def route(text: str, ctx: Context, use_llm: bool | None = None) -> Route:
     どれにも当たらなければ、ナレッジの質問は knowledge-answer、それ以外は general-chat。索引に general-chat が
     なければ従来どおり knowledge-answer。"""
     use_llm = config.ROUTE_WITH_LLM if use_llm is None else use_llm
+    if obsidian_note.matches(text):
+        # コードの判定を正とする: 索引の宣言の有無・中身によらず、ほかのスキル・LLM に渡さない（T-1702）。
+        # 索引で使えなければ execute が定型文を返す
+        return Route(OBSIDIAN_SKILL, {}, "rule")
     active = skills.active()
     found = route_by_rule(text, active) or (route_by_llm(text, llm_candidates(active), ctx) if use_llm else None)
     if found:
@@ -538,12 +572,26 @@ def _code(inputs, ctx, text):
     return run_code_task(inputs.get("task") or text), []
 
 
+OBSIDIAN_SKILL = obsidian_note.SKILL
+
+
+def _obsidian(inputs, ctx, text):
+    """会話からの Obsidian のノートの編集（T-1702）。途中の依頼があれば、その答えとして扱う。"""
+    pending = ctx.pending if ctx.pending is not None and ctx.pending.skill == OBSIDIAN_SKILL else None
+    ctx.pending = None
+    result = obsidian_note.run(text, ctx, pending.state if pending else None, pending.asks if pending else None)
+    if result.state is not None:
+        ctx.pending = Pending(OBSIDIAN_SKILL, result.state, clock(), result.asks)
+    ctx.note_meta = result.meta
+    return result.message, []
+
+
 # スキル名 → 1003 の関数（inputs, ctx, 発言）→ (表示する文章, 文脈に覚える知識)
 HANDLERS: dict[str, Callable] = {
     "knowledge-answer": _answer, "general-chat": _chat, "knowledge-search": _search, "knowledge-trace": _trace,
     "knowledge-audit": _audit, "knowledge-stats": _stats, "system-status": _system_status, "dev-board": _dev_board,
     "improvement-review": _improvement, "control-center": _control_center,
-    "knowledge-capture": _capture, "theme-register": _theme, "code-task": _code,
+    "knowledge-capture": _capture, "theme-register": _theme, "code-task": _code, OBSIDIAN_SKILL: _obsidian,
 }
 
 
@@ -555,7 +603,13 @@ FLOOR = {
     "theme-register": ("local_write", True, True),
     "control-center": ("local_write", True, False),
     "code-task": ("read", True, False),          # OpenAI API（従量課金）に発言を送る（F-1）
+    OBSIDIAN_SKILL: ("local_write", True, True),  # Vault のノートの追加・作成・書き直し・削除（T-1702）
 }
+# 一般の確認（confirm_text）をせず、書き込みの直前に自分で確認するスキル。local_write で確認が必須のものだけ（T-1702）
+SELF_CONFIRM = {OBSIDIAN_SKILL}
+# 発言・答えを会話の履歴に入れず、記録には定型文だけを残すスキル（T-1702）
+PRIVATE_SKILLS = {OBSIDIAN_SKILL}
+clock = time.monotonic       # 途中の依頼の期限の時計（テストで差し替える）
 _RANK = {"read": 0, "local_write": 1, "external": 2}
 
 
@@ -614,11 +668,22 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
     """権限を確かめてスキルを実行する。例外は Outcome（ok=False）にして返す。"""
     started = time.monotonic()
 
+    private = r.skill in PRIVATE_SKILLS
+
     def done(msg, ok=True, items=None, error=None):
-        return Outcome(r.skill, r.method, r.inputs, msg, ok, round(time.monotonic() - started, 2), items or [], error)
+        inputs = r.inputs
+        if private:
+            meta = ctx.note_meta or {}
+            inputs = {k: meta.get(k) for k in ("op", "vault", "path", "result")}
+            ctx.note_meta = None
+        return Outcome(r.skill, r.method, inputs, msg, ok, round(time.monotonic() - started, 2), items or [], error,
+                       private)
 
     skill = skills.active().get(r.skill)
     if skill is None:
+        if r.skill == OBSIDIAN_SKILL:
+            ctx.pending = None
+            return done(obsidian_note.UNAVAILABLE_TEXT, ok=False, error="inactive")
         return done(f"スキル {r.skill} は使えません（索引にないか、有効ではありません）。", ok=False, error="inactive")
     handler = HANDLERS.get(skill.name)
     if handler is None or skill.entry.get("repo") != "repo-1003-jarvis-claude":
@@ -627,6 +692,8 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
     if perm == "external":
         return done(f"スキル {skill.name} は外部への書き込みを含むため、会話からは実行しません。", ok=False,
                     error="external")
+    if skill.name in SELF_CONFIRM and perm == "local_write" and needs_confirm:
+        return _execute_self_confirm(handler, r, ctx, text, ask, done)
     if needs_confirm and _interactive(skill.name) and not ctx.terminal:
         # 承認の後もキーボードで候補ごとの承認・修正を求めるため、端末のない会話では確認を求めずに実行しない（T-1504）
         return done(NEEDS_TERMINAL_TEXT, ok=True, items=ctx.items, error="needs_terminal")
@@ -652,14 +719,55 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
     return done(message, items=items)
 
 
+def _execute_self_confirm(handler, r: Route, ctx: Context, text: str, ask, done) -> Outcome:
+    """自分で確認するスキル（SELF_CONFIRM）。一般の確認・実行の前の gate はせず、呼び出し元の ask（None のことも
+    ある。input を既定にしない）を ctx.ask に入れてハンドラを呼ぶ。対話で入力を待つので打ち切らない。
+    例外の文（パス・本文を含みうる）は結果に入れない（T-1702）。"""
+    ctx.ask = ask
+    try:
+        message, items = handler(r.inputs, ctx, text)
+    except Exception as e:   # スキルの失敗で対話を止めない
+        ctx.pending = None
+        return done(f"[エラー] {r.skill}: {type(e).__name__}", ok=False, error=type(e).__name__)
+    finally:
+        ctx.ask = None
+    return done(message, items=items)
+
+
+def _pending_outcome(r: Route, text: str, error: str) -> Outcome:
+    return Outcome(r.skill, r.method, {"op": None, "vault": None, "path": None, "result": text}, text, True, 0.0, [],
+                   error, r.skill in PRIVATE_SKILLS)
+
+
 def handle(text: str, ctx: Context, ask: Callable[[str], str] | None = None, use_llm: bool | None = None) -> Outcome:
-    """発言を振り分けて実行し、文脈を更新する。"""
+    """発言を振り分けて実行し、文脈を更新する。途中の依頼があれば、振り分けの前にそのスキルへ渡す（T-1702）。"""
     ctx.shown = ""
     ctx.last_provider = None
-    r = route(text, ctx, use_llm=use_llm)
-    latency.mark("route")
-    latency.set("skill", r.skill)
-    outcome = execute(r, ctx, text, ask)
+    pending = ctx.pending
+    if pending is not None:
+        r = Route(pending.skill, {}, "pending")
+        latency.mark("route")
+        latency.set("skill", r.skill)
+        if clock() - pending.updated > obsidian_note.PENDING_SECONDS:
+            # 聞き返しへの答え（ノートに書く内容）かもしれないので、どのスキル・LLM にも渡さない
+            ctx.pending = None
+            return _finish_handle(ctx, r, _pending_outcome(r, obsidian_note.TIMEOUT_TEXT, "timeout"))
+        if obsidian_note.is_cancel(text):
+            ctx.pending = None
+            return _finish_handle(ctx, r, _pending_outcome(r, obsidian_note.CANCELLED_TEXT, "cancelled"))
+    else:
+        r = route(text, ctx, use_llm=use_llm)
+        latency.mark("route")
+        latency.set("skill", r.skill)
+    ctx.active_skill = r.skill
+    try:
+        outcome = execute(r, ctx, text, ask)
+    finally:
+        ctx.active_skill = None
+    return _finish_handle(ctx, r, outcome)
+
+
+def _finish_handle(ctx: Context, r: Route, outcome: Outcome) -> Outcome:
     latency.set("ok", outcome.ok)
     latency.mark("done")
     if outcome.ok and outcome.items is not None and outcome.error != "declined":

@@ -53,6 +53,21 @@ def record(text: str, outcome) -> str:
     from ckc.secrets import mask_secrets   # 発言や結果に貼られた秘密情報を記録に残さない（FR-014 F-4）
 
     agent = CODE_AGENT_NAME if outcome.skill == "code-task" else ORCHESTRATOR_AGENT_NAME
+    if getattr(outcome, "private", False):
+        # 発言・ノートの本文を残さない（T-1702）: 題名は「スキル名: 操作」、本文は結果の短い定型文、
+        # 入力は操作・Vault・パスだけ
+        given = outcome.inputs or {}
+        inputs = {k: given.get(k) for k in ("op", "vault", "path")}
+        title = f"{outcome.skill}: {given.get('op') or '-'}"
+        content = given.get("result") or ("終わりました" if outcome.ok else "できませんでした")
+        if not isinstance(content, str) or len(content) > 80:
+            content = "終わりました" if outcome.ok else "できませんでした"
+        task_id = insert_node(node_type="Task", title=title, content=mask_secrets(content), meta={
+            "skill": outcome.skill, "method": outcome.method, "ok": outcome.ok, "error": outcome.error,
+            "seconds": outcome.seconds, "inputs": inputs, "private": True})
+        insert_edge(task_id, skill_node(outcome.skill), "uses")
+        insert_edge(task_id, get_or_create_agent(agent), "executed_by")
+        return task_id
     inputs = {k: mask_secrets(v) if isinstance(v, str) else v for k, v in outcome.inputs.items()}
     task_id = insert_node(node_type="Task", title=mask_secrets(text), content=mask_secrets(outcome.text), meta={
         "skill": outcome.skill, "method": outcome.method, "ok": outcome.ok, "error": outcome.error,

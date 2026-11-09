@@ -181,6 +181,20 @@ class Cancelled(Exception):
 
 
 INTERRUPTED_MARK = "（ここで Owner が割り込み）"
+CONFIRM_SPOKEN = "書き込みがあります。キーボードで確認してください。"
+OBSIDIAN_SKILL = orchestrator.OBSIDIAN_SKILL
+
+
+def obsidian_busy(ctx, outcome, text: str | None = None) -> bool:
+    """割り込まれた発言が Obsidian のノートの編集の途中か（T-1702）: 途中の依頼がある・処理中・結果がこのスキル。
+    振り分けの前（active_skill がまだない）でも、このスキルは発言の文だけで最初に決まる（orchestrator.route）ので、
+    発言の文で判定する。"""
+    import obsidian_note
+    if ctx.pending is not None or ctx.active_skill == OBSIDIAN_SKILL:
+        return True
+    if outcome is not None:
+        return outcome.skill == OBSIDIAN_SKILL
+    return ctx.active_skill is None and text is not None and obsidian_note.matches(text)
 
 
 def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
@@ -210,7 +224,8 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
 
     def ask_for(turn: int):
         """発言 turn 専用の確認。割り込まれた（番号が進んだ）発言の確認は、何もせず「実行しない」にする。"""
-        def ask(prompt: str) -> str:
+        def ask(prompt: str, spoken: str | None = None, expect: str | None = None) -> str:
+            # spoken は読み上げる確認の要点（なければ決まった文）。expect（2 段目の語）はキーボードでは使わない
             if turn != speaker.turn:          # 割り込まれた発言の確認は、何も触らずに「実行しない」
                 return "n"
             # ロックの順番は「割り込みの判定 → 読み上げ」（マイクの側と同じ）。読み上げのロックを持ったまま
@@ -221,7 +236,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
                     return "n"
                 state["asking"] = True
                 speaker.stop()
-                speaker.say("書き込みがあります。キーボードで確認してください。", turn=turn)
+                speaker.say(spoken or CONFIRM_SPOKEN, turn=turn)
                 print(prompt, end="", flush=True)
             try:
                 return keys.get()
@@ -305,6 +320,22 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
             timing = (f"、話し始めから停止まで約 {ev['detect_ms'] + ev['stop_call_ms'] + ev['output_ms']:.0f} ms"
                       f"（検出 {ev['detect_ms']}・停止の指示 {ev['stop_call_ms']}・出力 {ev['output_ms']}）") if ev else ""
             print(f"\n（割り込み: 読み上げを止めました{timing}）")
+            if obsidian_busy(ctx, result.get("outcome"), text):
+                # Obsidian のノートの編集の途中: 処理を待ってから次の発言を扱う（文脈を作り直さず、途中の依頼を
+                # 次の発言に使う）。確認の後の書き込みは取り消さず、結果の文を出して読み上げる。履歴には入れない
+                worker.join()
+                state["latency"] = None
+                latency.finish(lat, ok=False)
+                out = result.get("outcome")
+                if out is not None:
+                    _record(text, out)
+                    if not finished:
+                        print(f"\nJARVIS > {out.text}\n")
+                        speaker.say(speech_summary(out.skill, out.text))
+                        while speaker.speaking():
+                            time.sleep(0.02)
+                from_barge = True
+                continue
             worker.join(timeout=10)            # 生成は取り消しの確認（0.1 秒ごと）で止まる
             state["latency"] = None
             latency.finish(lat, ok=False)      # 割り込まれた発言
@@ -313,6 +344,9 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
                 ctx = orchestrator.Context(voice=True, history=list(ctx.history))
             if "outcome" in result:
                 _record(text, result["outcome"])
+                if getattr(result["outcome"], "private", False):
+                    from_barge = True
+                    continue
             ctx.history.append(Turn(Who.OWNER, text))
             if heard:                         # 聞いた文だけを履歴に残す
                 ctx.history.append(Turn(Who.AI, "".join(heard) + INTERRUPTED_MARK))
@@ -323,7 +357,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
         state["latency"] = None
         latency.finish(lat)                             # 読み上げの後（最初の声の時刻が入ってから）保存する
         _record(text, outcome)
-        if not (outcome.skill == "knowledge-capture" and outcome.method == "rule"):
+        if not getattr(outcome, "private", False) and not (outcome.skill == "knowledge-capture" and outcome.method == "rule"):
             ctx.history.append(Turn(Who.OWNER, text))
             heard = "".join(speaker.heard(turn))         # 読み上げた文だけ（表示だけの出典・一覧の残りは入れない）
             if outcome.ok and outcome.error is None and heard:
@@ -490,9 +524,9 @@ def _main(listen, transcribe, speaker, push_to_talk, keys, barge_in, launcher) -
         print(chunk, end="", flush=True)
         speaker.feed(chunk)
 
-    def ask(prompt: str) -> str:
+    def ask(prompt: str, spoken: str | None = None, expect: str | None = None) -> str:
         speaker.stop()
-        speaker.say("書き込みがあります。キーボードで確認してください。")
+        speaker.say(spoken or CONFIRM_SPOKEN)
         print(prompt, end="", flush=True)
         return keys.get()
 
@@ -577,7 +611,7 @@ def _main(listen, transcribe, speaker, push_to_talk, keys, barge_in, launcher) -
             record(text, outcome)
         except Exception as e:  # 記録の失敗で会話を止めない
             print(f"[記録できませんでした] {type(e).__name__}: {e}")
-        if not (outcome.skill == "knowledge-capture" and outcome.method == "rule"):
+        if not getattr(outcome, "private", False) and not (outcome.skill == "knowledge-capture" and outcome.method == "rule"):
             ctx.history.append(Turn(Who.OWNER, text))
             if outcome.ok and outcome.error is None:
                 ctx.history.append(Turn(Who.AI, outcome.text))

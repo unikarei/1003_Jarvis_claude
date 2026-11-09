@@ -550,18 +550,27 @@
     if (!P.approvalShown(ev, turn, cut) || turnDone) return;
     clearApproval();
     const started = performance.now();
-    const a = { turn: ev.turn, id: ev.id, timer: null };
+    const a = { turn: ev.turn, id: ev.id, timer: null, input: ev.input === true };
     approval = a;
     $("approval-text").textContent = ev.text;
-    $("approve-run").disabled = false;
+    // 2 段目の確認（T-1702）: 「実行する」の代わりに入力欄と「送る」を出す。語の照合はサーバーが行う
+    $("approve-run").hidden = a.input;
+    $("approve-word").hidden = !a.input;
+    $("approve-send").hidden = !a.input;
+    $("approve-word").value = "";
+    $("approve-run").disabled = a.input;
+    $("approve-word").disabled = !a.input;
+    $("approve-send").disabled = !a.input;
     $("approve-decline").disabled = false;
+    if (a.input) $("approve-word").focus();
     const tick = () => {
       $("approval-left").textContent = "残り " + P.secondsLeft(ev.expires_in, started, performance.now()) + " 秒";
     };
     tick();
     a.timer = setInterval(tick, 250);
     $("approval").hidden = false;
-    status("確認を待っています（画面のボタンで答えてください）", "busy");
+    status(a.input ? "確認を待っています（入力欄に入力して送ってください）" : "確認を待っています（画面のボタンで答えてください）",
+           "busy");
   }
 
   // 押したら 1 回だけ送り、ボタンを無効にする（結果は approval_done で出す）
@@ -570,8 +579,13 @@
     if (!a || !session) return;
     $("approve-run").disabled = true;
     $("approve-decline").disabled = true;
+    $("approve-send").disabled = true;
+    $("approve-word").disabled = true;
+    const body = { turn: a.turn, id: a.id, decision };
+    if (a.input && decision === "run") body.text = $("approve-word").value;   // 入力した語は送るだけ（残さない）
+    $("approve-word").value = "";
     const sid = session;
-    post(q("/api/approve"), JSON.stringify({ turn: a.turn, id: a.id, decision }), { "Content-Type": "application/json" })
+    post(q("/api/approve"), JSON.stringify(body), { "Content-Type": "application/json" })
       .then(r => checked("approve", r, sid))   // 409（期限切れ・取り消し・使用済み）は何も実行しない
       .catch(() => lost(sid));
   }
@@ -596,6 +610,12 @@
     $("approval-left").textContent = "";
     $("approve-run").disabled = true;
     $("approve-decline").disabled = true;
+    $("approve-run").hidden = false;
+    $("approve-word").hidden = true;
+    $("approve-word").value = "";
+    $("approve-word").disabled = true;
+    $("approve-send").hidden = true;
+    $("approve-send").disabled = true;
   }
 
   // ------------------------------------------------------------ イベント
@@ -677,6 +697,8 @@
   $("start").onclick = start;
   $("approve-run").onclick = () => answerApproval("run");
   $("approve-decline").onclick = () => answerApproval("decline");
+  $("approve-send").onclick = () => answerApproval("run");
+  $("approve-word").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); answerApproval("run"); } });
   $("end").onclick = () => { status("会話を終えました", ""); end(true); };
   $("pause").onclick = () => {
     paused = !paused;

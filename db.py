@@ -263,3 +263,46 @@ def find_skill_by_title(title: str) -> sqlite3.Row | None:
         "SELECT * FROM nodes WHERE type = 'Skill' AND title LIKE ? ORDER BY created_at DESC LIMIT 1",
         (f"%{title}%",),
     )
+
+
+# ---------------------------------------------------------------- 会話からのノートの編集（T-1702）
+
+def find_knowledge_by_note(resource_id: str, relpath: str) -> list[sqlite3.Row]:
+    """CKC が保存したノート（meta の resource_id・note_relpath が一致する Knowledge）。"""
+    return _fetchall(
+        "SELECT * FROM nodes WHERE type = 'Knowledge' AND json_extract(meta, '$.resource_id') = ? "
+        "AND json_extract(meta, '$.note_relpath') = ?", (resource_id, relpath))
+
+
+def deletion_plan(knowledge_ids: list[str]) -> tuple[list[dict], list[dict]]:
+    """Knowledge を消すときに一緒に消す行。（nodes の行, edges の行）を dict で返す（バックアップに書く）。
+    Source は、消す Knowledge の根拠（derived_from）で、ほかの Knowledge から参照されていないものだけ。
+    エッジは、消すノードに付くもの（向きはどちらも）。"""
+    if not knowledge_ids:
+        return [], []
+    marks = ",".join("?" * len(knowledge_ids))
+    sources = [r["dst_id"] for r in _fetchall(
+        f"SELECT DISTINCT e.dst_id FROM edges e JOIN nodes n ON n.id = e.dst_id "
+        f"WHERE e.type = 'derived_from' AND n.type = 'Source' AND e.src_id IN ({marks}) "
+        f"AND NOT EXISTS (SELECT 1 FROM edges o WHERE o.type = 'derived_from' AND o.dst_id = e.dst_id "
+        f"AND o.src_id NOT IN ({marks}))", (*knowledge_ids, *knowledge_ids))]
+    ids = list(dict.fromkeys([*knowledge_ids, *sources]))
+    marks = ",".join("?" * len(ids))
+    nodes = [dict(r) for r in _fetchall(f"SELECT * FROM nodes WHERE id IN ({marks})", ids)]
+    edges = [dict(r) for r in _fetchall(
+        f"SELECT * FROM edges WHERE src_id IN ({marks}) OR dst_id IN ({marks})", (*ids, *ids))]
+    return nodes, edges
+
+
+def delete_nodes(node_ids: list[str]) -> int:
+    """ノードと、それに付くエッジを 1 つの取引で消す。消したノードの数を返す。失敗したら何も消さない（スキーマは変えない）。"""
+    if not node_ids:
+        return 0
+    marks = ",".join("?" * len(node_ids))
+    conn = get_connection()
+    try:
+        with conn:
+            conn.execute(f"DELETE FROM edges WHERE src_id IN ({marks}) OR dst_id IN ({marks})", (*node_ids, *node_ids))
+            return conn.execute(f"DELETE FROM nodes WHERE id IN ({marks})", node_ids).rowcount
+    finally:
+        conn.close()
