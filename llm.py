@@ -7,7 +7,9 @@ import http.client
 import json
 import os
 import queue
+import re
 import selectors
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -21,8 +23,8 @@ import anthropic
 
 import latency
 from agent_log import log_event
-from config import (ANTHROPIC_API_KEY, CHAT_MODEL, CLAUDE_BIN, CLAUDE_CLI_TIMEOUT_SECONDS, ESCALATION_MODEL,
-                    LLM_PROVIDER, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL, SUMMARY_MODEL)
+from config import (ANTHROPIC_API_KEY, CHAT_MODEL, CLAUDE_BIN, CLAUDE_CLI_TIMEOUT_SECONDS, CODEX_BIN, CODEX_MODEL,
+                    CODEX_REASONING, CODEX_TIMEOUT_SECONDS, ESCALATION_MODEL, LLM_PROVIDER, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL, SUMMARY_MODEL)
 
 MIN_VALID_LENGTH = 5  # これより短い応答は検証失敗（空応答・応答エラー等）とみなす
 
@@ -73,6 +75,39 @@ def ask_claude_tiered(
 
 class LLMError(Exception):
     """LLM の呼び出しに失敗した（CLI の異常終了、上限到達、タイムアウトなど）。別のプロバイダーには切り替えない。"""
+
+
+class LLMUnavailable(LLMError):
+    """しばらく使えない失敗（利用枠の上限・ログインしていない・コマンドがない）。reason は "limit"・"auth"・"missing"。
+    呼び出し側はこのプロバイダーを休止にできる（ADR-0035、../docs/spec.md §3.4.12 C）。"""
+
+    def __init__(self, message: str, reason: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+# 失敗の文から、しばらく使えない理由を判定する（Claude Code・Codex の英語のメッセージ。2026-11-11 に Codex の実際の文を確認）
+_LIMIT_PATTERN = re.compile(r"usage limit|rate limit|limit reached|hit your (?:usage )?limit|too many requests|"
+                            r"quota|credit balance|out of credits|429", re.I)
+_AUTH_PATTERN = re.compile(r"not logged in|please (?:log ?in|run .*login)|login required|unauthori[sz]ed|"
+                           r"authentication|invalid api key|401", re.I)
+
+
+def failure_reason(error: Exception) -> str | None:
+    """失敗が「しばらく使えない」ものなら理由（"limit"・"auth"・"missing"）を、一時的な失敗なら None を返す。"""
+    if isinstance(error, LLMCancelled):
+        return None
+    reason = getattr(error, "reason", None)
+    if reason:
+        return reason
+    text = str(error)
+    if "見つかりません" in text:
+        return "missing"
+    if _LIMIT_PATTERN.search(text):
+        return "limit"
+    if _AUTH_PATTERN.search(text):
+        return "auth"
+    return None
 
 
 # claude -p に渡さない環境変数。.env の ANTHROPIC_API_KEY などが見えると、Claude Code は Pro のサブスクリプションでは
@@ -159,13 +194,12 @@ _STREAM_OPTIONS = ["-p", "--tools", "", "--no-session-persistence", "--output-fo
                    "--verbose", "--include-partial-messages"]
 
 
-def _read_claude_stream(proc, on_text, deadline: float, timeout: int, cancel) -> dict | None:
-    """claude -p の stream-json を終わり（EOF）まで読み、差分を on_text に渡して result のイベントを返す。
+def _read_json_lines(proc, handle, deadline: float, timeout: int, cancel, label: str) -> None:
+    """子プロセスの標準出力の JSON の行を終わり（EOF）まで読み、1 行ずつ handle(event) に渡す。
     改行を待たずに読み、行ごとと 0.1 秒ごとに取り消しを、0.1 秒ごとに時間切れを確かめる。
     プロセスは止めない（呼び出し側で止める）。"""
     selector = selectors.DefaultSelector()
     selector.register(proc.stdout, selectors.EVENT_READ)
-    result = None
     fd = proc.stdout.fileno()
     os.set_blocking(fd, False)                 # 改行を待たずに読む（行の途中で止まっても取り消せる）
     decoder = codecs.getincrementaldecoder("utf-8")()
@@ -173,25 +207,21 @@ def _read_claude_stream(proc, on_text, deadline: float, timeout: int, cancel) ->
     try:
         while True:
             if cancel is not None and cancel():   # 一度に届いた複数の行の間でも確かめ、以後の差分を渡さない
-                raise LLMCancelled("取り消されました")   # 呼び出し側の finally で claude -p を止める
+                raise LLMCancelled("取り消されました")   # 呼び出し側の finally でプロセスを止める
             if lines:
                 line = lines.pop(0)
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if event.get("type") == "stream_event":
-                    delta = (event.get("event") or {}).get("delta") or {}
-                    if delta.get("type") == "text_delta" and delta.get("text"):
-                        on_text(delta["text"])
-                elif event.get("type") == "result":
-                    result = event
+                if isinstance(event, dict):
+                    handle(event)
                 continue
             if eof:
                 break
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise LLMError(f"Claude Code CLI が {timeout} 秒でタイムアウトしました")
+                raise LLMError(f"{label} が {timeout} 秒でタイムアウトしました")
             if not selector.select(timeout=min(remaining, 0.1)):
                 continue
             try:
@@ -209,7 +239,22 @@ def _read_claude_stream(proc, on_text, deadline: float, timeout: int, cancel) ->
             lines.extend(complete)
     finally:
         selector.close()
-    return result
+
+
+def _read_claude_stream(proc, on_text, deadline: float, timeout: int, cancel) -> dict | None:
+    """claude -p の stream-json を終わりまで読み、差分を on_text に渡して result のイベントを返す。"""
+    found = {}
+
+    def handle(event):
+        if event.get("type") == "stream_event":
+            delta = (event.get("event") or {}).get("delta") or {}
+            if delta.get("type") == "text_delta" and delta.get("text"):
+                on_text(delta["text"])
+        elif event.get("type") == "result":
+            found["result"] = event
+
+    _read_json_lines(proc, handle, deadline, timeout, cancel, "Claude Code CLI")
+    return found.get("result")
 
 
 def _claude_result_text(proc, result: dict | None) -> str:
@@ -544,7 +589,130 @@ def ollama_available(timeout: float = 1.0) -> bool:
     return bool(names & wanted)
 
 
-PROVIDERS.update({"ollama": _complete_ollama, "claude_warm": _complete_claude_warm})
+# --- Codex（"codex"、ADR-0035、T-2001） ---
+# codex exec を 1 回の答えごとに起動する。答えるだけにする（Claude の --tools "" と同じ扱い）: シェルを無効にし、
+# 読み取り専用・ユーザー設定（MCP など）を読まない・Web 検索なし・承認を求めない・空の一時フォルダ・セッションを保存しない。
+# それでもツールの実行のイベントが来たら止めて失敗にする。API キーは渡さず、ChatGPT のサブスクリプションのログインだけを使う。
+
+CODEX_BLOCKED_ENV = (*CLI_BLOCKED_ENV, "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_ORGANIZATION",
+                     "OPENAI_PROJECT", "CODEX_API_KEY")
+_CODEX_TOOL_ITEMS = {"command_execution", "file_change", "mcp_tool_call", "web_search", "patch_apply", "tool_call"}
+_CODEX_MESSAGE_ITEMS = {"agent_message", "assistant_message"}
+
+
+def find_codex_bin() -> str | None:
+    """JARVIS_CODEX_BIN → PATH → VS Code の拡張機能に同梱の版（最新）。開発オーケストレーターと同じ探し方。"""
+    if CODEX_BIN:
+        return CODEX_BIN if os.path.exists(CODEX_BIN) else None
+    found = shutil.which("codex")
+    if found:
+        return found
+    ext = os.path.join(os.path.expanduser("~"), ".vscode", "extensions")
+    try:
+        names = [n for n in os.listdir(ext) if n.startswith("openai.chatgpt-")]
+    except OSError:
+        return None
+    def version(name):
+        return [int(x) if x.isdigit() else x for x in re.split(r"[.-]", name)]
+    for name in sorted(names, key=version, reverse=True):
+        path = os.path.join(ext, name, "bin", "macos-aarch64", "codex")
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def _codex_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in CODEX_BLOCKED_ENV}
+
+
+def _codex_command(binary: str, workdir: str) -> list[str]:
+    cmd = [binary, "exec", "--json", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
+           "--ignore-user-config", "--disable", "shell_tool", "-c", 'web_search="disabled"',
+           "-c", 'approval_policy="never"', "-C", workdir]
+    if CODEX_REASONING:
+        cmd += ["-c", f'model_reasoning_effort="{CODEX_REASONING}"']
+    if CODEX_MODEL:
+        cmd += ["--model", CODEX_MODEL]
+    return [*cmd, "-"]                             # プロンプトは標準入力から
+
+
+def _codex_failure(message: str) -> LLMError:
+    message = (message or "").strip()[:500]
+    text = f"Codex がエラーを返しました: {message}"
+    reason = "limit" if _LIMIT_PATTERN.search(message) else "auth" if _AUTH_PATTERN.search(message) else None
+    return LLMUnavailable(text, reason) if reason else LLMError(text)
+
+
+def _stream_codex(prompt: str, on_text, timeout: int | None = None, cancel=None) -> str:
+    """codex exec --json の出力（1 行 1 つの JSON）を読み、答えの文の増えた分を on_text に渡し、最後に全文を返す。
+    途中の文のイベントがない版では、答えができた時点で全文を 1 回渡す。"""
+    timeout = timeout or CODEX_TIMEOUT_SECONDS
+    binary = find_codex_bin()
+    if not binary:
+        raise LLMUnavailable("Codex CLI が見つかりません（JARVIS_CODEX_BIN・PATH・VS Code の拡張機能）", "missing")
+    deadline = time.monotonic() + timeout
+    sent: dict[str, str] = {}                      # 答えの項目ごとに、渡し終えた文
+    state = {"answer": None, "done": False, "error": None}
+
+    def handle(event):
+        kind = event.get("type")
+        if kind in ("error", "turn.failed"):
+            error = event.get("error") if isinstance(event.get("error"), dict) else {}
+            state["error"] = state["error"] or event.get("message") or error.get("message") or "不明なエラー"
+            return
+        if kind == "turn.completed":
+            state["done"] = True
+            return
+        item = event.get("item") if isinstance(event.get("item"), dict) else None
+        if not item or not str(kind).startswith("item."):
+            return
+        if item.get("type") in _CODEX_TOOL_ITEMS:
+            raise LLMError(f"Codex がツール（{item.get('type')}）を使おうとしたため止めました")
+        if item.get("type") not in _CODEX_MESSAGE_ITEMS:
+            return
+        key = str(item.get("id") or "")
+        text = item.get("text") or ""
+        before = sent.get(key, "")
+        if text.startswith(before) and len(text) > len(before):
+            on_text(text[len(before):])
+            sent[key] = text
+        if kind == "item.completed":
+            state["answer"] = text
+
+    with tempfile.TemporaryDirectory(prefix="jarvis-codex-") as workdir:
+        try:
+            proc = subprocess.Popen(_codex_command(binary, workdir), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, cwd=workdir, env=_codex_env())
+        except FileNotFoundError:
+            raise LLMUnavailable(f"Codex CLI が見つかりません: {binary}", "missing") from None
+        latency.mark("llm_ready")
+        try:
+            try:
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+            except OSError:
+                pass                               # 起動直後に終わった。下で終了コードと出力から判断する
+            _read_json_lines(proc, handle, deadline, timeout, cancel, "Codex CLI")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait()
+        stderr = (proc.stderr.read() if proc.stderr else "").strip()
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except (OSError, AttributeError):
+                pass
+    if state["answer"] is not None and state["done"]:
+        return state["answer"]                     # 途中の一時的なエラー（再接続など）があっても、答えが届けば成功
+    raise _codex_failure(state["error"] or stderr or f"終了コード {proc.returncode}（答えを受け取れませんでした）")
+
+
+def _complete_codex(prompt: str, timeout: int | None = None) -> str:
+    return _stream_codex(prompt, lambda _text: None, timeout)
+
+
+PROVIDERS.update({"ollama": _complete_ollama, "claude_warm": _complete_claude_warm, "codex": _complete_codex})
 
 
 def complete_stream(prompt: str, on_text, provider: str | None = None, timeout: int | None = None,
@@ -558,6 +726,8 @@ def complete_stream(prompt: str, on_text, provider: str | None = None, timeout: 
         return _stream_claude_warm(prompt, on_text, timeout, cancel)
     if name == "ollama" and PROVIDERS.get(name) is _complete_ollama:
         return _stream_ollama(prompt, on_text, timeout, cancel)
+    if name == "codex" and PROVIDERS.get(name) is _complete_codex:
+        return _stream_codex(prompt, on_text, timeout, cancel)
     # 逐次出力のないプロバイダーは、生成の途中では取り消せない（前と後で確かめ、取り消されていれば結果を渡さない）
     if cancel is not None and cancel():
         raise LLMCancelled("取り消されました")

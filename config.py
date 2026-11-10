@@ -67,6 +67,15 @@ ESCALATION_MODEL = os.environ.get("JARVIS_ESCALATION_MODEL", "claude-sonnet-5-5"
 LLM_PROVIDER = os.environ.get("JARVIS_LLM_PROVIDER", "claude_cli")
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", str(Path.home() / ".local" / "bin" / "claude"))
 CLAUDE_CLI_TIMEOUT_SECONDS = int(os.environ.get("JARVIS_CLAUDE_CLI_TIMEOUT", "300"))
+# Codex（codex exec、ChatGPT のサブスクリプション。ADR-0035、../docs/spec.md §3.4.12）
+CODEX_BIN = os.environ.get("JARVIS_CODEX_BIN", "")          # 空なら PATH → VS Code の拡張機能に同梱の版を探す
+CODEX_MODEL = os.environ.get("JARVIS_CODEX_MODEL", "")      # 空なら Codex の既定
+CODEX_REASONING = os.environ.get("JARVIS_CODEX_REASONING", "low")
+CODEX_TIMEOUT_SECONDS = int(os.environ.get("JARVIS_CODEX_TIMEOUT", "300"))
+# 会話の LLM（ハーネス）の切り替え（ADR-0035、../docs/spec.md §3.4.12）
+HARNESS = os.environ.get("JARVIS_HARNESS", "auto").strip().lower() or "auto"           # auto・ollama・claude・codex
+HEAVY_HARNESS = os.environ.get("JARVIS_HEAVY_HARNESS", "codex").strip().lower() or "codex"   # おまかせの経路 B の最初
+HARNESS_COOLDOWN_MINUTES = float(os.environ.get("JARVIS_HARNESS_COOLDOWN_MIN", "30"))
 # 声の会話（voice_chat.py・python -m voice.web）のプロセスで claude -p に渡すモデル（2026-11-03 Owner 指示、
 # 最初の文字を速くする）。空にすると CLI の既定のモデル。chat.py・定期ジョブは CLI の既定のまま
 VOICE_CLAUDE_MODEL = os.environ.get("JARVIS_VOICE_CLAUDE_MODEL", "claude-sonnet-5-5")
