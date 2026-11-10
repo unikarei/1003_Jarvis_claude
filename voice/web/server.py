@@ -306,7 +306,7 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float, allowed_ho
                 session = sessions.get(q.get("session"))
                 if session is None:
                     return self._json(404, {"error": "no_session"})
-                session.end()
+                session.end(capture=True)    # 「会話を終える」: 会話の終わりの知識化（T-1803）
                 return self._json(200, {"ended": True})
             self._json(404, {"error": "not_found"})
 

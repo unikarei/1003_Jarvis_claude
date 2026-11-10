@@ -27,12 +27,12 @@ from db import init_db
 from vault import VaultError
 
 
-def import_turns(turns, title: str | None = None) -> int:
-    """Jarvis の対話（chat.py）の発言を取り込み、確認・承認・保存まで行う。"""
-    return import_and_review(capture(build_conversation(turns, Origin.JARVIS, title)))
+def import_turns(turns, title: str | None = None, ask=None) -> int:
+    """Jarvis の対話（chat.py）の発言を取り込み、確認・承認・保存まで行う。ask は確認の入力（既定は input）。"""
+    return import_and_review(capture(build_conversation(turns, Origin.JARVIS, title)), ask=ask)
 
 
-def import_and_review(result, interactive: bool = True) -> int:
+def import_and_review(result, interactive: bool = True, ask=None) -> int:
     if not result.is_new:
         print(f"この会話は取り込み済みです（{result.conversation_id}）。")
         pending = store.list_candidates(CandidateStatus.PENDING, conversation_id=result.conversation_id)
@@ -48,7 +48,7 @@ def import_and_review(result, interactive: bool = True) -> int:
         pending = extracted.candidates
     print(f"\n候補 {len(pending)} 件")
     if interactive:
-        review.interactive_review(pending)
+        review.interactive_review(pending, ask=ask)
     else:
         for c in pending:
             print(review.format_candidate(c))

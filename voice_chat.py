@@ -183,6 +183,7 @@ class Cancelled(Exception):
 INTERRUPTED_MARK = "（ここで Owner が割り込み）"
 CONFIRM_SPOKEN = "書き込みがあります。キーボードで確認してください。"
 OBSIDIAN_SKILL = orchestrator.OBSIDIAN_SKILL
+END_ANSWER_SECONDS = 60      # 会話の終わりの「知識にしますか」を待つ上限（T-1803）
 
 
 def obsidian_busy(ctx, outcome, text: str | None = None) -> bool:
@@ -306,7 +307,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
                 worker.join(timeout=5)
                 state["latency"] = None
                 latency.finish(lat, ok=False)                 # 答えの途中で終了した
-                return _end(speaker, session)
+                return _end(speaker, session, ctx, keys)
             time.sleep(0.02)
         session.disarm()
         if not interrupted and session.barged.is_set():
@@ -363,7 +364,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
             if outcome.ok and outcome.error is None and heard:
                 ctx.history.append(Turn(Who.AI, heard))
         state["status"] = "IDLE"
-    return _end(speaker, session)
+    return _end(speaker, session, ctx, keys)
 
 
 def _finish_answer(outcome, state: dict, ctx, speaker, turn: int | None = None) -> None:
@@ -414,9 +415,28 @@ def _record(text: str, outcome) -> None:
         print(f"[記録できませんでした] {type(e).__name__}: {e}")
 
 
-def _end(speaker, session) -> int:
+def offer_capture(ctx, keys, speaker, turn=None) -> None:
+    """声の会話の終わりに、知識にするかをキーボードで聞く（T-1803）。答えと候補ごとの確認はキーボードの列から読む
+    （キーボードのスレッドが標準入力を読んでいるため、input を使わない）。"""
+    import chat_actions
+    if ctx is None or keys is None or not chat_actions.worth_capturing(ctx.history):
+        return
+
+    def ask(prompt: str) -> str:
+        print(prompt, end="", flush=True)
+        try:
+            return keys.get(timeout=END_ANSWER_SECONDS)   # 答えがなければ「いいえ」で終える
+        except queue.Empty:
+            print()
+            return ""
+    speaker.say(chat_actions.END_SPOKEN, **({"turn": turn} if turn is not None else {}))
+    chat_actions.offer_capture_at_end(ctx.history, ask)
+
+
+def _end(speaker, session, ctx=None, keys=None) -> int:
     session.disarm()
     speaker.new_turn()
+    offer_capture(ctx, keys, speaker)
     speaker.say("終了します。")
     speaker.wait()
     speaker.close()
@@ -618,6 +638,7 @@ def _main(listen, transcribe, speaker, push_to_talk, keys, barge_in, launcher) -
 
     finish_latency()
     speaker.stop()
+    offer_capture(ctx, keys, speaker)          # 会話の終わりに知識にするか聞く（T-1803。y のときだけ）
     speaker.say("終了します。")
     speaker.wait()
     speaker.close()

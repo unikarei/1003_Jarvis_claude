@@ -18,6 +18,9 @@ os.environ["JARVIS_SKILLS_JSON"] = str(_TMP_ROOT / "skills.json")   # 置かな�
 # 本物の LLM を呼ばない（2026-10-18、チャットのテストが本物の claude を起動していた）。使うテストは偽物に差し替える
 os.environ["CLAUDE_BIN"] = str(_TMP_ROOT / "no-claude")
 os.environ["JARVIS_OLLAMA_URL"] = "http://127.0.0.1:9"
+# 会話の終わりの知識化（T-1803）は、既定では止めておく（既存の会話のテストが終わりの問いかけで入力を待たないように）。
+# この機能のテスト（tests/test_capture_on_end.py）は、テストの中で 1 にする
+os.environ["JARVIS_CAPTURE_ON_END"] = "0"
 
 import config  # noqa: E402
 

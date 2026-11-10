@@ -6,8 +6,9 @@ chat.py は読み込み時に標準入出力の設定を変えるため、ほか
 from ckc.models import Turn
 
 
-def run_ckc(history: list[Turn]) -> bool:
-    """対話を CKC に渡す。取り込めたら True（呼び出し側は記録をリセットする）。"""
+def run_ckc(history: list[Turn], ask=None) -> bool:
+    """対話を CKC に渡す。取り込めたら True（呼び出し側は記録をリセットする）。ask は確認の入力（既定は input。
+    声の会話はキーボードの列から読む）。"""
     if not history:
         print("ナレッジ化する対話がまだありません。\n")
         return False
@@ -18,7 +19,7 @@ def run_ckc(history: list[Turn]) -> bool:
 
     init_db()
     try:
-        import_turns(history, title=f"JARVIS との対話: {history[0].text.splitlines()[0][:30]}")
+        import_turns(history, title=f"JARVIS との対話: {history[0].text.splitlines()[0][:30]}", ask=ask)
     except (CaptureError, ExtractError) as e:
         print(f"[CKC] {e}\n")
         return False
@@ -69,6 +70,62 @@ def run_ckc_with_cards(history: list[Turn], decide, gate=None) -> tuple[str, boo
     if not candidates:
         return "知識の候補はありませんでした。", True
     return summary_text(decide_each(candidates, decide, gate)), True
+
+
+def review_pending_with_cards(decide, gate=None) -> str | None:
+    """保存待ちの候補を画面で 1 件ずつ確認する（会話の終わりに保存待ちにしたもの、T-1803）。なければ None。"""
+    from ckc import store
+    from ckc.models import CandidateStatus
+    from ckc.review import decide_each
+    from db import init_db
+
+    init_db()
+    pending = store.list_candidates(CandidateStatus.PENDING)
+    if not pending:
+        return None
+    return summary_text(decide_each(pending, decide, gate))
+
+
+# ---------------------------------------------------------------- 会話の終わりの知識化（T-1803、spec §3.3.13 C）
+
+MIN_OWNER_TURNS = 3
+END_PROMPT = "この会話から知識の候補を作りますか？ [y/N] > "
+END_SPOKEN = "この会話から知識の候補を作りますか。キーボードで答えてください。"
+
+
+def capture_on_end_enabled() -> bool:
+    import os
+    return os.environ.get("JARVIS_CAPTURE_ON_END", "1") != "0"
+
+
+def worth_capturing(history: list[Turn]) -> bool:
+    """会話の終わりに知識化を扱うか: 設定で止めておらず、Owner の発言が 3 回以上ある（private の発言・ナレッジ化の後の
+    発言は、会話の側が履歴に入れていない・消しているので数えない）。"""
+    from ckc.models import Speaker
+    return capture_on_end_enabled() and sum(t.speaker == Speaker.OWNER for t in history) >= MIN_OWNER_TURNS
+
+
+def offer_capture_at_end(history: list[Turn], ask) -> bool:
+    """文字の会話・Mac の声の会話の終わり（T-1803）。キーボードで聞き、y のときだけ「ナレッジ化して」と同じ流れに入る。
+    取り込んだら True。"""
+    if not worth_capturing(history):
+        return False
+    try:
+        reply = ask(END_PROMPT)
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if (reply or "").strip().lower() != "y":
+        return False
+    return run_ckc(list(history), ask=ask)
+
+
+def pending_count() -> int:
+    from ckc import store
+    from ckc.models import CandidateStatus
+    from db import init_db
+
+    init_db()
+    return len(store.list_candidates(CandidateStatus.PENDING))
 
 
 def run_architect(theme: str) -> None:
