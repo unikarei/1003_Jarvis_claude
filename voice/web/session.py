@@ -41,7 +41,7 @@ CALIBRATION_TURN = 0          # あいさつの番号（発言は 1 から。履
 CALIBRATE_TIMEOUT = 60.0      # あいさつの合成を待つ上限（最初の合成はエンジンの起動を待つ）
 APPROVAL_SECONDS = 60         # 承認の要求の期限（T-1504）
 APPROVAL_SPOKEN = "書き込みがあります。画面で確認してください。"
-DECISIONS = {"run": "run", "decline": "declined"}   # /api/approve の decision → approval_done の result
+DECISIONS = {"run": "run", "decline": "declined", "later": "later"}   # /api/approve の decision → approval_done の result
 MAX_TYPED = 16                # 2 段目の確認で入力する語の長さの上限（T-1702）
 OBSIDIAN_SKILL = orchestrator.OBSIDIAN_SKILL
 
@@ -76,12 +76,13 @@ class _Approval:
     """承認の要求 1 つ（T-1504）。answer は Owner の答え（run / declined）、result は確定した結果（approval_done の
     result）。どちらも 1 回だけ決まる。"""
 
-    __slots__ = ("id", "turn", "deadline", "answer", "result", "event", "expect")
+    __slots__ = ("id", "turn", "deadline", "answer", "result", "event", "expect", "review")
 
-    def __init__(self, turn: int, deadline: float, expect: str | None = None):
+    def __init__(self, turn: int, deadline: float, expect: str | None = None, review: bool = False):
         self.id = secrets.token_urlsafe(16)
         self.turn, self.deadline = turn, deadline
         self.expect = expect              # 2 段目の確認で求める語（サーバーが決めて照合する、T-1702）
+        self.review = review              # 知識の候補の確認（保存する・保存しない・あとで、T-1802）
         self.answer: str | None = None
         self.result: str | None = None
         self.event = threading.Event()
@@ -363,6 +364,8 @@ class WebSession:
         answer = DECISIONS.get(decision)
         with self._lock:
             req = self._approval
+            if req is not None and answer == "later" and not req.review:
+                answer = None                 # 「あとで」は知識の候補の確認でだけ受け付ける
             if (answer is None or self.closed or req is None or req.answer is not None or req.result is not None
                     or turn != req.turn or turn in self._cut
                     or not hmac.compare_digest(req.id.encode(), str(approval_id).encode())
@@ -378,7 +381,21 @@ class WebSession:
 
     # ------------------------------------------------------------ 承認（T-1504）
 
-    def _ask(self, turn: int, prompt: str, spoken: str | None = None, expect: str | None = None) -> str:
+    def _review(self, turn: int, text: str, spoken: str | None = None) -> str:
+        """知識の候補 1 件の確認（T-1802）。画面の「保存する」→ "save"、「保存しない」→ "reject"、「あとで」・期限切れ →
+        "later"。割り込み・終了・切断・会話が終わっている → "stop"（残りの候補も保存待ちにする）。声の発言は答えにならない。"""
+        answer = self._ask(turn, text, spoken=spoken, review=True)
+        if answer == "y":
+            return "save"
+        if answer == "reject":
+            return "reject"
+        with self._lock:
+            if self.closed or turn in self._cut:
+                return "stop"
+        return "later"
+
+    def _ask(self, turn: int, prompt: str, spoken: str | None = None, expect: str | None = None,
+             review: bool = False) -> str:
         """orchestrator.execute の確認。発言 turn 専用の承認の要求を作って画面に出し、答え・期限・割り込み・終了の
         どれかまで待つ。「実行する」が、その ID・その発言・期限内・会話が続いている・割り込まれていない、のすべてを
         満たしたときだけ "y"。それ以外はすべて "n"。
@@ -387,9 +404,11 @@ class WebSession:
         with self._lock:
             if self.closed or turn in self._cut or self._approval is not None:
                 return "n"                    # 割り込まれた・終えた発言には要求を出さない。要求は同時に 1 つだけ
-            req = _Approval(turn, self.clock() + APPROVAL_SECONDS, expect)
+            req = _Approval(turn, self.clock() + APPROVAL_SECONDS, expect, review)
             self._approval = req
             extra = {"input": True, "word": expect} if expect is not None else {}
+            if review:
+                extra = {"choices": "review"}   # 画面のボタンを「保存する・保存しない・あとで」にする
             self._send_locked("approval", turn, id=req.id, text=confirm_prompt(prompt), expires_in=APPROVAL_SECONDS,
                               **extra)
         self.speaker.say(spoken or APPROVAL_SPOKEN, turn=turn)   # 割り込まれていれば番号が違うので読まない
@@ -406,6 +425,8 @@ class WebSession:
                         self._send_locked("approval_done", turn, id=req.id, result=req.result)
                     # run は実行の直前（_before_run）まで要求を残し、それまでの割り込み・終了で取り消せるようにする
                 if req.result is not None:
+                    if req.review and req.result == "declined":
+                        return "reject"
                     if req.result != "run":
                         return "n"
                     return req.expect if req.expect is not None else "y"
@@ -583,6 +604,7 @@ class WebSession:
         ctx.stream = stream
         ctx.cancel = lambda t=turn: self.closed or t != self.speaker.turn   # voice_chat.run_barge_in と同じ
         ctx.before_run = lambda t=turn: self._before_run(t)   # 承認の後、実行の直前にもう一度確かめる（T-1504）
+        ctx.review = lambda text, spoken=None, t=turn: self._review(t, text, spoken)   # 知識の候補の確認（T-1802）
         try:
             outcome = self.handle(text, ctx, ask=lambda prompt, spoken=None, expect=None:   # 確認は画面で（T-1504）
                                   self._ask(turn, prompt, spoken=spoken, expect=expect))
@@ -592,6 +614,7 @@ class WebSession:
         finally:
             ctx.stream = None
             ctx.before_run = None
+            ctx.review = None
             with self._lock:
                 self._cancel_approval_locked(turn)   # 実行の直前の確認を通らなかった要求を残さない
         st.outcome = outcome

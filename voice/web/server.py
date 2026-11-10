@@ -366,7 +366,7 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float, allowed_ho
             turn, approval_id, decision = data.get("turn"), data.get("id"), data.get("decision")
             text = data.get("text")           # 2 段目の確認で入力した語（T-1702。照合は session、記録しない）
             if (not isinstance(turn, int) or isinstance(turn, bool) or not isinstance(approval_id, str)
-                    or not 0 < len(approval_id) <= 64 or decision not in ("run", "decline")
+                    or not 0 < len(approval_id) <= 64 or decision not in ("run", "decline", "later")
                     or (text is not None and not isinstance(text, str))):
                 return self._json(400, {"error": "bad_request"})
             if session.approve(turn, approval_id, decision, text) != "ok":

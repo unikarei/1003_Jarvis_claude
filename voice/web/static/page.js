@@ -160,7 +160,8 @@
 
   const APPROVAL_RESULTS = { run: "実行しました", declined: "実行しませんでした",
                              expired: "期限が切れたので実行しませんでした",
-                             cancelled: "取り消したので実行しませんでした" };
+                             cancelled: "取り消したので実行しませんでした",
+                             later: "あとで（保存待ち）にしました" };
 
   function approvalResultText(result) {
     return APPROVAL_RESULTS[result] || "実行しませんでした";

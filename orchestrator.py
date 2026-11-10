@@ -49,6 +49,7 @@ class Context:
     ask: Callable | None = None                   # 自分で確認するスキル（SELF_CONFIRM）にだけ渡す確認（T-1702）
     active_skill: str | None = None               # 振り分けが決まってから終わるまでのスキル名（声の会話の割り込み、T-1702）
     note_meta: dict | None = None                 # private な結果の記録に残す項目（op・vault・path・結果の短い文）
+    review: Callable | None = None                # 知識の候補を画面で 1 件ずつ聞く（ブラウザ、T-1802）。(表示, 読み上げ) → 答え
 
 
 @dataclass
@@ -554,11 +555,30 @@ def _control_center(inputs, ctx, text):
 
 
 def _capture(inputs, ctx, text):
+    if not ctx.terminal and ctx.review is not None:
+        return _capture_with_cards(ctx)
     from chat_actions import run_ckc
     if run_ckc(ctx.history):
         ctx.history.clear()
         return "ナレッジ化を終えました。", []
     return "ナレッジ化しませんでした。", []
+
+
+REVIEW_SPOKEN = "知識の候補が {n} 件あります。画面で 1 件ずつ答えてください。"
+
+
+def _capture_with_cards(ctx):
+    """ブラウザでのナレッジ化（T-1802）: 候補を画面で 1 件ずつ聞き、「保存する」はその場で保存する。"""
+    from chat_actions import run_ckc_with_cards
+    from ckc.review import card_text
+
+    def decide(c, index, total):
+        spoken = REVIEW_SPOKEN.format(n=total) if index == 1 else None
+        return ctx.review(card_text(c, index, total), spoken)
+    message, captured = run_ckc_with_cards(ctx.history, decide, ctx.before_run)
+    if captured:
+        ctx.history.clear()
+    return message, []
 
 
 def _theme(inputs, ctx, text):
@@ -605,6 +625,8 @@ FLOOR = {
     "code-task": ("read", True, False),          # OpenAI API（従量課金）に発言を送る（F-1）
     OBSIDIAN_SKILL: ("local_write", True, True),  # Vault のノートの追加・作成・書き直し・削除（T-1702）
 }
+# 端末がなくても、画面で 1 件ずつ答えられるとき（Context.review があるとき）は実行するスキル（T-1802）
+CARD_REVIEW = {"knowledge-capture"}
 # 一般の確認（confirm_text）をせず、書き込みの直前に自分で確認するスキル。local_write で確認が必須のものだけ（T-1702）
 SELF_CONFIRM = {OBSIDIAN_SKILL}
 # 発言・答えを会話の履歴に入れず、記録には定型文だけを残すスキル（T-1702）
@@ -694,7 +716,8 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
                     error="external")
     if skill.name in SELF_CONFIRM and perm == "local_write" and needs_confirm:
         return _execute_self_confirm(handler, r, ctx, text, ask, done)
-    if needs_confirm and _interactive(skill.name) and not ctx.terminal:
+    if needs_confirm and _interactive(skill.name) and not ctx.terminal \
+            and not (skill.name in CARD_REVIEW and ctx.review is not None):
         # 承認の後もキーボードで候補ごとの承認・修正を求めるため、端末のない会話では確認を求めずに実行しない（T-1504）
         return done(NEEDS_TERMINAL_TEXT, ok=True, items=ctx.items, error="needs_terminal")
     if needs_confirm:
