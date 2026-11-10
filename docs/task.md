@@ -335,3 +335,8 @@
 ## 会話の終わりの知識化（`../docs/tasks.md` T-1803）
 
 - [x] 文字・Mac の声の会話の終わりに y/N で聞く、ブラウザは保存待ちにして次の会話の始めに知らせる（`chat_actions.worth_capturing`・`offer_capture_at_end`、`WebSession.end(capture=True)`、`JARVIS_CAPTURE_ON_END`）
+
+## 会話の LLM の切り替え（`../docs/tasks.md` T-2001・T-2002）
+
+- [x] T-2001 `codex` のプロバイダー（`llm.py`: 答えるだけの `codex exec --json`、逐次表示、取り消し、API キーを渡さない、`LLMUnavailable`・`failure_reason`）
+- [x] T-2002 ハーネスの選択・会話の途中の切り替え・自動の切り替えと休止（`orchestrator.py`、Task の meta `llm`、遅延の記録 `harness`）。実機の確認は T-2003（Owner のマージの後）

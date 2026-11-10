@@ -69,9 +69,11 @@ def record(text: str, outcome) -> str:
         insert_edge(task_id, get_or_create_agent(agent), "executed_by")
         return task_id
     inputs = {k: mask_secrets(v) if isinstance(v, str) else v for k, v in outcome.inputs.items()}
-    task_id = insert_node(node_type="Task", title=mask_secrets(text), content=mask_secrets(outcome.text), meta={
-        "skill": outcome.skill, "method": outcome.method, "ok": outcome.ok, "error": outcome.error,
-        "seconds": outcome.seconds, "inputs": inputs})
+    meta = {"skill": outcome.skill, "method": outcome.method, "ok": outcome.ok, "error": outcome.error,
+            "seconds": outcome.seconds, "inputs": inputs}
+    if getattr(outcome, "llm", None):          # 答えたハーネス・プロバイダーと切り替えの理由（ADR-0035）
+        meta["llm"] = outcome.llm
+    task_id = insert_node(node_type="Task", title=mask_secrets(text), content=mask_secrets(outcome.text), meta=meta)
     insert_edge(task_id, skill_node(outcome.skill), "uses")
     insert_edge(task_id, get_or_create_agent(agent), "executed_by")
     return task_id

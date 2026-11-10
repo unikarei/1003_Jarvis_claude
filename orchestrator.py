@@ -50,6 +50,9 @@ class Context:
     active_skill: str | None = None               # 振り分けが決まってから終わるまでのスキル名（声の会話の割り込み、T-1702）
     note_meta: dict | None = None                 # private な結果の記録に残す項目（op・vault・path・結果の短い文）
     review: Callable | None = None                # 知識の候補を画面で 1 件ずつ聞く（ブラウザ、T-1802）。(表示, 読み上げ) → 答え
+    harness: str = field(default_factory=lambda: _initial_harness())   # auto か ollama・claude・codex（ADR-0035）
+    resting: dict = field(default_factory=dict)   # 休止中のハーネス → (期限の clock(), 理由)。保存しない
+    llm_info: dict | None = None                  # 直前の答えのハーネス・プロバイダー・切り替えの理由（Task の記録）
 
 
 @dataclass
@@ -79,6 +82,7 @@ class Outcome:
     items: list[dict] = field(default_factory=list)
     error: str | None = None
     private: bool = False      # 発言・答えを会話の履歴に入れず、記録には定型文だけを残す（T-1702）
+    llm: dict | None = None    # 答えに使ったハーネス・プロバイダーと切り替えの理由（ADR-0035）
 
 
 class SkillError(Exception):
@@ -309,39 +313,128 @@ def _ordinal(text: str) -> int | None:
     return int(m.group(1) or m.group(2)) if m else None
 
 
-ANSWER_PROVIDER = "claude_warm"          # ナレッジの質問（経路 B、ADR-0027）
-ANSWER_RETRY_PROVIDER = "claude_cli"     # claude_warm が失敗したときに一度だけ試す
-CHAT_PROVIDER = "ollama"                 # 通常の会話（経路 A）
-CHAT_FALLBACK_PROVIDER = "claude_warm"   # Ollama が失敗したとき（有料の API には切り替えない）
+# ---------------------------------------------------------------- 会話の LLM（ハーネス、ADR-0035、spec §3.4.12）
+
+HARNESSES = ("ollama", "codex", "claude")
+HARNESS_LABELS = {"ollama": "Ollama", "codex": "Codex", "claude": "Claude"}
+# ハーネスの中で試すプロバイダー（claude は待機させた claude -p、だめなら一度だけその場で起動する claude -p）
+HARNESS_PROVIDERS = {"ollama": ("ollama",), "codex": ("codex",), "claude": ("claude_warm", "claude_cli")}
+CHAT_ORDER = ("ollama", "codex", "claude")       # おまかせの経路 A（通常の会話）
+# 有料の API（anthropic_api）はどの順番にも入れない（ADR-0020）
+_REASON_LABELS = {"limit": "{} の利用枠が上限の", "auth": "{} にログインしていない", "missing": "{} が見つからない",
+                  "error": "{} が応答しなかった"}
+_REASON_SHORT = {"limit": "上限", "auth": "ログインなし", "missing": "見つからない", "error": "応答なし"}
+
+
+def _initial_harness() -> str:
+    name = (config.HARNESS or "auto").lower()
+    return name if name in HARNESSES else "auto"
+
+
+def answer_order() -> tuple[str, ...]:
+    """おまかせの経路 B（ナレッジの質問）の順番。最初は JARVIS_HEAVY_HARNESS（既定 codex）。"""
+    heavy = config.HEAVY_HARNESS if config.HEAVY_HARNESS in ("codex", "claude") else "codex"
+    other = "claude" if heavy == "codex" else "codex"
+    return (heavy, other, "ollama")
+
+
+def harness_order(ctx: "Context", kind: str) -> tuple[str, ...]:
+    """kind は "chat"（経路 A）か "answer"（経路 B）。選んだハーネスがあれば、それ → 残りを A の順番で。"""
+    if ctx.harness in HARNESSES:
+        return (ctx.harness, *[h for h in CHAT_ORDER if h != ctx.harness])
+    return CHAT_ORDER if kind == "chat" else answer_order()
 
 
 class _SentTracker:
     """ctx.stream に送ったかを覚える。答えの一部を表示・読み上げた後に失敗したら、別の LLM に切り替えない
-    （切り替えると、表示した途中の答えと最後の答えが混ざる）。最初の空でない文字を送る時点を first_text に記録する。"""
+    （切り替えると、表示した途中の答えと最後の答えが混ざる）。最初の空でない文字を送る時点を first_text に記録する。
+    prefix（切り替えの知らせ）は、最初の空でない文字の前に送る（答えが届かなければ送らない）。"""
 
-    def __init__(self, stream):
-        self.stream, self.sent = stream, False
+    def __init__(self, stream, prefix: str = ""):
+        self.stream, self.sent, self.prefix = stream, False, prefix
 
     def __call__(self, chunk: str) -> None:
         if chunk:
             if not self.sent:
                 latency.mark("first_text")
-            self.sent = True
+                self.sent = True
+                if self.prefix:
+                    self.stream(self.prefix)
         self.stream(chunk)
 
 
-def _with_fallback(run, ctx, first: str, second: str):
-    """first で run を呼び、LLMError（取り消しを除く）で、まだ何も送っていなければ second でもう一度だけ試す。"""
-    tracker = _SentTracker(ctx.stream) if ctx.stream is not None else None
-    try:
-        return run(first, tracker)
-    except llm.LLMCancelled:
-        raise
-    except llm.LLMError:
-        if tracker is not None and tracker.sent:
-            raise
-        latency.set("fallback", True)
-        return run(second, _SentTracker(ctx.stream) if ctx.stream is not None else None)
+class AllHarnessesFailed(llm.LLMError):
+    """どのハーネスでも答えられなかった。text は Owner に返す文。"""
+
+    def __init__(self, text: str):
+        super().__init__(text)
+        self.text = text
+
+
+def _rest_minutes(until: float) -> int:
+    return max(1, int((until - clock()) / 60 + 0.999))
+
+
+def _switch_notice(failed: list[tuple[str, str]], used: str) -> str:
+    """最初のハーネスで答えられなかったときの一言（例: Codex の利用枠が上限のため、Claude で答えます。）。"""
+    parts = [_REASON_LABELS.get(r, _REASON_LABELS["error"]).format(HARNESS_LABELS[h]) for h, r in failed]
+    return f"{'、'.join(parts)}ため、{HARNESS_LABELS[used]} で答えます。\n"
+
+
+def run_with_harnesses(run, ctx: "Context", kind: str):
+    """ハーネスの順番に run(provider, stream) を試す（spec §3.4.12 C）。
+    - 取り消しはそのまま上げる。答えの一部を送った後の失敗は切り替えずに上げる。
+    - しばらく使えない失敗（上限・ログインなし・コマンドなし）はそのハーネスを休止にし、休止の間は飛ばす。
+    - 最初のハーネスで答えられなかったら、答えの前に一言添える（休止中で飛ばしただけのものは、休止に入ったときに
+      伝えたので繰り返さない）。全部だめなら AllHarnessesFailed（理由の一覧の文）。
+    戻り値は (run の戻り値, 添えた一言)。添えた一言は stream にも送り済み。"""
+    now = clock()
+    cooldown = max(0.0, float(config.HARNESS_COOLDOWN_MINUTES)) * 60
+    announce: list[tuple[str, str]] = []           # 今回の発言で失敗した（伝える）もの
+    summary: list[tuple[str, str]] = []            # 全部だめのときの一覧（休止中のものを含む）
+    switched = False
+    attempts = 0
+    for harness in harness_order(ctx, kind):
+        rest = ctx.resting.get(harness)
+        if rest is not None:
+            if rest[0] > now:
+                summary.append((harness, rest[1]))
+                switched = True
+                continue
+            ctx.resting.pop(harness, None)         # 休止の期限が過ぎた。もう一度試す
+        reason = None
+        for provider in HARNESS_PROVIDERS[harness]:
+            prefix = _switch_notice(announce, harness) if announce else ""
+            tracker = _SentTracker(ctx.stream, prefix) if ctx.stream is not None else None
+            attempts += 1
+            try:
+                result = run(provider, tracker)
+            except llm.LLMCancelled:
+                raise
+            except llm.LLMError as e:
+                if tracker is not None and tracker.sent:
+                    raise
+                reason = llm.failure_reason(e)
+                if reason:                         # 同じハーネスの別のプロバイダーも同じ理由で使えない
+                    break
+                reason = "error"
+                continue
+            latency.set("harness", harness)
+            if switched or attempts > 1:
+                latency.set("fallback", True)
+            ctx.llm_info = {"harness": harness, "provider": provider,
+                            "skipped": [{"harness": h, "reason": r} for h, r in summary]}
+            return result, prefix
+        if reason in ("limit", "auth", "missing") and cooldown > 0:
+            ctx.resting[harness] = (now + cooldown, reason)
+        announce.append((harness, reason or "error"))
+        summary.append((harness, reason or "error"))
+        switched = True
+    latency.set("fallback", True)
+    ctx.llm_info = {"harness": None, "provider": None,
+                    "skipped": [{"harness": h, "reason": r} for h, r in summary]}
+    detail = "、".join(f"{HARNESS_LABELS[h]}: {_REASON_SHORT.get(r, r)}" for h, r in summary)
+    raise AllHarnessesFailed(f"今はどのモデルも使えません（{detail}）。")
 
 
 def _answer(inputs, ctx, text):
@@ -352,7 +445,8 @@ def _answer(inputs, ctx, text):
         latency.set("provider", provider)
         return ke.answer(inputs.get("question") or text, projects=_projects(inputs), on_text=stream,
                          history=ctx.history, voice=ctx.voice, cancel=ctx.cancel, provider=provider)
-    answer, hits = _with_fallback(ask, ctx, ANSWER_PROVIDER, ANSWER_RETRY_PROVIDER)
+    (answer, hits), notice = run_with_harnesses(ask, ctx, "answer")   # 全部だめなら AllHarnessesFailed（execute で答える）
+    answer = notice + answer
     if ctx.stream is not None:
         ctx.shown = answer        # 答えの本文は表示済み。出典だけが残り
     used = ke.cited(answer, hits)  # 出典は答えで使ったものだけ示す（LLM の知識で答えたときは出さない）
@@ -385,12 +479,13 @@ def _chat_complete(prompt, ctx, provider, stream):
 
 
 def _chat(inputs, ctx, text):
-    """通常の会話（経路 A、ADR-0027）。検索せず、ローカル LLM で答える。Ollama が失敗したら claude_warm。"""
+    """通常の会話（経路 A、ADR-0027）。検索せず、おまかせでは Ollama で答える。順番と切り替えは ADR-0035。"""
     import knowledge_engine as ke
     prompt = CHAT_PROMPT.format(question=inputs.get("question") or text, history=ke.format_history(ctx.history),
                                 style=ke.VOICE_STYLE if ctx.voice else "")
-    answer = _with_fallback(lambda provider, stream: _chat_complete(prompt, ctx, provider, stream), ctx,
-                            CHAT_PROVIDER, CHAT_FALLBACK_PROVIDER)
+    answer, notice = run_with_harnesses(lambda provider, stream: _chat_complete(prompt, ctx, provider, stream),
+                                        ctx, "chat")
+    answer = notice + answer
     if ctx.stream is not None:
         ctx.shown = answer        # 答えは表示済み（出典はない）
     return answer.strip(), []
@@ -741,6 +836,8 @@ def execute(r: Route, ctx: Context, text: str, ask: Callable[[str], str] | None 
         return done("実行しませんでした。", ok=True, items=ctx.items, error="cancelled")
     except TimeoutError as e:
         return done(f"[時間切れ] {skill.name}: {e}", ok=False, error="timeout")
+    except AllHarnessesFailed as e:   # どの LLM も使えない。理由の一覧を答えて会話を続ける（ADR-0035）
+        return done(e.text, ok=False, error="no_llm")
     except Exception as e:   # スキルの失敗で対話を止めない
         return done(f"[エラー] {skill.name}: {type(e).__name__}: {e}", ok=False, error=type(e).__name__)
     return done(message, items=items)
@@ -761,6 +858,77 @@ def _execute_self_confirm(handler, r: Route, ctx: Context, text: str, ask, done)
     return done(message, items=items)
 
 
+# ---------------------------------------------------------------- ハーネスの切り替えの発言（spec §3.4.12 B）
+
+HARNESS_SKILL = "harness-switch"          # 記録の上のスキル名（索引のスキルではない。LLM を呼ばない）
+_HARNESS_NAMES = {
+    "codex": ("codex", "コーデックス", "コデックス", "コレックス", "コテックス", "コードex"),
+    "claude": ("claude", "クロード", "クラウドコード", "クロードコード"),
+    "ollama": ("ollama", "オラマ", "オーラマ", "オラーマ", "ポーラマ", "大山", "ローカル", "ローカルllm"),
+    "auto": ("おまかせ", "お任せ", "自動"),
+}
+_SWITCH_VERBS = r"(?:に|へ)(?:切り替えて|切りかえて|切替えて|切り替え|変えて|かえて|替えて|変更して|して|戻して)"
+_POLITE = r"(?:ください|下さい|くれ|ちょうだい|もらえる|もらえますか|くれる)?"
+_STATUS_PATTERN = re.compile(r"^(?:今|いま)?(?:どれ|どのモデル|どのllm|どのハーネス|ハーネスは|モデルは|"
+                             r"今のモデルは|今のハーネスは|どのモデルを使ってる|どのモデルを使っていますか|"
+                             r"どのモデルで答えてる|何のモデル)(?:ですか|なの|使ってる|使っていますか)?$")
+
+
+def _command_text(text: str) -> str:
+    import unicodedata
+    t = unicodedata.normalize("NFKC", text).lower()
+    t = re.sub(r"[\s、。,.!！?？「」]", "", t)
+    return re.sub(r"^(?:jarvis|ジャービス)", "", t)
+
+
+def harness_command(text: str) -> str | None:
+    """切り替えの発言なら "codex"・"claude"・"ollama"・"auto"・"status" を、そうでなければ None を返す。
+    発言の全体が切り替えの言い方のときだけ当てる（「Codex にして何ができる？」は当てない）。"""
+    t = _command_text(text)
+    if not t:
+        return None
+    if _STATUS_PATTERN.match(t):
+        return "status"
+    t = re.sub(r"^(?:モデル|llm|ハーネス|会話のモデル|答えるモデル)(?:を|は)", "", t)
+    if t in ("元に戻して", "もとに戻して", "元に戻してください"):
+        return "auto"
+    for name, words in _HARNESS_NAMES.items():
+        for word in words:
+            if re.fullmatch(re.escape(word.lower()) + _SWITCH_VERBS + _POLITE, t):
+                return name
+            if name == "auto" and re.fullmatch(re.escape(word) + r"(?:で|モード)(?:お願い|頼む)?", t):
+                return name
+    return None
+
+
+def _order_text(ctx: Context) -> str:
+    if ctx.harness in HARNESSES:
+        return f"{HARNESS_LABELS[ctx.harness]}（使えないときは自動で切り替えます）"
+    heavy = HARNESS_LABELS[answer_order()[0]]
+    return f"おまかせ（簡単な会話は Ollama、ナレッジの質問は {heavy} から）"
+
+
+def _resting_text(ctx: Context) -> str:
+    now = clock()
+    items = [(h, until, reason) for h, (until, reason) in ctx.resting.items() if until > now]
+    if not items:
+        return ""
+    parts = [f"{HARNESS_LABELS[h]}（{_REASON_SHORT.get(r, r)}、あと {_rest_minutes(u)} 分）" for h, u, r in items]
+    return "休止中: " + "、".join(parts) + "。"
+
+
+def run_harness_command(command: str, ctx: Context) -> str:
+    if command == "status":
+        rest = _resting_text(ctx)
+        return f"今は{_order_text(ctx)}です。" + (rest and " " + rest)
+    if command == "auto":
+        ctx.harness = "auto"
+        return f"おまかせに戻します。{_order_text(ctx)[len('おまかせ'):]}"
+    ctx.harness = command
+    ctx.resting.pop(command, None)        # Owner が選んだので、休止中でももう一度試す
+    return f"以後は {HARNESS_LABELS[command]} で答えます。"
+
+
 def _pending_outcome(r: Route, text: str, error: str) -> Outcome:
     return Outcome(r.skill, r.method, {"op": None, "vault": None, "path": None, "result": text}, text, True, 0.0, [],
                    error, r.skill in PRIVATE_SKILLS)
@@ -770,7 +938,17 @@ def handle(text: str, ctx: Context, ask: Callable[[str], str] | None = None, use
     """発言を振り分けて実行し、文脈を更新する。途中の依頼があれば、振り分けの前にそのスキルへ渡す（T-1702）。"""
     ctx.shown = ""
     ctx.last_provider = None
+    ctx.llm_info = None
     pending = ctx.pending
+    command = harness_command(text) if pending is None else None
+    if command is not None:
+        r = Route(HARNESS_SKILL, {"harness": command}, "rule")
+        latency.mark("route")
+        latency.set("skill", r.skill)
+        started = time.monotonic()
+        message = run_harness_command(command, ctx)
+        return _finish_handle(ctx, r, Outcome(r.skill, r.method, r.inputs, message, True,
+                                              round(time.monotonic() - started, 2), list(ctx.items)))
     if pending is not None:
         r = Route(pending.skill, {}, "pending")
         latency.mark("route")
@@ -791,6 +969,7 @@ def handle(text: str, ctx: Context, ask: Callable[[str], str] | None = None, use
         outcome = execute(r, ctx, text, ask)
     finally:
         ctx.active_skill = None
+    outcome.llm = ctx.llm_info
     return _finish_handle(ctx, r, outcome)
 
 
