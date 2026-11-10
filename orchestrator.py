@@ -920,7 +920,8 @@ def _resting_text(ctx: Context) -> str:
 def run_harness_command(command: str, ctx: Context) -> str:
     if command == "status":
         rest = _resting_text(ctx)
-        return f"今は{_order_text(ctx)}です。" + (rest and " " + rest)
+        order = _order_text(ctx)
+        return f"今は{' ' if order[:1].isascii() else ''}{order}です。{rest}"
     if command == "auto":
         ctx.harness = "auto"
         return f"おまかせに戻します。{_order_text(ctx)[len('おまかせ'):]}"

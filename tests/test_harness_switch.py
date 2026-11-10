@@ -163,7 +163,10 @@ def test_limit_rests_harness_and_notice_once(index, fake_llm, now):  # noqa: F81
     assert second.text.startswith("claude_warmの答え")            # 休止中は飛ばし、知らせは繰り返さない
     assert fake_llm["calls"] == ["codex", "claude_warm", "claude_warm"]
     status = _say("今どれ？", ctx)
-    assert "おまかせ" in status.text and "休止中: Codex（上限、あと 30 分）" in status.text
+    assert status.text == ("今はおまかせ（簡単な会話は Ollama、ナレッジの質問は Codex から）です。"
+                           "休止中: Codex（上限、あと 30 分）。")
+    _say("Claude にして", ctx)
+    assert _say("今どれ？", ctx).text.startswith("今は Claude（使えないときは自動で切り替えます）です。休止中: Codex")
     now["v"] += 31 * 60                                           # 休止の期限が過ぎたら、もう一度試す
     fake_llm["fail"] = {}
     third = _say("大洗の補助金について教えて", ctx)
