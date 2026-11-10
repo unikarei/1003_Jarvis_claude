@@ -331,3 +331,7 @@
 ## ブラウザでの声の会話でのナレッジ化（`../docs/tasks.md` T-1802）
 
 - [x] 候補を 1 件ずつ画面の「保存する」「保存しない」「あとで」で確認（`ckc.review.decide_each`・`chat_actions.run_ckc_with_cards`・`orchestrator.Context.review`・`WebSession._review`、承認の `choices: "review"`・decision `later`）
+
+## 会話の終わりの知識化（`../docs/tasks.md` T-1803）
+
+- [x] 文字・Mac の声の会話の終わりに y/N で聞く、ブラウザは保存待ちにして次の会話の始めに知らせる（`chat_actions.worth_capturing`・`offer_capture_at_end`、`WebSession.end(capture=True)`、`JARVIS_CAPTURE_ON_END`）

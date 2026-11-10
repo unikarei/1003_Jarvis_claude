@@ -129,6 +129,17 @@ def _record(text: str, outcome) -> None:
     record(text, outcome)
 
 
+def _capture_pending(history: list) -> None:
+    """会話の終わりに、知識の候補を作って保存待ちにする（T-1803。保存はしない）。"""
+    import chat_actions
+    chat_actions.capture_candidates(history)
+
+
+def _pending_count() -> int:
+    import chat_actions
+    return chat_actions.pending_count()
+
+
 def default_launcher(settings: "tts.VoiceSettings | None" = None):
     """選んだ音声のエンジン（VOICEVOX・AivisSpeech）の起動と停止。管理しないエンジン（say）なら None。"""
     from voice import engine_process
@@ -173,7 +184,7 @@ class WebSession:
     再生の待つ期限・承認の期限の時計（clock）を差し替えられる。launcher を渡さなければエンジンを起動・停止しない。"""
 
     def __init__(self, transcribe=None, handle=None, emit=None, record=None, synth=None, launcher=None,
-                 clock=time.monotonic):
+                 clock=time.monotonic, capture_on_end=None, pending_count=None):
         self.id = secrets.token_urlsafe(12)
         self.transcribe = transcribe or _transcribe
         self.handle = handle or orchestrator.handle
@@ -200,7 +211,10 @@ class WebSession:
         self.speaker = DuplexSpeaker(self.player, voice=voice_chat.VOICE,
                                      synth=_FirstSynth(launcher, synth, self._notice, lambda: self.closed,
                                                        self._synth_failed))
+        # 会話の終わりの知識化（T-1803）: 終わりに候補を保存待ちにする関数と、始めに保存待ちの件数を数える関数
+        self.capture_on_end = capture_on_end if capture_on_end is not None else _capture_pending
         self._send("ready")
+        self._notice_pending(pending_count if pending_count is not None else _pending_count)
         try:
             voice_chat.start_engine(launcher)      # 起動し始めるだけ（待たない）
         except Exception as e:  # noqa: BLE001  起動できなくても say で読む
@@ -336,14 +350,28 @@ class WebSession:
             self._send("error", turn, kind="playback", message="ブラウザで読み上げの音を再生できませんでした")
         return "ok"
 
-    def end(self, turn: int | None = None) -> None:
+    def _notice_pending(self, count) -> None:
+        """保存待ちの知識の候補があれば、会話の始めに知らせる（T-1803）。数えられなくても会話は始める。"""
+        try:
+            n = count()
+        except Exception:  # noqa: BLE001
+            return
+        if n:
+            self._notice(f"保存待ちの知識の候補が {n} 件あります。「ナレッジ化して」と言うと、1 件ずつ確認できます。")
+
+    def end(self, turn: int | None = None, capture: bool = False) -> None:
         """会話を終える。turn は「終了」と話した発言の番号（/api/end・切断では None）。
-        生成を取り消し（番号を進める）、読み上げを止め、保持した音を消し、この会話が起動したエンジンを止める。"""
+        生成を取り消し（番号を進める）、読み上げを止め、保持した音を消し、この会話が起動したエンジンを止める。
+        capture=True（「終了」と話した・「会話を終える」を押した）で、知識にする価値のある会話なら、裏で候補を作って
+        保存待ちにする（T-1803。Vault・jarvis.db の知識には書かない。切断・サーバーの停止では何もしない）。"""
         with self._lock:
             if self.closed:
                 return
             self._cancel_approval_locked()    # 待っている承認の要求を取り消す（実行しない）
             self.closed = True
+            history = list(self.ctx.history) if capture else []
+        if history:
+            self._capture_in_background(history)
         try:
             self.speaker.new_turn()           # 生成・合成を取り消す（ctx.cancel が True になる）
             self.speaker.close()              # 未再生の音を捨て、合成のスレッドを終える（BrowserPlayer の音も消える）
@@ -378,6 +406,18 @@ class WebSession:
             req.answer = answer
             req.event.set()
         return "ok"
+
+    def _capture_in_background(self, history: list) -> None:
+        import chat_actions
+        if not chat_actions.worth_capturing(history):
+            return
+
+        def run():
+            try:
+                self.capture_on_end(history)
+            except Exception as e:  # noqa: BLE001  抽出の失敗は記録だけ（本文は出さない）
+                print(f"[音声] 会話の終わりの知識の候補を作れませんでした（{type(e).__name__}）", file=sys.stderr)
+        threading.Thread(target=run, name="voice-web-capture-on-end", daemon=True).start()
 
     # ------------------------------------------------------------ 承認（T-1504）
 
@@ -588,7 +628,7 @@ class WebSession:
             self._send_locked("recognized", turn, text=text)
         if any(w in text for w in QUIT_WORDS) and len(text) <= 10:
             st.record = False
-            self.end(turn)
+            self.end(turn, capture=True)      # 「終了」と話した: 会話の終わりの知識化（T-1803）
             return
         started = {"value": False}
 

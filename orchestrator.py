@@ -569,12 +569,16 @@ REVIEW_SPOKEN = "知識の候補が {n} 件あります。画面で 1 件ずつ�
 
 def _capture_with_cards(ctx):
     """ブラウザでのナレッジ化（T-1802）: 候補を画面で 1 件ずつ聞き、「保存する」はその場で保存する。"""
-    from chat_actions import run_ckc_with_cards
+    from chat_actions import review_pending_with_cards, run_ckc_with_cards
     from ckc.review import card_text
 
     def decide(c, index, total):
         spoken = REVIEW_SPOKEN.format(n=total) if index == 1 else None
         return ctx.review(card_text(c, index, total), spoken)
+    if not ctx.history:
+        # まだ対話がない（会話の始め）: 保存待ちの候補（前の会話の終わりに作ったもの、T-1803）があれば確認する
+        message = review_pending_with_cards(decide, ctx.before_run)
+        return message or "ナレッジ化する対話がまだありません。", []
     message, captured = run_ckc_with_cards(ctx.history, decide, ctx.before_run)
     if captured:
         ctx.history.clear()

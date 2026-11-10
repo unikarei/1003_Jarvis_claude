@@ -57,6 +57,8 @@ def main():
         if not user_input:
             continue
         if user_input.lower() in ("exit", "quit"):
+            from chat_actions import offer_capture_at_end
+            offer_capture_at_end(ctx.history, ask)   # 会話の終わりに知識にするか聞く（T-1803。y のときだけ）
             print("終了します。")
             return
 
