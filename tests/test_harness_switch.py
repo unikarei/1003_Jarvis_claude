@@ -167,6 +167,7 @@ def test_limit_rests_harness_and_notice_once(index, fake_llm, now):  # noqa: F81
                            "休止中: Codex（上限、あと 30 分）。")
     _say("Claude にして", ctx)
     assert _say("今どれ？", ctx).text.startswith("今は Claude（使えないときは自動で切り替えます）です。休止中: Codex")
+    _say("おまかせにして", ctx)
     now["v"] += 31 * 60                                           # 休止の期限が過ぎたら、もう一度試す
     fake_llm["fail"] = {}
     third = _say("大洗の補助金について教えて", ctx)
