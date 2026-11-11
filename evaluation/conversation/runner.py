@@ -152,7 +152,8 @@ def run_parent(args, argv: list[str], run=subprocess.run) -> int:
                     'JARVIS_CKC_DATA_DIR':str(root/'ckc'), 'JARVIS_LATENCY_LOG':str(root/'latency'/'turns.jsonl'),
                     'JARVIS_EVAL_DIR':str(output), 'JARVIS_LLM_PROVIDER':'ollama', 'JARVIS_CHAT_MODEL':args.model,
                     'JARVIS_OLLAMA_URL':'http://127.0.0.1:11434', 'JARVIS_CAPTURE_ON_END':'0',
-                    'CLAUDE_BIN':str(root/'no-claude')})
+                    'CLAUDE_BIN':str(root/'no-claude'), 'JARVIS_CODEX_BIN':str(root/'no-codex'),
+                    'JARVIS_CODEX_APP_SERVER':'0', 'JARVIS_HARNESS':'ollama'})
         for key in ('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','OPENAI_API_KEY'):
             env.pop(key, None)
         if args.skills:
@@ -248,12 +249,13 @@ def ollama_only(counter: list[int], available: bool):
     def handler_denied(*args,**kwargs):
         raise orchestrator.SkillError('このスキルは会話評価の安全範囲外です')
     with contextlib.ExitStack() as stack:
-        for name in ('ANSWER_PROVIDER','ANSWER_RETRY_PROVIDER','CHAT_PROVIDER','CHAT_FALLBACK_PROVIDER'):
-            stack.enter_context(patch.object(orchestrator,name,'ollama'))
+        # 経路 A・B とも Ollama だけ（T-2002 のハーネスの順番。Codex・Claude に切り替えない）
+        stack.enter_context(patch.object(orchestrator,'harness_order',lambda ctx,kind:('ollama',)))
         stack.enter_context(patch.object(llm,'LLM_PROVIDER','ollama'))
         stack.enter_context(patch.object(llm,'PROVIDERS',{'ollama':llm.PROVIDERS['ollama']}))
         stack.enter_context(patch.object(llm,'complete',complete))
-        for name in ('ask_claude','ask_claude_tiered','_complete_anthropic_api','_complete_claude_cli','_complete_claude_warm'):
+        for name in ('ask_claude','ask_claude_tiered','_complete_anthropic_api','_complete_claude_cli','_complete_claude_warm',
+                     '_complete_codex','_stream_codex','warm_up_codex','warm_up_claude'):
             stack.enter_context(patch.object(llm,name,denied))
         handlers={k:v if k in ALLOWED_HANDLERS else handler_denied for k,v in orchestrator.HANDLERS.items()}
         stack.enter_context(patch.object(orchestrator,'HANDLERS',handlers))

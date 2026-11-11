@@ -150,7 +150,12 @@ def test_only_ollama_and_safe_handlers(monkeypatch):
         with pytest.raises(llm.LLMError):llm.complete('質問',provider='claude_cli')
         with pytest.raises(llm.LLMError):llm.ask_claude('質問')
         with pytest.raises(orchestrator.SkillError):orchestrator.HANDLERS['control-center']({},None,'')
-        assert orchestrator.ANSWER_PROVIDER=='ollama'
+        ctx=orchestrator.Context()
+        ctx.harness='codex'                    # Owner が切り替えていても、評価では Ollama だけ（T-2002 の後）
+        assert orchestrator.harness_order(ctx,'chat')==('ollama',)
+        assert orchestrator.harness_order(ctx,'answer')==('ollama',)
+        with pytest.raises(llm.LLMError):llm.complete('質問',provider='codex')
+        with pytest.raises(llm.LLMError):llm._stream_codex('質問',lambda t:None)
     assert counter==[1]
 
 
