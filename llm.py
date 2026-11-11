@@ -23,7 +23,8 @@ import anthropic
 
 import latency
 from agent_log import log_event
-from config import (ANTHROPIC_API_KEY, CHAT_MODEL, CLAUDE_BIN, CLAUDE_CLI_TIMEOUT_SECONDS, CODEX_BIN, CODEX_MODEL,
+from config import (ANTHROPIC_API_KEY, CHAT_MODEL, CLAUDE_BIN, CLAUDE_CLI_TIMEOUT_SECONDS, CODEX_APP_SERVER, CODEX_BIN,
+                    CODEX_MODEL,
                     CODEX_REASONING, CODEX_TIMEOUT_SECONDS, ESCALATION_MODEL, LLM_PROVIDER, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL, SUMMARY_MODEL)
 
 MIN_VALID_LENGTH = 5  # これより短い応答は検証失敗（空応答・応答エラー等）とみなす
@@ -651,7 +652,7 @@ def _codex_failure(message: str) -> LLMError:
     return LLMUnavailable(text, reason) if reason else LLMError(text)
 
 
-def _stream_codex(prompt: str, on_text, timeout: int | None = None, cancel=None) -> str:
+def _stream_codex_exec(prompt: str, on_text, timeout: int | None = None, cancel=None) -> str:
     """codex exec --json の出力（1 行 1 つの JSON）を読み、答えの文の増えた分を on_text に渡し、最後に全文を返す。
     途中の文のイベントがない版では、答えができた時点で全文を 1 回渡す。"""
     timeout = timeout or CODEX_TIMEOUT_SECONDS
@@ -715,6 +716,264 @@ def _stream_codex(prompt: str, on_text, timeout: int | None = None, cancel=None)
     if state["answer"] is not None and state["done"]:
         return state["answer"]                     # 途中の一時的なエラー（再接続など）があっても、答えが届けば成功
     raise _codex_failure(state["error"] or stderr or f"終了コード {proc.returncode}（答えを受け取れませんでした）")
+
+
+# --- 常駐の codex app-server（T-2004、../docs/spec.md §3.4.12 D） ---
+# 標準入出力の JSON-RPC。会話の起動時に起動しておき、答えごとに新しいスレッド（読み取り専用・承認なし・保存しない）を作って
+# turn/start の差分（item/agentMessage/delta）を渡す。会話の流れはプロンプトで渡し、app-server の中にためない。
+# 起動できない・途中で終わったときは codex exec で答える（_AppServerDown）。上限・ログインなしは切り替えない。
+
+_APP_ITEMS_OK = {"userMessage", "agentMessage", "reasoning"}   # これ以外の項目（ツールなど）が来たら止める
+_APP_START_TIMEOUT = 30          # 起動・スレッドの作成の上限（秒）
+_APP_MAX_TURNS = 100             # この回数ごとに起動し直す（作ったスレッドをためない）
+
+
+class _AppServerDown(Exception):
+    """app-server が使えない（起動できない・終わった・使用中）。codex exec で答える。LLMError ではない。"""
+
+
+class _AppServerBusy(_AppServerDown):
+    """app-server が別の答えを作っている。止めずに、この答えだけ codex exec で答える。"""
+
+
+class _CodexAppServer:
+    def __init__(self, binary: str):
+        self.workdir = tempfile.TemporaryDirectory(prefix="jarvis-codex-")
+        cmd = [binary, "app-server", "--listen", "stdio://",
+               *[x for name in CODEX_DISABLED_FEATURES for x in ("--disable", name)],
+               "-c", 'web_search="disabled"', "-c", 'approval_policy="never"']
+        try:
+            self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                         text=True, cwd=self.workdir.name, env=_codex_env())
+        except OSError as e:
+            self.workdir.cleanup()
+            raise _AppServerDown(f"起動できません: {e}") from None
+        self.write_lock = threading.Lock()
+        self.turn_lock = threading.Lock()
+        self.pending: dict[int, queue.Queue] = {}
+        self.events: queue.Queue = queue.Queue()
+        self.next_id = 0
+        self.turns = 0
+        threading.Thread(target=self._read, name="jarvis-codex-app-server", daemon=True).start()
+        try:
+            self.request("initialize", {"clientInfo": {"name": "jarvis", "version": "1"}}, _APP_START_TIMEOUT)
+            self.send({"method": "initialized", "params": {}})
+        except BaseException:
+            self.close()
+            raise
+
+    def _read(self):
+        try:
+            for line in self.proc.stdout:
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(message, dict):
+                    continue
+                if "id" in message and "method" not in message:
+                    box = self.pending.pop(message["id"], None)
+                    if box is not None:
+                        box.put(message)
+                else:
+                    self.events.put(message)
+        except (OSError, ValueError):
+            pass
+        finally:
+            self.events.put(None)                  # 終わった
+            for box in list(self.pending.values()):
+                box.put(None)
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def send(self, message: dict) -> None:
+        try:
+            with self.write_lock:
+                self.proc.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
+                self.proc.stdin.flush()
+        except (OSError, ValueError):
+            raise _AppServerDown("app-server に送れません（終了しています）") from None
+
+    def request(self, method: str, params: dict, timeout: float) -> dict:
+        """要求を送って応答の result を返す。エラーの応答は LLMError、終わった・時間切れは _AppServerDown。"""
+        with self.write_lock:
+            self.next_id += 1
+            ident = self.next_id
+        box: queue.Queue = queue.Queue()
+        self.pending[ident] = box
+        self.send({"id": ident, "method": method, "params": params})
+        try:
+            reply = box.get(timeout=timeout)
+        except queue.Empty:
+            self.pending.pop(ident, None)
+            raise _AppServerDown(f"{method} の応答がありません") from None
+        if reply is None:
+            raise _AppServerDown(f"{method} の途中で app-server が終わりました")
+        if reply.get("error"):
+            raise _codex_failure(str((reply["error"] or {}).get("message") or reply["error"]))
+        return reply.get("result") or {}
+
+    def reject(self, message: dict) -> None:
+        """app-server からの要求（承認など）を断る。"""
+        try:
+            self.send({"id": message["id"], "error": {"code": -32000, "message": "Jarvis はこの要求を受け付けません"}})
+        except _AppServerDown:
+            pass
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.kill()
+        self.proc.wait()
+        for stream in (self.proc.stdin, self.proc.stdout):
+            try:
+                stream.close()
+            except (OSError, AttributeError, ValueError):
+                pass
+        self.workdir.cleanup()
+
+
+_app_lock = threading.Lock()
+_app_server: _CodexAppServer | None = None
+_app_atexit = False
+
+
+def _take_app_server() -> _CodexAppServer:
+    """動いている app-server を返す。なければ・終わっていれば・回数を超えていれば起動する。"""
+    global _app_server, _app_atexit
+    binary = find_codex_bin()
+    if not binary:
+        raise LLMUnavailable("Codex CLI が見つかりません（JARVIS_CODEX_BIN・PATH・VS Code の拡張機能）", "missing")
+    with _app_lock:
+        server = _app_server
+        if server is not None and (not server.alive() or server.turns >= _APP_MAX_TURNS) \
+                and not server.turn_lock.locked():
+            _app_server = None
+            server.close()
+            server = None
+        if server is None:
+            server = _CodexAppServer(binary)
+            _app_server = server
+            if not _app_atexit:
+                atexit.register(stop_codex_app_server)
+                _app_atexit = True
+        return server
+
+
+def warm_up_codex() -> bool:
+    """会話の起動時に app-server を起動しておく。失敗しても例外を出さず False。"""
+    if not CODEX_APP_SERVER:
+        return False
+    try:
+        _take_app_server()
+    except (_AppServerDown, LLMError):
+        return False
+    return True
+
+
+def stop_codex_app_server() -> None:
+    global _app_server
+    with _app_lock:
+        server, _app_server = _app_server, None
+    if server is not None:
+        server.close()
+
+
+def _stream_codex_app(prompt: str, on_text, timeout: int | None = None, cancel=None) -> str:
+    timeout = timeout or CODEX_TIMEOUT_SECONDS
+    deadline = time.monotonic() + timeout
+    server = _take_app_server()
+    if not server.turn_lock.acquire(blocking=False):
+        raise _AppServerBusy("app-server は別の答えを作っています")
+    try:
+        while True:                                # 前の答えの残りの通知を捨てる
+            try:
+                if server.events.get_nowait() is None:
+                    raise _AppServerDown("app-server が終わっています")
+            except queue.Empty:
+                break
+        server.turns += 1
+        thread_params = {"cwd": server.workdir.name, "sandbox": "read-only", "approvalPolicy": "never",
+                         "ephemeral": True, "config": {"web_search": "disabled"}}
+        if CODEX_REASONING:
+            thread_params["config"]["model_reasoning_effort"] = CODEX_REASONING
+        if CODEX_MODEL:
+            thread_params["model"] = CODEX_MODEL
+        thread_id = server.request("thread/start", thread_params, _APP_START_TIMEOUT)["thread"]["id"]
+        latency.mark("llm_ready")
+        turn = server.request("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}]},
+                              _APP_START_TIMEOUT)
+        turn_id = (turn.get("turn") or {}).get("id")
+        parts: list[str] = []
+        final = {"text": None, "error": None}
+
+        def stop(error):
+            try:
+                server.send({"id": -1, "method": "turn/interrupt", "params": {"threadId": thread_id, "turnId": turn_id}})
+            except _AppServerDown:
+                pass
+            raise error
+
+        while True:
+            if cancel is not None and cancel():
+                stop(LLMCancelled("取り消されました"))
+            if time.monotonic() > deadline:
+                stop(LLMError(f"Codex が {timeout} 秒でタイムアウトしました"))
+            try:
+                message = server.events.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if message is None:
+                if parts:
+                    raise LLMError("Codex の app-server が答えの途中で終わりました")
+                raise _AppServerDown("app-server が答えの前に終わりました")
+            method = message.get("method", "")
+            params = message.get("params") or {}
+            if "id" in message:                    # app-server からの要求（承認など）は断って止める
+                server.reject(message)
+                stop(LLMError(f"Codex が {method} を求めたため止めました"))
+            if params.get("threadId") not in (None, thread_id):
+                continue
+            if method == "item/agentMessage/delta":
+                delta = params.get("delta") or ""
+                if delta:
+                    parts.append(delta)
+                    on_text(delta)
+            elif method in ("item/started", "item/completed"):
+                item = params.get("item") or {}
+                if item.get("type") not in _APP_ITEMS_OK:
+                    stop(LLMError(f"Codex がツール（{item.get('type')}）を使おうとしたため止めました"))
+                if method == "item/completed" and item.get("type") == "agentMessage":
+                    final["text"] = item.get("text")
+            elif method == "error" and not params.get("willRetry"):
+                final["error"] = (params.get("error") or {}).get("message")
+            elif method == "turn/completed":
+                info = params.get("turn") or {}
+                if info.get("status") == "completed":
+                    return "".join(parts) or final["text"] or ""
+                message_text = (info.get("error") or {}).get("message") or final["error"] or info.get("status")
+                raise _codex_failure(str(message_text))
+    finally:
+        server.turn_lock.release()
+
+
+def _stream_codex(prompt: str, on_text, timeout: int | None = None, cancel=None) -> str:
+    """Codex で答える。常駐の app-server（逐次表示）を先に使い、使えなければ codex exec（T-2004）。"""
+    if CODEX_APP_SERVER:
+        sent = []
+
+        def track(text):
+            if text:
+                sent.append(True)
+            on_text(text)
+        try:
+            return _stream_codex_app(prompt, track, timeout, cancel)
+        except _AppServerDown as e:
+            if sent:
+                raise LLMError(f"Codex の app-server が答えの途中で使えなくなりました: {e}") from None
+            if not isinstance(e, _AppServerBusy):
+                stop_codex_app_server()            # 次の答えで起動し直す
+    return _stream_codex_exec(prompt, on_text, timeout, cancel)
 
 
 def _complete_codex(prompt: str, timeout: int | None = None) -> str:

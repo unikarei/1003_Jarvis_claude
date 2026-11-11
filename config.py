@@ -72,6 +72,8 @@ CODEX_BIN = os.environ.get("JARVIS_CODEX_BIN", "")          # 空なら PATH →
 CODEX_MODEL = os.environ.get("JARVIS_CODEX_MODEL", "")      # 空なら Codex の既定
 CODEX_REASONING = os.environ.get("JARVIS_CODEX_REASONING", "low")
 CODEX_TIMEOUT_SECONDS = int(os.environ.get("JARVIS_CODEX_TIMEOUT", "300"))
+# 常駐の codex app-server（標準入出力）で答えを逐次表示する（T-2004）。0 なら codex exec だけ
+CODEX_APP_SERVER = os.environ.get("JARVIS_CODEX_APP_SERVER", "1").strip() != "0"
 # 会話の LLM（ハーネス）の切り替え（ADR-0035、../docs/spec.md §3.4.12）
 HARNESS = os.environ.get("JARVIS_HARNESS", "auto").strip().lower() or "auto"           # auto・ollama・claude・codex
 HEAVY_HARNESS = os.environ.get("JARVIS_HEAVY_HARNESS", "codex").strip().lower() or "codex"   # おまかせの経路 B の最初
