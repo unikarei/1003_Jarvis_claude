@@ -35,6 +35,7 @@ def _split(text: str) -> tuple[int, ...]:
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m evaluation", description="ナレッジ回答の評価部門")
     sub = p.add_subparsers(dest="command", required=True)
+    sub.add_parser("conversation", help="隔離した模擬会話の評価（Ollamaのみ）。conversation --help を参照")
     b = sub.add_parser("build", help="評価セット（疑似 Q&A）を作る（LLM は Ollama だけ）")
     b.add_argument("--n", type=int, default=60)
     b.add_argument("--seed", type=int, default=0)
@@ -186,6 +187,9 @@ def _improve(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "conversation":
+        from evaluation.conversation.runner import main as conversation_main
+        return conversation_main(argv[1:])
     args = parser().parse_args(argv)
     problem = _check(args)
     if problem:

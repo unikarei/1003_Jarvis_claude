@@ -478,10 +478,30 @@ def _chat_complete(prompt, ctx, provider, stream):
     return llm.complete(prompt, provider=provider)
 
 
+# 単独の間投詞だけを対象にする。質問・依頼・後続の文は全文一致から外す（T-1901 の候補 1、Codex 作成）。
+_BACKCHANNEL = re.compile(
+    r"(?:(?:う[ーうぅ]*ん){1,3}|ん[ーん]*|あ[ーあぁ]*|あの[ーぉ]*|"
+    r"え[ーえぇ]*(?:っ?と[ーぉ]*)?|ふ[ーぅう]*む|まあ|そう(?:です)?|なるほど)"
+    r"(?:だ)?(?:ね[ーえぇ]*|な[ーあぁ]*)?"
+)
+
+
+def is_backchannel(text: str) -> bool:
+    """短い単独の相づち・言いよどみ。曖昧な文や問いかけは通常の回答へ渡す。"""
+    if not text or len(text) > 24 or re.search(r"[?？]", text):
+        return False
+    normalized = obsidian_note.normalize(text).rstrip("。．.,、！!…‥")
+    return _BACKCHANNEL.fullmatch(normalized) is not None
+
+
 def _chat(inputs, ctx, text):
-    """通常の会話（経路 A、ADR-0027）。検索せず、おまかせでは Ollama で答える。順番と切り替えは ADR-0035。"""
+    """通常の会話（経路 A、ADR-0027）。検索せず、おまかせでは Ollama で答える。順番と切り替えは ADR-0035。
+    短い相づち・言いよどみだけの発言には、LLM を呼ばずに「はい。」と返す（T-1901）。"""
+    question = inputs.get("question") or text
+    if is_backchannel(question):
+        return "はい。", []
     import knowledge_engine as ke
-    prompt = CHAT_PROMPT.format(question=inputs.get("question") or text, history=ke.format_history(ctx.history),
+    prompt = CHAT_PROMPT.format(question=question, history=ke.format_history(ctx.history),
                                 style=ke.VOICE_STYLE if ctx.voice else "")
     answer, notice = run_with_harnesses(lambda provider, stream: _chat_complete(prompt, ctx, provider, stream),
                                         ctx, "chat")

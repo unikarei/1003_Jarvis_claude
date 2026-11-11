@@ -341,3 +341,8 @@
 - [x] T-2001 `codex` のプロバイダー（`llm.py`: 答えるだけの `codex exec --json`、逐次表示、取り消し、API キーを渡さない、`LLMUnavailable`・`failure_reason`）
 - [x] T-2002 ハーネスの選択・会話の途中の切り替え・自動の切り替えと休止（`orchestrator.py`、Task の meta `llm`、遅延の記録 `harness`）。実機の確認は T-2003（Owner のマージの後）
 - [x] T-2004 Codex を常駐の app-server（標準入出力の JSON-RPC）で呼び、答えを逐次表示する（`llm._CodexAppServer`・`warm_up_codex`・`stop_codex_app_server`、使えなければ `codex exec`、`JARVIS_CODEX_APP_SERVER`）
+
+## 自然な会話の自己改善（`../docs/tasks.md` T-1901・T-1902）
+
+- [x] T-1901 自然な会話の自己改善（Codex、2026-11-10）: 固定 110 会話の隔離評価（`python -m evaluation conversation`）と比較レポート。
+- [x] T-1902 Claude の再検証と採用（2026-11-11）: 評価を T-2002 の後も Ollama だけに固定、候補 1（相づちに LLM を呼ばず「はい。」、`orchestrator.is_backchannel`）を採用（dev +0.027・val +0.023）

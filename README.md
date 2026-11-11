@@ -214,3 +214,5 @@ python run_task.py "先週のAIニュースで重要だったのは？"         
 ## RSSフィードの追加
 
 `config.py` の `RSS_FEEDS` にエントリを追記する。
+
+- 会話の隔離評価: `python -m evaluation conversation --help`（固定110会話、Ollamaのみ、DB/Vaultコピー・確認は拒否。結果と制限は [T-1901レポート](docs/conversation-selfimprove-2026-11-10.md)）。
