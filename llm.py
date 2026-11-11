@@ -596,8 +596,15 @@ def ollama_available(timeout: float = 1.0) -> bool:
 
 CODEX_BLOCKED_ENV = (*CLI_BLOCKED_ENV, "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID", "OPENAI_ORGANIZATION",
                      "OPENAI_PROJECT", "CODEX_API_KEY")
-_CODEX_TOOL_ITEMS = {"command_execution", "file_change", "mcp_tool_call", "web_search", "patch_apply", "tool_call"}
+# 無効にする Codex の機能（ツールを出すもの）。2026-11-11 の実機で、shell_tool と web_search の無効だけでは
+# codex_apps の Web 検索（mcp_tool_call）・コードの実行（functions.exec）・別のエージェントの起動などが使えた
+CODEX_DISABLED_FEATURES = ("shell_tool", "apps", "browser_use", "browser_use_external", "computer_use", "code_mode_host",
+                           "goals", "sleep_tool", "skill_search", "tool_suggest", "multi_agent", "image_generation",
+                           "view_image")
 _CODEX_MESSAGE_ITEMS = {"agent_message", "assistant_message"}
+# 答えの文以外で受け付ける項目（考えの要約、無効にした機能についての知らせ）。これ以外の項目（ツールの呼び出しなど）が
+# 来たら止める（許可の一覧。Codex が新しいツールを足しても、名前を知らずに止められる）
+_CODEX_PASSIVE_ITEMS = {"reasoning", "error"}
 
 
 def find_codex_bin() -> str | None:
@@ -627,7 +634,8 @@ def _codex_env() -> dict[str, str]:
 
 def _codex_command(binary: str, workdir: str) -> list[str]:
     cmd = [binary, "exec", "--json", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
-           "--ignore-user-config", "--disable", "shell_tool", "-c", 'web_search="disabled"',
+           "--ignore-user-config", *[x for name in CODEX_DISABLED_FEATURES for x in ("--disable", name)],
+           "-c", 'web_search="disabled"',
            "-c", 'approval_policy="never"', "-C", workdir]
     if CODEX_REASONING:
         cmd += ["-c", f'model_reasoning_effort="{CODEX_REASONING}"']
@@ -666,10 +674,11 @@ def _stream_codex(prompt: str, on_text, timeout: int | None = None, cancel=None)
         item = event.get("item") if isinstance(event.get("item"), dict) else None
         if not item or not str(kind).startswith("item."):
             return
-        if item.get("type") in _CODEX_TOOL_ITEMS:
-            raise LLMError(f"Codex がツール（{item.get('type')}）を使おうとしたため止めました")
-        if item.get("type") not in _CODEX_MESSAGE_ITEMS:
+        kind_of_item = item.get("type")
+        if kind_of_item in _CODEX_PASSIVE_ITEMS:
             return
+        if kind_of_item not in _CODEX_MESSAGE_ITEMS:
+            raise LLMError(f"Codex がツール（{kind_of_item}）を使おうとしたため止めました")
         key = str(item.get("id") or "")
         text = item.get("text") or ""
         before = sent.get(key, "")
