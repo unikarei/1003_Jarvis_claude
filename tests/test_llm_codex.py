@@ -34,6 +34,11 @@ if prompt == "auth":
 if prompt == "tool":
     out({{"type": "item.started", "item": {{"id": "c1", "type": "command_execution", "command": "ls"}}}})
     time.sleep(10)
+if prompt == "unknown_item":
+    out({{"type": "item.started", "item": {{"id": "x1", "type": "collab_tool_call", "tool": "spawn_agent"}}}})
+    time.sleep(10)
+if prompt == "passive":
+    out({{"type": "item.completed", "item": {{"id": "e1", "type": "error", "message": "Code Mode is unavailable"}}}})
 if prompt == "crash":
     out({{"type": "item.updated", "item": {{"id": "m1", "type": "agent_message", "text": "途中"}}}})
     sys.exit(2)
@@ -96,7 +101,9 @@ def test_codex_command_is_answer_only_and_has_no_api_keys(fake_codex, monkeypatc
     for flag in ("--json", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config"):
         assert flag in argv
     assert argv[argv.index("--sandbox") + 1] == "read-only"
-    assert argv[argv.index("--disable") + 1] == "shell_tool"
+    disabled = {argv[i + 1] for i, a in enumerate(argv) if a == "--disable"}
+    assert {"shell_tool", "apps", "code_mode_host", "multi_agent", "browser_use", "computer_use"} <= disabled
+    assert disabled == set(llm.CODEX_DISABLED_FEATURES)
     assert 'web_search="disabled"' in argv and 'approval_policy="never"' in argv
     assert 'model_reasoning_effort="low"' in argv
     assert argv[argv.index("--model") + 1] == "gpt-test"
@@ -202,3 +209,16 @@ def test_tests_never_find_real_codex():
     assert llm.find_codex_bin() is None
     with pytest.raises(llm.LLMUnavailable):
         llm.complete("問い", provider="codex")
+
+
+def test_codex_unknown_item_type_is_stopped(fake_codex):
+    """知らない項目（新しいツールなど）も、答えの文・考え・エラーでなければ止める（許可の一覧）。"""
+    started = time.monotonic()
+    with pytest.raises(llm.LLMError, match="collab_tool_call"):
+        llm.complete("unknown_item", provider="codex")
+    assert time.monotonic() - started < 3
+
+
+def test_codex_error_item_is_ignored(fake_codex):
+    assert llm.complete("passive", provider="codex") == "答え:passive。"
+
