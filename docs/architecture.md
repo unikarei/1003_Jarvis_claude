@@ -149,6 +149,6 @@
 - 取り返しのつかない操作は承認キューを挟む
 - 出所不明のMCPサーバ・パッケージは導入しない
 
-### 会話の記録・要約（T-2101、2026-11-12）
+### 会話の記録・要約・想起（T-2101・T-2102、2026-11-12）
 
-全体 `docs/architecture.md` §10.9 に従う。`memory/store.py` が JSONL 正本と SQLite 索引を管理し、要約失敗回数と除外状態も `status` レコードへ追記して復元する。JSONL 追記後に索引の更新が失敗した場合、次の発言の記録前にその会話の索引を原文から復元する。`memory/summarize.py` は Ollama だけを使い、起動時のバックグラウンド処理で要約する。想起とプロンプト注入は T-2102 の範囲。
+全体 `docs/architecture.md` §10.9 に従う。`memory/store.py` が JSONL 正本と SQLite 索引を管理し、要約失敗回数と除外状態も `status` レコードへ追記して復元する。JSONL 追記後に索引の更新が失敗した場合、次の発言の記録前にその会話の索引を原文から復元する。`memory/summarize.py` は Ollama だけを使い、起動時のバックグラウンド処理で要約する。T-2102 では `memory/recall.py` が SQLite 索引と承認済みの Preference を読み、BM25 で関係する要約を選ぶ。原文 JSONL・外部通信・LLM は想起に使わない。経路 A・B の回答直前にだけ記憶パックを注入し、例外時は空として続行する。`knowledge_engine.answer(memory=None)` は既存の評価呼び出しとの互換性を保つ。
