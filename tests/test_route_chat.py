@@ -273,13 +273,17 @@ def test_general_chat_without_stream_uses_complete(no_search, monkeypatch):
     assert orc._chat({"question": "やあ"}, ctx, "やあ") == ("答え", []) and seen == ["ollama"] and ctx.shown == ""
 
 
-def test_general_chat_falls_back_to_claude_warm(no_search, monkeypatch):
+def test_general_chat_falls_back_to_codex_with_notice(no_search, monkeypatch):
+    """おまかせの経路 A は Ollama → Codex → Claude。切り替えたら答えの前に一言添える（ADR-0035）。"""
     calls = _fake_stream(monkeypatch, fail={"ollama": llm.LLMError("Ollama に接続できません")})
-    ctx = orc.Context(stream=lambda t: None)
+    shown = []
+    ctx = orc.Context(stream=shown.append)
     text, _ = orc._chat({"question": "やあ"}, ctx, "やあ")
-    assert text == "こんにちは、JARVIS です。"
-    assert [c["provider"] for c in calls] == ["ollama", "claude_warm"]
-    assert calls[0]["prompt"] == calls[1]["prompt"] and ctx.last_provider == "claude_warm"
+    assert text == "Ollama が応答しなかったため、Codex で答えます。\nこんにちは、JARVIS です。"
+    assert shown[0] == "Ollama が応答しなかったため、Codex で答えます。\n" and ctx.shown == "".join(shown)
+    assert [c["provider"] for c in calls] == ["ollama", "codex"]
+    assert calls[0]["prompt"] == calls[1]["prompt"] and ctx.last_provider == "codex"
+    assert ctx.resting == {}                     # 一時的な失敗は休止にしない
 
 
 def test_general_chat_does_not_fall_back_when_cancelled(no_search, monkeypatch):
@@ -325,18 +329,19 @@ def test_handle_reports_error_after_partial_output(index, monkeypatch):
 
 
 def test_knowledge_answer_does_not_retry_after_partial_output(db_path, monkeypatch):
-    calls = _fake_stream_partial(monkeypatch, "claude_warm")
+    calls = _fake_stream_partial(monkeypatch, "codex")
     shown = []
     with pytest.raises(llm.LLMError):
         orc._answer({"question": "補助金は？"}, orc.Context(stream=shown.append), "補助金は？")
-    assert calls == ["claude_warm"] and shown == ["途中まで"]
+    assert calls == ["codex"] and shown == ["途中まで"]
 
 
 def test_general_chat_never_uses_paid_api(no_search, monkeypatch):
-    calls = _fake_stream(monkeypatch, fail={"ollama": llm.LLMError("x"), "claude_warm": llm.LLMError("y")})
-    with pytest.raises(llm.LLMError):
+    calls = _fake_stream(monkeypatch, fail={p: llm.LLMError("x") for p in ("ollama", "codex", "claude_warm", "claude_cli")})
+    with pytest.raises(orc.AllHarnessesFailed) as e:
         orc._chat({"question": "やあ"}, orc.Context(stream=lambda t: None), "やあ")
-    assert [c["provider"] for c in calls] == ["ollama", "claude_warm"]
+    assert [c["provider"] for c in calls] == ["ollama", "codex", "claude_warm", "claude_cli"]   # anthropic_api はない
+    assert e.value.text == "今はどのモデルも使えません（Ollama: 応答なし、Codex: 応答なし、Claude: 応答なし）。"
 
 
 def test_handle_runs_general_chat_and_records_provider(index, monkeypatch):
@@ -344,13 +349,22 @@ def test_handle_runs_general_chat_and_records_provider(index, monkeypatch):
     monkeypatch.setattr(ke, "search", lambda *a, **k: [])   # 振り分けの検索だけ（ハンドラーは検索しない）
     ctx = orc.Context(stream=lambda t: None)
     out = orc.handle("こんにちは", ctx, use_llm=False)
-    assert out.ok and out.skill == "general-chat" and out.text == "こんにちは、JARVIS です。"
-    assert ctx.last_provider == "claude_warm" and [c["provider"] for c in calls] == ["ollama", "claude_warm"]
+    assert out.ok and out.skill == "general-chat" and out.text.endswith("こんにちは、JARVIS です。")
+    assert ctx.last_provider == "codex" and [c["provider"] for c in calls] == ["ollama", "codex"]
+    assert out.llm == {"harness": "codex", "provider": "codex", "skipped": [{"harness": "ollama", "reason": "error"}]}
 
 
 # ---------------------------------------------------------------- knowledge-answer の LLM
 
-def test_knowledge_answer_uses_claude_warm(db_path, monkeypatch):
+def test_knowledge_answer_uses_codex_by_default(db_path, monkeypatch):
+    calls = _fake_stream(monkeypatch)
+    ctx = orc.Context(stream=lambda t: None)
+    orc._answer({"question": "補助金は？"}, ctx, "補助金は？")
+    assert [c["provider"] for c in calls] == ["codex"] and ctx.last_provider == "codex"
+
+
+def test_knowledge_answer_uses_claude_warm_when_heavy_is_claude(db_path, monkeypatch):
+    monkeypatch.setattr(config, "HEAVY_HARNESS", "claude")
     calls = _fake_stream(monkeypatch)
     ctx = orc.Context(stream=lambda t: None)
     orc._answer({"question": "補助金は？"}, ctx, "補助金は？")
@@ -358,6 +372,7 @@ def test_knowledge_answer_uses_claude_warm(db_path, monkeypatch):
 
 
 def test_knowledge_answer_retries_once_with_claude_cli(db_path, monkeypatch):
+    monkeypatch.setattr(config, "HEAVY_HARNESS", "claude")
     calls = _fake_stream(monkeypatch, fail={"claude_warm": llm.LLMError("待機中の claude が終了しました")})
     ctx = orc.Context(stream=lambda t: None)
     text, _ = orc._answer({"question": "補助金は？"}, ctx, "補助金は？")
@@ -365,25 +380,28 @@ def test_knowledge_answer_retries_once_with_claude_cli(db_path, monkeypatch):
     assert [c["provider"] for c in calls] == ["claude_warm", "claude_cli"] and ctx.last_provider == "claude_cli"
 
 
-def test_knowledge_answer_retries_only_once(db_path, monkeypatch):
+def test_knowledge_answer_claude_retries_once_then_next_harness(db_path, monkeypatch):
+    """Claude の中では claude_warm → claude_cli を一度だけ。だめなら次のハーネス（Codex → Ollama）。"""
+    monkeypatch.setattr(config, "HEAVY_HARNESS", "claude")
     calls = _fake_stream(monkeypatch, fail={"claude_warm": llm.LLMError("x"), "claude_cli": llm.LLMError("y")})
-    with pytest.raises(llm.LLMError):
-        orc._answer({"question": "補助金は？"}, orc.Context(stream=lambda t: None), "補助金は？")
-    assert [c["provider"] for c in calls] == ["claude_warm", "claude_cli"]
+    ctx = orc.Context(stream=lambda t: None)
+    text, _ = orc._answer({"question": "補助金は？"}, ctx, "補助金は？")
+    assert [c["provider"] for c in calls] == ["claude_warm", "claude_cli", "codex"]
+    assert text.startswith("Claude が応答しなかったため、Codex で答えます。")
 
 
 def test_knowledge_answer_does_not_retry_when_cancelled(db_path, monkeypatch):
-    calls = _fake_stream(monkeypatch, fail={"claude_warm": llm.LLMCancelled("取り消されました")})
+    calls = _fake_stream(monkeypatch, fail={"codex": llm.LLMCancelled("取り消されました")})
     with pytest.raises(llm.LLMCancelled):
         orc._answer({"question": "補助金は？"}, orc.Context(stream=lambda t: None, cancel=lambda: False), "補助金は？")
-    assert [c["provider"] for c in calls] == ["claude_warm"]
+    assert [c["provider"] for c in calls] == ["codex"]
 
 
-def test_knowledge_answer_without_stream_uses_claude_warm(db_path, monkeypatch):
+def test_knowledge_answer_without_stream_uses_codex(db_path, monkeypatch):
     seen = []
     monkeypatch.setattr(llm, "complete", lambda prompt, provider=None, timeout=None: seen.append(provider) or "答え")
     orc._answer({"question": "補助金は？"}, orc.Context(), "補助金は？")
-    assert seen == ["claude_warm"]
+    assert seen == ["codex"]
 
 
 def test_engine_answer_default_provider_is_unchanged(db_path, monkeypatch):

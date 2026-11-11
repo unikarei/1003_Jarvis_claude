@@ -267,7 +267,7 @@ def test_measure_full_streams_answer_and_stops_after_first_sentence(server, fake
     fake_mic["text"] = "大洗の民泊の物件について、補助金の申請期限はいつだった？"
     code, body, _ = req(server, "POST", "/api/measure", {"index": 2, "mode": "full"})
     data = json.loads(body)
-    assert code == 200 and data["skill"] == "knowledge-answer" and data["provider"] == "claude_warm"
+    assert code == 200 and data["skill"] == "knowledge-answer" and data["provider"] == "codex"   # おまかせの経路 B は Codex から（ADR-0035）
     assert data["executed"] is True and "first_audio" in data["stages"] and data["cer"] == 0.0
     assert said == ["申請期限は来月末です。"]                                     # 最初の 1 文だけ
     assert sent == []                                                            # 生成も止めた
