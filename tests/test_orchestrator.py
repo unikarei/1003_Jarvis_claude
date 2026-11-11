@@ -241,7 +241,7 @@ def test_answer_shows_only_cited_sources(monkeypatch):
             for i in (1, 2, 3)]
     seen = {}
 
-    def fake_answer(question, projects=None, on_text=None, history=None, voice=False, cancel=None, provider=None):
+    def fake_answer(question, projects=None, on_text=None, history=None, voice=False, cancel=None, provider=None, memory=None):
         seen.update(history=history, voice=voice)
         return seen["reply"], hits
     monkeypatch.setattr(ke, "answer", fake_answer)

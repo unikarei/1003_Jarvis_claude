@@ -20,7 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 # 段階（この順の想定。ない段階は記録しない）。audio_ready はブラウザでの声の会話で最初の文の音を保持した時刻（T-1502）
-STAGES = ("segment", "stt", "route", "search", "llm_ready", "first_text", "audio_ready", "first_audio", "done")
+STAGES = ("segment", "stt", "route", "memory", "search", "llm_ready", "first_text", "audio_ready", "first_audio", "done")
 # 属性と、受け付ける値の型（本文が入らないよう、名前と真偽だけ）
 ATTRS = {"mode": str, "skill": str, "provider": str, "harness": str, "warm": bool, "fallback": bool, "ok": bool}
 MODES = ("voice", "text", "web")    # web はブラウザでの声の会話（T-1502）

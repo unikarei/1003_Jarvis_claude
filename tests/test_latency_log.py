@@ -366,8 +366,8 @@ def test_general_chat_records_ollama_stages(log, index, ollama):
     out = orc.handle("こんにちは", orc.Context(stream=shown.append), use_llm=False)
     rec = latency.finish()
     assert out.ok and out.skill == "general-chat" and shown == ["こんにちは、", "JARVIS です。"]
-    assert set(rec["stages"]) == {"route", "llm_ready", "first_text", "done"}      # 検索しない
-    assert _in_order(rec["stages"], ["route", "llm_ready", "first_text", "done"])
+    assert set(rec["stages"]) == {"route", "memory", "llm_ready", "first_text", "done"}      # 検索しない
+    assert _in_order(rec["stages"], ["route", "memory", "llm_ready", "first_text", "done"])
     assert (rec["skill"], rec["provider"], rec["ok"]) == ("general-chat", "ollama", True)
     assert "fallback" not in rec and "warm" not in rec
 
@@ -382,8 +382,8 @@ def test_knowledge_answer_records_search_and_warm(log, index, fake_claude, monke
         records.append(latency.finish())
         assert out.ok and out.skill == "knowledge-answer"
     for rec in records:
-        assert set(rec["stages"]) == {"route", "search", "llm_ready", "first_text", "done"}
-        assert _in_order(rec["stages"], ["route", "search", "llm_ready", "first_text", "done"])
+        assert set(rec["stages"]) == {"route", "memory", "search", "llm_ready", "first_text", "done"}
+        assert _in_order(rec["stages"], ["route", "memory", "search", "llm_ready", "first_text", "done"])
         assert (rec["skill"], rec["provider"]) == ("knowledge-answer", "claude_warm")
     assert [r["warm"] for r in records] == [False, True]
     assert len(_records(log)) == 2
@@ -396,7 +396,7 @@ def test_ollama_failure_records_fallback(log, index, fake_claude):
     rec = latency.finish()
     assert out.ok and out.skill == "general-chat"
     assert rec["fallback"] is True and rec["provider"] == "claude_warm" and rec["warm"] is False
-    assert {"route", "llm_ready", "first_text", "done"} <= set(rec["stages"])
+    assert {"route", "memory", "llm_ready", "first_text", "done"} <= set(rec["stages"])
 
 
 def test_handle_without_turn_records_nothing(log, index, ollama):
@@ -540,7 +540,7 @@ def test_chat_starts_warm_up_and_records_each_turn(chat, log, index, ollama, mon
     assert started == [1]
     recs = _records(log)
     assert [r["mode"] for r in recs] == ["text", "text"]
-    assert all({"route", "llm_ready", "first_text", "done"} <= set(r["stages"]) for r in recs)
+    assert all({"route", "memory", "llm_ready", "first_text", "done"} <= set(r["stages"]) for r in recs)
     assert SECRET_Q not in log.read_text(encoding="utf-8")
     assert latency.current() is None
 

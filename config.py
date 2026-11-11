@@ -20,6 +20,9 @@ VAULT_ROOT = Path(os.environ.get("JARVIS_VAULT_ROOT", Path.home() / "work" / "ob
 CKC_DATA_DIR = Path(os.environ.get("JARVIS_CKC_DATA_DIR", BASE_DIR / "data" / "ckc"))
 # 会話の遅延の記録（latency.py、T-1405）。既定は data/latency/latency.jsonl。CKC と同じ data/ の下に置き、
 # テストで JARVIS_CKC_DATA_DIR を一時フォルダにしたときは一緒にそちらへ移る（本番の data/ に書かない）
+MEMORY_ENABLED = os.environ.get("JARVIS_MEMORY", "1") != "0"
+MEMORY_PACK_CHARS = 1200
+MEMORY_MIN_SCORE = 1.0
 MEMORY_DIR = Path(os.environ.get("JARVIS_MEMORY_DIR", CKC_DATA_DIR.parent / "memory"))
 
 LATENCY_LOG = Path(os.environ.get("JARVIS_LATENCY_LOG", CKC_DATA_DIR.parent / "latency" / "latency.jsonl"))

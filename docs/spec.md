@@ -319,8 +319,9 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
 - 会話ごとに会話 ID と経路を持ち、会話の履歴に入る発言を `data/memory/sessions/` の JSONL（原文）と `jarvis.db` の `memory_*`（索引）に記録する（`memory/store.py`、`orchestrator.add_turn`）
 - 次の会話の起動時に、まだ要約していない会話を Ollama だけで 4 項目・400 字以内に要約する（`memory/summarize.py`）
 - 経路 A・B のプロンプトに、承認済みの好み → 直前の会話 → 関係する過去の会話の「記憶パック」（1,200 字以内）を渡す（`memory/recall.py`）
+- 想起はローカル SQLite の読み取りだけで行い、項目の途中では切らない。直前の会話は全体仕様 C に従い終了済み・3 日以内を対象とする。経路 A・B だけに参考情報として渡し、失敗時は記憶なしで回答を続ける。遅延の `memory` 段階を記録し、会話 200 件・発言 4,000 件で 200 ms 以内を検証する。
 - CLI `python -m memory`（list・show・summarize・rebuild・stats・forget）。`JARVIS_MEMORY=0` で無効
-- 状態: T-2101（記録・要約・CLI）実装済み。想起・注入と評価は T-2102 以降。要約失敗回数・skipped は JSONL の `status` レコードにも追記し、索引の作り直しで復元する。
+- 状態: T-2101（記録・要約・CLI）実装済み。T-2102（想起・経路 A/B への注入）実装済み（Owner 事前承認、上位 AGENTS.md §2.1）。評価は T-2103 以降。要約失敗回数・skipped は JSONL の `status` レコードにも追記し、索引の作り直しで復元する。
 
 ## 4. データモデル
 
