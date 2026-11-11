@@ -195,3 +195,10 @@ def test_find_codex_bin_vscode_latest(monkeypatch, tmp_path):
         path.mkdir(parents=True)
         (path / "codex").write_text("")
     assert "26.1021.22027" in llm.find_codex_bin()
+
+
+def test_tests_never_find_real_codex():
+    """テストでは本物の codex を見つけない（conftest の JARVIS_CODEX_BIN）。"""
+    assert llm.find_codex_bin() is None
+    with pytest.raises(llm.LLMUnavailable):
+        llm.complete("問い", provider="codex")
