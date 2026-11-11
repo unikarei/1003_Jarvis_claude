@@ -344,4 +344,5 @@
 
 ## 自然な会話の自己改善（`../docs/tasks.md` T-1901・T-1902）
 
-- [~] T-1901 自然な会話の自己改善: 固定110会話・隔離評価・3候補比較・最終test完了、採用0。pytest 1293成功/既存環境要因28失敗、Git書込拒否でコミット/PR未完（[比較レポート](conversation-selfimprove-2026-11-10.md)、2026-11-10 Owner指示）。
+- [x] T-1901 自然な会話の自己改善（Codex、2026-11-10）: 固定 110 会話の隔離評価（`python -m evaluation conversation`）と比較レポート。
+- [x] T-1902 Claude の再検証と採用（2026-11-11）: 評価を T-2002 の後も Ollama だけに固定、候補 1（相づちに LLM を呼ばず「はい。」、`orchestrator.is_backchannel`）を採用（dev +0.027・val +0.023）
