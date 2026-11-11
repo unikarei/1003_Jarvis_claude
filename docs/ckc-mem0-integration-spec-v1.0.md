@@ -1,393 +1,141 @@
 # Jarvis 2 統合メモリ基盤 開発仕様書
 
-**採用案B：CKC内部へのMem0 OSS組込み**
+文書番号：J2-MEM-ARCH-001　版：**1.1**（2026-11-12、実態に合わせて改訂）　初版：1.0（2026-11-12）
 
-文書番号：J2-MEM-ARCH-001　版：1.0（設計ベースライン案）　作成日：2026年11月12日
+- 状態: **Approved**（2026-11-12 Owner 決定「その方針を採用」。細部は Claude 承認（ワークスペース AGENTS.md §2.2））
+- 要件の正本: ワークスペースの `docs/spec.md` §3.3.14（会話の記憶）。判断の記録: `docs/decisions.md` ADR-0037。設計: `docs/architecture.md` §10.9。受け入れ基準: `docs/testing.md` §17。タスク: `docs/tasks.md` §22。**要件はそちらを正とし、本書には Mem0 案からの経緯と、1003 の中での対応関係を書く**（同じ要件を 2 か所で別々に直さない）。
+- ファイル名は v1.0 のまま残す（Owner が参照しているため）。
 
-ステータス：設計方針は合意済み。既存GitHubソース未監査のため、実装箇所・依存関係・所要工数は要確認。
+## 0. v1.1 で何が変わったか（要旨）
 
-対象：Jarvis 2 / CKC / Obsidian / Codex・Claude・Ollama連携。本文は開発者へそのまま渡せる要求仕様であり、付録は本会話の重要論点を優先順位順に記録する。
-
-# 0. 要旨・設計の絶対条件
-
-- Jarvis本体から見える入口はCKCの統合Memory API一つとし、Mem0 OSSは内部で交換可能な検索・記憶コンポーネントとする。
-- Obsidian（Markdown Vault）を「承認済み長期ナレッジの正本」とする。Mem0を第二の正本にしない。
-- 会話原文と全変更イベントは独立したJSONLに保存する。Mem0とObsidianの両方を復元できるようにする。
-- CKCの抽出・照合・承認・公開フローを維持する。未承認知識が確定知識に混入することを防ぐ。
-- 既存CKCとObsidianノートは削除・全面再構築しない。移行は冪等・可逆・段階的に実施する。
-- Codex、Claude、Ollamaのいずれを呼び出しても、同じユーザー／案件の許可された記憶を検索できる。
-# 1. 背景と目的
-
-Jarvis 2は複数LLMを呼び分けられる一方、会話を跨いだ自動想起と長期記憶の統合管理が課題。既存CKCは会話から知識を抽出しObsidianへ保存するため、Mem0を独立した第二の知識管理システムとして並設すると重複・矛盾が生まれる。CKCを中核に据え、Mem0 OSSの検索・記憶機能を内包して保守負担を抑える。
-
-# 2. スコープと非スコープ
-
-## 2.1 スコープ
-
-- CKC統合Memory APIおよびMem0アダプタ
-- 会話・セッション履歴、個人設定、決定事項、研究ナレッジの検索と保存
-- CKC承認・Obsidian公開・Mem0索引同期
-- JSON/JSONLのエクスポート、Markdown生成、バックアップ・復元
-- 検索品質評価、監査ログ、障害時のフォールバックと段階的移行
-## 2.2 非スコープ
-
-- LLMルーターの全面置換、Letta Codeへの全面移行
-- Mem0クラウドサービスへのデータ送信（別途承認時のみ）
-- CKCに存在しない既存機能が実装済みであるとの断定
-- ObsidianノートをLLM判断だけで無条件に上書きする動作
-# 3. 論理アーキテクチャ
-
-```
-Jarvis UI / Voice / API
-         |
-  Existing LLM Router ----> Codex / Claude / Ollama
-         |
-     CKC Memory API  <---- single entry point
-         |
-  +------+------------------+
-  |  Memory Orchestrator     |
-  | - recall / remember     |
-  | - policy / scope / ACL  |
-  | - reconciler / approval |
-  +---+---------+-----------+
-      |         |
-  Mem0 Adapter  CKC Knowledge Workflow
-  (retrieval)   (extract/reconcile/approve/publish)
-      |         |
-  local index   Obsidian Vault (authoritative)
-      +----+----+
-           |
- Conversation archive / events.jsonl / snapshots.json
-```
-
-読み取り：会話要求→CKCが権限と案件を判定→Mem0検索＋必要ならObsidian全文検索→最新性・根拠・承認状態で統合→LLMへ注入。書き込み：原文保存→CKC候補生成→照合→必要な承認→Obsidian確定→Mem0を同期。日常的な会話文脈は別の暫定メモリ領域に登録できる。
-
-# 4. データ管理方針
-
-| データ種別 | 正本／保存先 | 更新条件 |
+| 項目 | v1.0（Mem0 案、採用案 B） | v1.1（採用した構成） |
 |---|---|---|
-| 会話原文 | JSONL／SQLite（既存採用を確認） | 受信直後、追記専用 |
-| 承認済み知識 | Obsidian Markdown＋CKC台帳 | CKC承認後 |
-| 未承認候補 | CKCレビューキュー | 抽出後。確定検索から除外 |
-| 会話上の暫定記憶 | Mem0 transient scope | 短期保存、有効期限・昇格あり |
-| 検索インデックス | Mem0／ローカルベクトルDB | 承認ノートと暫定メモリから再構築可能 |
-| 変更イベント | events.jsonl | 全操作で追記、削除はtombstone |
-| スナップショット | JSON＋任意MD | 定期・要求時に出力 |
+| 記憶エンジン | CKC の中に Mem0 OSS を組み込む | **Mem0 を最初は入れない**。1003 の `memory/` パッケージ（SQLite と JSONL）。Mem0 は測ってから判断（§6） |
+| 長期の知識の正本 | Obsidian | 変わらない（CKC で承認したノート） |
+| 会話の原文 | JSONL／SQLite（未確認） | `data/memory/sessions/<YYYY>/<MM>/<会話ID>.jsonl`（新規）。CKC の取り込みの原文は今までどおり `data/ckc/raw/` |
+| 検索 | Mem0（意味・BM25・エンティティ）＋ Qdrant | 既存の BM25 を会話の要約に当てる。意味検索（Ollama の embedding）は測って良くなったときだけ |
+| 入口の API | 8 つ（remember・recall・propose・approve・update・forget・export・reindex） | `memory` の記録・想起の 2 つと CLI。承認は既存の CKC（`ckc_cli.py`・ブラウザのカード） |
+| 同期 | 対応表・待ち行列・`sync_pending`・毎日の照合・変更イベントのログ | 要らない（保存先が 1 つ。索引は原文から `rebuild`） |
+| アクセス制御 | user_id・agent_id・認証 | 作らない（Owner 一人が Mac mini の中で使う） |
 
-## 4.1 記憶オブジェクト（共通スキーマ）
+v1.0 の「設計の絶対条件」のうち次は引き継いだ: Obsidian を承認済みの知識の正本にする／記憶の入口を 1 つにする／会話の原文を残し、索引を作り直せるようにする／未承認のものが確定した知識に混ざらない／既存の CKC と Obsidian のノートを壊さない／Codex・Claude・Ollama のどれでも同じ記憶を使う。
 
-```
-{
-  "knowledge_id": "ckc:project:uuid",
-  "mem0_id": "optional",
-  "project_id": "oarai",
-  "scope": "project",
-  "type": "decision|finding|hypothesis|preference|task|question",
-  "content": "...",
-  "status": "candidate|approved|superseded|rejected|deleted",
-  "source_ids": ["conversation:uuid"],
-  "source_uri": "vault://... or archive://...",
-  "confidence": 0.95,
-  "valid_from": "2026-11-12T00:00:00+09:00",
-  "valid_to": null,
-  "created_at": "...", "updated_at": "...",
-  "revision": 3,
-  "content_hash": "sha256:...",
-  "access_policy": "private"
-}
-```
+## 1. 背景と目的
 
-上記はCKC独自の正規化スキーマであり、Mem0のネイティブレスポンスそのものではない。独立のknowledge_idを維持し、mem0_idは対応表で管理する。Obsidianフロントマターにknowledge_id・revision・status・source_idsを持たせる。
+Jarvis は Ollama・Claude・Codex を切り替えて答えられる（spec §3.4.12）が、会話の文脈は同じ会話の直近 3 往復（`knowledge_engine.HISTORY_TURNS = 6`）だけで、会話を終えると消える。CKC は「ナレッジ化して」で承認した知識だけを Obsidian に残す。目的は、CKC を生かしたまま、前回の話の続き・決めたこと・好みを次の会話で思い出して対話できるようにすること。Owner の条件は「シンプルな構成で、今後 1 年は改造の要らない仕様」。
 
-## 4.2 変更・競合ルール
+## 2. 実態の調査（v1.0 の §14「未決事項・実装前確認」への答え、2026-11-12）
 
-- 同一knowledge_idの更新はrevisionを単調増加。content_hashで同一内容の再登録を抑止。
-- 決定事項の変更は旧版をsupersededとして保持し、新版のvalid_fromを確定する。
-- CKCが承認したノートはMem0から直接上書き不可。Obsidian手動変更はCKCの差分検知・再索引を経由。
-- Mem0が候補事実を抽出してもstatus=approvedには自動昇格しない。低リスクの個人嗜好のみポリシーで自動承認可能。
-- 削除要求はObsidian、索引、スナップショット、派生キャッシュ、バックアップ保持方針を統一して処理する。
-# 5. CKC統合API仕様
-
-| API | 入力・出力（概要） | 責務 |
-|---|---|---|
-| remember(messages, context) | conversation_id, project_id → ingest_id | 原文記録、候補抽出をキュー |
-| recall(query, context) | user_id, project_id, scope, top_k → MemoryHit[] | 検索・再順位付け・根拠付与 |
-| propose(candidate) | 候補→candidate_id | 候補登録、重複照合 |
-| approve(candidate_id) | 承認者・版→knowledge_id | 正本書込と索引同期を要求 |
-| update(knowledge_id, patch) | revision条件→revision+1 | 競合検査、監査イベント |
-| forget(knowledge_id, reason) | tombstone/消去結果 | 全保存先への削除反映 |
-| export(format, filters) | json/jsonl/md → ファイル | 差分・全量出力 |
-| reindex(project_id) | 対象・dry_run → 検査レポート | 正本から索引再構築 |
-
-contextにはuser_id、session_id、agent_id、project_id、許可スコープ、アクセス権、利用可能トークン数を含める。全APIに認証・入力検証・監査ID・タイムアウト・明確なエラー型を用意する。
-
-# 6. Mem0 OSSアダプタ設計
-
-- Python OSS SDKのMemory/AsyncMemoryをCKC Adapterから呼ぶ。Mem0 APIをJarvisのUIやLLMルーターへ直接露出しない。
-- 検索は search(query, filters={"user_id": ...}, top_k=...) を基準とし、案件のproject_id、visibility、statusなどのフィルタは実バージョンのmetadata演算を検証して適用する。
-- 一覧 get_all(filters=...)、単件 get、update、delete、history を使用し、OSSにない一括Export APIはCKCで実装する。
-- 確定知識はCKCが抽出済みの内容を infer=False によって登録できるか検証し、二重の要約・再抽出を避ける。
-- 現行OSSの抽出はADD-onlyが基本で、訂正・削除はCKCの明示的なupdate/deleteと再索引に委ねる。
-- 保存先はローカル前提。使用LLM、Embedding、ベクトルDB、Mem0のバージョンを設定ファイルで固定する。
-- バージョンアップでAPIや検索順位が変わるため、Adapter契約テストを通過するまで本番へ反映しない。
-# 7. 検索とLLMへの記憶注入
-
-1. クエリからproject_id、本人・担当エージェント、重要固有名詞、時間条件を推定する。推定不能時は保守的なスコープに限定する。
-1. Mem0の意味・キーワード・エンティティ検索で候補を取得し、承認済みObsidian知識からも補完する。
-1. 承認済み > 未承認、現在有効 > 旧版、出典あり > 出典なしで優先順位を調整する。
-1. 結果は根拠（knowledge_id、source_uri、更新日、status）付きの短い記憶パックにまとめ、トークン上限内でLLMへ注入する。
-1. 検索できない場合は推測で「覚えている」と答えず、不確実性を明示する。Mem0障害時はObsidian全文検索へフォールバック。
-プロンプトインジェクション対策：記憶は参照データとして扱い、会話原文・外部資料中の「システム命令」「秘密情報開示」などを命令として実行しない。
-
-# 8. 同期、障害処理、整合性
-
-- 原文→イベント追記を先に確定し、Obsidian書込・Mem0同期は再実行可能なキューで処理する。
-- idempotency_key = knowledge_id + revision + operation。重複実行でも結果を一意にする。
-- Obsidian更新成功／Mem0失敗の場合、status=sync_pendingとし、バックオフ付き再試行。逆順の更新を避ける。
-- 起動時／毎日、Obsidianのknowledge_id・revision・hashとMem0対応表を差分照合し、欠落・余分・旧版を報告。
-- Mem0停止時は既存CKC＋Obsidian検索でサービスを継続。書込イベントはキューに残す。
-- 全量再索引はdry-run、バックアップ、差分確認後に実行し、破壊的resetを通常運用から隔離する。
-# 9. アーカイブ・移行・バックアップ
-
-```
-memory/
-  archive/conversations/YYYY/MM/*.jsonl
-  archive/events/YYYY/MM/*.jsonl
-  exports/snapshots/YYYY-MM-DD.json
-  exports/markdown/<project>/*.md
-  indexes/mem0/                   # disposable / rebuildable
-  mappings/knowledge_mem0.jsonl
-  config/memory_policy.yaml
-Obsidian Vaults (existing): jarvis-knowledge, oarai-obsidian
-```
-
-- 既存Obsidian Vaultを読み取り専用で初期スキャンし、frontmatterを検査。IDがないノートには安定IDを付与する移行計画を作成。
-- まず承認済みノートだけMem0へ一方向同期し、検索結果を比較。既存ノートの内容は初期移行で書き換えない。
-- 会話履歴は原文のままJSONLへ保存。ChatGPTのデータエクスポートを取り込む場合はプライバシー選別と重複排除を行う。
-- 日次差分バックアップ、週次全量復元テスト、月次JSON/MDエクスポートを目標とする（頻度は運用負荷に応じ調整）。
-- Mem0を停止・削除してもObsidian＋JSONLから再構築できることを移行完了の条件とする。
-# 10. セキュリティ・プライバシー
-
-- ローカル優先。APIキー、パスワード、トークン、接続秘密は記憶抽出前にマスキングし、Obsidian・ログに平文保存しない。
-- ユーザー／案件／エージェントのアクセス境界をフィルタと認可で二重に適用する。単なるLLM指示に依存しない。
-- 承認フローに人間が確認できる差分、出典、削除理由を表示する。
-- クラウドLLMへの送信範囲をポリシーで制御し、研究・個人案件を混在させない。
-- 機密情報の保存期間、削除の伝播、バックアップからの復旧後再削除を定義する。
-# 11. 設定・運用・可観測性
-
-| 項目 | 初期設定（提案） |
+| v1.0 の未決事項 | 実態 |
 |---|---|
-| Mem0 | OSS版をバージョン固定。更新はステージングで検証 |
-| Embedding | Ollamaローカル候補。品質と速度を比較して決定 |
-| Vector DB | Qdrant候補。既存CKC索引がある場合は重複を評価 |
-| 初期 top_k | 10（CKC側で設定可能） |
-| 検索のタイムアウト | 2秒を目標。超過時フォールバック |
-| ログ | latency, recall_hit, sync_lag, extraction_cost, error_rate |
-| 費用 | 抽出LLMトークン、検索回数、索引ストレージを計測 |
+| CKC のモジュール構成 | `ckc/`: capture・extract・reconcile・route・publish・render・review・schema・secrets・store・models（ワークスペース architecture §10.1） |
+| 利用 DB | SQLite の `jarvis.db`（`nodes`・`edges` と CKC の `ckc_conversations`・`ckc_candidates`） |
+| 検索機能 | `knowledge_engine.search`: janome の名詞と BM25。意味検索・ベクトル DB はない |
+| Vault の書式 | `_jarvis/knowledge/<種類>/` に 1 件 1 ノート、frontmatter に `ckc_id`・種類・状態・出典。Knowledge ノードの meta に `kind`・`status`・`projects`・`note_relpath` |
+| ランタイムと呼び出し方 | すべて Python、1 つのプロセス（`chat.py`・`voice_chat.py`・`python -m voice.web`）。FastAPI などのプロセス境界はない |
+| ローカルの embedding | Ollama に embedding モデルは入っていない（2026-11-12）。チャットは `gemma4:12b` |
+| 規模 | Knowledge 2,423 件（ニュースなどの自動収集が大半）、CKC の会話 5 件・候補は保存待ち 22 件・公開 1 件 |
+| Obsidian の手動の編集 | 毎日 05:45 の `ingest_obsidian`（T-1801）で取り込み済み。CKC のノートの編集は `obsidian-note`（spec §3.4.11） |
 
-# 12. 受入基準とテスト
+## 3. 構成（1003）
 
-| テスト | 受入条件（暫定） |
+```
+Jarvis（chat.py / voice_chat.py / ブラウザ）
+        |
+  orchestrator.handle ── 経路 A・B のプロンプトに「以前の会話の記憶」を渡す ──> Ollama / Codex / Claude
+        |                                   ^
+  add_turn（履歴 + 記録）            memory.recall（記憶パック 1,200 字）
+        |                                   |
+  memory/store ──> data/memory/sessions/*.jsonl（原文） + jarvis.db memory_*（索引）
+        ^
+  memory/summarize（次の会話の起動時に裏で、Ollama だけ）
+
+  CKC（今のまま）: 会話 → 抽出 → 照合 → Owner の承認 → Obsidian（正本） + ナレッジグラフ
+  承認済みの Preference は記憶パックの先頭に入る
+```
+
+記憶パックの中身と順番、要約の形、記録する発言の条件、やらないことは spec §3.3.14 を正とする。
+
+## 4. v1.0 の要件との対応
+
+| v1.0 の項目 | v1.1 での扱い |
 |---|---|
-| 記憶検索 | 代表100問で重要知識Recall@10 90%以上 |
-| 訂正・時系列 | 古い決定と最新版の識別 95%以上 |
-| 根拠 | 正式知識の検索結果はsource_uriが100%付与される |
-| 混入防止 | 未承認候補が確定知識として提示されない（重大例0） |
-| 性能 | ローカル検索追加レイテンシp95 2秒以内を目標 |
-| 可逆性 | Vault＋JSONLのみからMem0再構築、件数・hash一致 |
-| 耐障害 | Mem0停止時にObsidian検索へ縮退し会話継続 |
-| 冪等 | 同じイベント10回再送で重複確定知識0件 |
-| 権限 | 別プロジェクト・別ユーザーの非許可記憶漏洩0件 |
+| §4 会話原文（追記専用） | spec §3.3.14 A（JSONL、権限 600） |
+| §4 会話上の暫定記憶（Mem0 transient scope） | 会話の要約（spec §3.3.14 B）。Obsidian・ナレッジグラフに入れない |
+| §4 未承認候補 | 今の CKC の保存待ち（変更なし） |
+| §4.1 共通スキーマ（knowledge_id・revision など） | 作らない。承認済みの知識は今の CKC の `ckc_id` とノートの frontmatter、会話の記憶は `memory_sessions` |
+| §4.2 古い決定は superseded | 承認済みの知識は今の CKC の `supersedes`。会話の要約は日付を付けて渡し、プロンプトで新しいものを優先させる |
+| §5 API 8 つ | `memory` の記録・想起と CLI（`list`・`show`・`summarize`・`rebuild`・`stats`・`forget`）。承認は CKC |
+| §7 検索と注入、プロンプトインジェクション対策 | spec §3.3.14 C（参考の情報で命令ではない、記憶にないことを覚えていると言わない） |
+| §7 Mem0 障害時の縮退 | 想起で例外が出ても記憶なしで答える |
+| §8 同期・冪等・差分照合 | 保存先が 1 つのため不要。`rebuild` で作り直す |
+| §9 移行（Vault の初期スキャン、ID 付与） | 不要（既存のノートは変えない。過去の会話は記録がないため、記憶は記録を始めた日から） |
+| §9 ChatGPT のエクスポートの取り込み | CKC の `ckc/parsers/`（T-117、実装済み）で知識の候補として取り込む。会話の記憶には入れない |
+| §10 秘密情報のマスク、ローカル優先 | `ckc.secrets.mask_secrets` で伏せてから記録。要約は Ollama だけ |
+| §11 Mem0・Qdrant・Embedding の設定 | Mem0・Qdrant は使わない。embedding は `JARVIS_EMBED_MODEL`（既定 `bge-m3`、T-2104） |
+| §12 受け入れ基準 | ワークスペース testing.md §17 に置き換え（記憶の評価 30 件以上、合格率 80%、作り話 0 件など） |
+| §13 フェーズ P0〜P5 | P0 監査は本書 §2 で完了。P1〜P4 は T-2101〜T-2104・T-2106、P5（CKC 単独と CKC＋Mem0 の比較）は T-2105 |
 
-数値は開発開始時の暫定合格目標であり、既存CKCのベースライン計測後に調整する。評価セットには大洗、ターボ機械研究、Jarvis開発、ピアノ教室など異なる案件を含むが、機密データは評価環境で適切に匿名化する。
+## 5. タスク
 
-# 13. 実装フェーズと成果物
-
-| Phase | 内容 | 完了条件 |
+| ID | 内容 | 担当 |
 |---|---|---|
-| P0 監査 | GitHub CKC現状・Vault・DB・API棚卸し | 実装済み/未実装の証跡、変更点一覧 |
-| P1 接続 | CKC Memory API・Mem0 Adapter・設定 | 単体テスト、既存機能無変更 |
-| P2 移行 | Vault読み込み・ID対応・索引生成 | dry-runと全量照合が成功 |
-| P3 自動想起 | Recall→LLM注入・障害縮退 | 会話シナリオで再現 |
-| P4 品質管理 | 更新・承認・同期・バックアップ | 競合・削除・再構築テスト合格 |
-| P5 比較検証 | CKC単独 vs CKC+Mem0 A/B | 評価結果に基づく本番採用可否 |
-
-成果物：アーキテクチャ図、契約API仕様、データスキーマ、設定例、移行スクリプト、テストスイート、運用手順書、ロールバック手順、性能・精度評価レポート。
-
-# 14. 未決事項・実装前確認
-
-- CKCの実際のモジュール構成、利用DB、検索機能、既存Vault書式（GitHub実コード確認が必要）。
-- Jarvis 2のランタイム言語・プロセス境界とPythonアダプタの呼び出し方式（直接／FastAPI等）。
-- ローカルEmbeddingモデルとQdrantの採否、既存検索エンジンとの共存。
-- 暫定記憶（嗜好・セッション要約）を自動承認する範囲とTTL。
-- Obsidianノート手動編集時の競合解決ポリシー。
-- データ保存期間、機密性区分、削除依頼の扱い。
-# 付録A. 本会話からの重要要点（重要度順・決定／根拠／注意）
-
-## P0-01【決定】採用案
-
-CKC内部にMem0 OSSを組み込み、JarvisからはCKCの統合Memory APIのみを呼ぶ「案B」を採用。Mem0を独立した別システムとして並設しない。
-
-## P0-02【決定】第二の脳
-
-Obsidianを第二の脳かつ承認済み長期知識の正本とし、Mem0は交換可能な検索・記憶エンジン。
-
-## P0-03【決定】CKC継承
-
-CKCの抽出・重複照合・矛盾管理・承認・Obsidian公開を維持。CKCの既存ナレッジを廃棄しない。
-
-## P0-04【決定】独立アーカイブ
-
-会話全文JSONL、変更イベントJSONL、定期JSONスナップショットをMem0と独立に残す。Markdownは正本と人間向けビュー。
-
-## P0-05【決定】可逆性
-
-Mem0を廃止してもObsidianとJSONLから復元できる設計。CKC側でJSON/MDをエクスポートできるようにする。
-
-## P0-06【決定】マルチLLM
-
-Codex／Claude／Ollamaなどを切り替えても共通の記憶を使用する。LLM単独のチャット履歴に依存しない。
-
-## P0-07【必須】承認と正本同期
-
-Mem0が抽出した候補とCKCの承認済み知識を区別し、古い決定や未承認候補が正しい知識として混入しないようにする。
-
-## P0-08【必須】二重抽出回避
-
-同じ会話をCKCとMem0で独立抽出して二つの正式知識集合を作らない。CKCの承認結果をMem0へ索引同期する。
-
-## P0-09【必須】履歴・訂正
-
-決定事項の旧版、更新時刻、出典、変更履歴を保持する。Mem0新版のADD-only特性を踏まえCKCで訂正・削除を管理。
-
-## P0-10【必須】ID連携
-
-knowledge_idとmem0_idを対応付け、重複・孤児索引・古い記憶を検出できるようにする。
-
-## P1-11【比較結果】Mem0優先
-
-Mem0は「既存Jarvisへ後付けする記憶部品」として有利。Letta/Letta Codeはより大きなエージェント実行基盤であり、将来比較対象。
-
-## P1-12【比較結果】普及指標
-
-Mem0のGitHub Starや開発者認知度が相対的に大きいとの調査。Starやダウンロードは実アクティブユーザー数ではなく、推移予測には不確実性がある。
-
-## P1-13【比較結果】Lettaの方向転換
-
-Lettaは旧MemGPTのメモリ基盤からLetta Codeなど記憶内蔵型エージェント方向へ重点を移したとの調査。CKCの代替導入には既存資産の移行コストが大きい。
-
-## P1-14【比較結果】Mem0の進歩
-
-Mem0は新アルゴリズムでADD-only抽出、意味検索・BM25・エンティティ照合によるハイブリッド検索を強化。OSS/クラウド機能差を必ず確認する。
-
-## P1-15【注意】ベンチマーク
-
-Mem0が公表する高い記憶ベンチマーク成績をOSS単独の保証値と誤認しない。Jarvis固有タスクで実測する。
-
-## P1-16【判断】CKC単独との比較
-
-CKCの機能を自作拡張する案Aは可能。案Bが優れるかはCKC単独vs CKC+Mem0の比較テストで確定する。
-
-## P1-17【必要機能】自動想起
-
-過去の会話・決定を関連度で検索し、必要最小限の記憶を次回LLMに渡す。不要な全文読み込みを避ける。
-
-## P1-18【必要機能】短期長期分離
-
-直近会話・セッション要約、長期嗜好、決定・研究ナレッジを区別し、保存条件や検索順位を変える。
-
-## P1-19【必要機能】プロジェクト境界
-
-大洗、タービン研究、Jarvis、ピアノ教室など案件別に記憶を整理し混在と誤引用を防ぐ。
-
-## P1-20【必要機能】Obsidian編集
-
-Obsidianで人間が修正したMarkdownも反映。Obsidianを単なるMem0バックアップにしない。
-
-## P1-21【必要機能】差分・整合性
-
-会話→イベント→承認→正本公開→索引同期の段階を監視し、同期失敗は再試行・復旧可能とする。
-
-## P1-22【必要機能】監査・削除
-
-記憶の追加・更新・削除の主体と根拠を記録し、消去が派生索引にも伝播するようにする。
-
-## P2-23【経緯】3ステップ手法
-
-ChatGPTのデータエクスポート、会話結論を5行に要約、Claude CodeのCLAUDE.mdに記憶フォルダ参照ルールを追加する方法が出発点。
-
-## P2-24【注意】CLAUDE.md限界
-
-CLAUDE.mdはClaude Code用であり、独自Jarvis/Ollamaが自動的に読むわけではない。共通Memory APIが必要。
-
-## P2-25【経緯】ChatGPT輸入
-
-ChatGPTエクスポートには過去会話を含むが内部メモリを完全移植できるわけではない。取り込み前に秘密情報と重複を選別する。
-
-## P2-26【設計原則】原文保持
-
-AI要約で落ちた技術的根拠を後から復元できるよう、元の会話を保存する。
-
-## P2-27【設計原則】JSON対MD
-
-JSONは機械可読の正規化情報、Markdownは人間・コードエージェントが読む知識表現。両方の役割を分ける。
-
-## P2-28【設計原則】保存タイミング
-
-後からMem0 get_allで出力可能だが、同期障害や変更履歴喪失を避けるため原文・イベントを同時保存する方針。
-
-## P2-29【運用】ローカル優先
-
-Mac miniのローカルOllamaやEmbeddingを優先し、外部API使用料とデータ持ち出しを抑える。
-
-## P2-30【運用】品質指標
-
-検索再現率、古い決定の区別、根拠付与率、検索時間、重大誤記憶率を継続計測する。
-
-## P2-31【運用】可用性
-
-Mem0不調時はCKC/Obsidian検索に縮退し、ログとキューから回復できるようにする。
-
-## P2-32【運用】更新の安全性
-
-Mem0の破壊的API変更に備え、依存バージョン固定と契約テスト、ロールバックを必須にする。
-
-## P2-33【既存資産】Vault
-
-会話で言及された `jarvis-knowledge` と `oarai-obsidian` を既存Vault候補として引き継ぐ。実際のパス・構成は監査で確認。
-
-## P2-34【既存資産】CKC
-
-会話で言及されたCapture→Extract→Reconcile→Publish、Decision/Preference/Hypothesis/Finding/Task/Question分類を設計継承。実装現況は監査で確認。
-
-## P3-35【未決】実装詳細
-
-GitHub最新版未確認のため、CKCの構成、DB、API、Obsidian索引、Python/JS境界、プロセス配置は実装前調査事項。
-
-## P3-36【未決】ベクトルDB
-
-Qdrantは候補。既存CKCに索引がある場合、二重構築を避けるため比較後に採否決定。
-
-## P3-37【未決】自動承認範囲
-
-嗜好・暫定記憶の自動保存を認める範囲、TTL、研究上の決定を人間承認にする範囲を決める。
-
-## P3-38【将来】技術ウォッチ
-
-Mem0とLetta Codeの開発状況、ユーザー・コミュニティ、API互換、性能を定期的に再評価し、10年単位の記憶資産保全を優先。
-
-# 付録B. 公開仕様の確認先
-
-- Mem0 OSS Python SDK API（Memory、AsyncMemory、search、get_all、history）：https://github.com/mem0ai/mem0/blob/main/skills/mem0/client/python.md
-- Mem0 OSS v2→v3移行（ADD-only、hybrid search、breaking changes）：https://github.com/mem0ai/mem0/blob/main/docs/migration/oss-v2-to-v3.mdx
+| T-2101 | 会話の記録・要約・CLI | Codex |
+| T-2102 | 想起と注入 | Codex |
+| T-2103 | 記憶の評価セットと測定 | Codex |
+| T-2104 | 意味検索（測ってから採否） | Codex |
+| T-2105 | Mem0 の判断 | Claude（基準に当たれば Owner） |
+| T-2106 | 本番への反映と実機の確認 | Claude |
+
+## 6. Mem0 の扱い（T-2105）
+
+- 判断の基準（spec §3.3.14 G）: T-2103・T-2104 の後に、会話の文脈の問題の合格率が 80% に届かず、失敗の多くが固有名詞のつながりや時系列の区別によるもので、意味検索でも直らないとき。
+- 試すときの形: Mem0 OSS を「会話の記憶」の役割（spec §3.3.14 B・C の置き換え）で使い、Mem0 自身に会話から抽出させる（`infer=True`）。承認済みの知識は今までどおり CKC と Obsidian。保存しておいた会話の原文（`data/memory/sessions/`）を読み込ませ、同じ評価セットで比べる。
+- 条件: ローカルの Ollama だけを使う（既定の OpenAI を使わない）、利用状況の送信（テレメトリ）を止める、版を固定し契約テストを置く、新しい依存として別の ADR で決める。
+- v1.0 の調査で分かっていた注意（2026-11-12 時点、要再確認）: 公表された高い精度はクラウド版の結果で、OSS 版の効果は保証されない。2026 年 4 月に記憶のアルゴリズムが刷新された（ADD-only の抽出、意味検索・BM25・エンティティのハイブリッド検索）。v2→v3 の移行に互換性のない変更があり、最近の版でも保存の失敗を成功として返す不具合の修正がある。Letta（Letta Code）はエージェントの実行基盤の方向で、CKC の置き換えには移行の費用が大きい。
+
+## 付録A. 本会話からの要点（v1.0 の付録 A の状態を更新）
+
+| 番号 | 要点 | v1.1 での状態 |
+|---|---|---|
+| P0-01 | CKC 内部に Mem0 OSS を組み込む「案 B」 | **変更**: Mem0 は測ってから判断（ADR-0037） |
+| P0-02 | Obsidian が第二の脳かつ承認済み知識の正本 | 採用 |
+| P0-03 | CKC の抽出・照合・承認・公開を維持 | 採用（変更なし） |
+| P0-04 | 会話全文の JSONL を残す | 採用（会話の記憶の原文）。変更イベントのログ・定期のスナップショットは作らない |
+| P0-05 | 記憶の仕組みを捨てても Obsidian と JSONL から復元できる | 採用（`rebuild`） |
+| P0-06 | Codex・Claude・Ollama で共通の記憶 | 採用（記憶パックを経路 A・B のプロンプトに渡す） |
+| P0-07 | 承認済みと未承認の区別 | 採用（記憶パックに「承認済み」「会話の要約」を付ける） |
+| P0-08 | 二重抽出の回避 | 採用（知識の抽出は CKC だけ。会話の要約は知識にしない） |
+| P0-09 | 旧版・訂正の管理 | 承認済みは CKC の `supersedes`。会話の要約は日付で新しい方を優先 |
+| P0-10 | knowledge_id と mem0_id の対応 | 不要（Mem0 を使わない） |
+| P1-11〜16 | Mem0 と Letta の比較、ベンチマークの注意、CKC 単独との比較 | 本書 §6。比較は T-2105 |
+| P1-17 | 自動想起 | 採用（spec §3.3.14 C） |
+| P1-18 | 短期と長期の分離 | 採用（今の会話の履歴／会話の要約／承認済みの知識） |
+| P1-19 | プロジェクトの境界 | この版では記憶を分けない（プロンプトで「関係するときだけ」。評価で問題が出たら考える） |
+| P1-20 | Obsidian の手動の編集の反映 | 実装済み（T-1801 の毎日の取り込み） |
+| P1-21 | 段階の監視と同期の失敗の復旧 | 保存先が 1 つのため同期はない。記録の失敗は警告と `rebuild` |
+| P1-22 | 監査・削除 | `forget` で会話ごとに消す（原文と索引） |
+| P2-23〜25 | ChatGPT のエクスポート、CLAUDE.md の限界 | エクスポートは CKC の `ckc/parsers/`。CLAUDE.md ではなく Jarvis の記憶パックで共通化 |
+| P2-26〜28 | 原文の保持、JSON と MD の役割、保存のタイミング | 採用（原文は JSONL、知識は Markdown、記録は発言ごと） |
+| P2-29 | ローカル優先 | 採用（要約・embedding は Ollama） |
+| P2-30 | 品質の指標 | 採用（T-2103 の評価） |
+| P2-31〜32 | 縮退と更新の安全性 | 想起の失敗は記憶なしで答える。新しい依存はない |
+| P2-33〜34 | 既存の Vault と CKC | 本書 §2 で確認済み |
+| P3-35〜37 | 実装の詳細・ベクトル DB・自動承認の範囲 | 本書 §2。ベクトル DB は使わない。自動承認はしない（要約は知識ではない） |
+| P3-38 | 技術の定点観測 | T-2105 と、その後の定期の見直し |
+
+## 付録B. 公開仕様の確認先（v1.0 のまま）
+
+- Mem0 OSS Python SDK API：https://github.com/mem0ai/mem0/blob/main/skills/mem0/client/python.md
+- Mem0 OSS v2→v3 移行：https://github.com/mem0ai/mem0/blob/main/docs/migration/oss-v2-to-v3.mdx
 - Mem0 OSS REST API：https://github.com/mem0ai/mem0/blob/main/docs/open-source/features/rest-api.mdx
 - Mem0 changelog：https://github.com/mem0ai/mem0/blob/main/docs/changelog/highlights.mdx
 - Mem0 GitHub：https://github.com/mem0ai/mem0
 - Letta GitHub：https://github.com/letta-ai/letta
-参照基準日：2026年11月12日。ライブラリの具体的な引数、挙動、OSS/Platformの差異は採用時点の固定バージョンと実機テストを優先する。
 
-# 付録C. 変更管理
+## 付録C. 変更管理
 
 | 版 | 日付 | 変更内容 |
 |---|---|---|
-| 1.0 | 2026-11-12 | 案Bの合意を開発仕様書に反映。全会話の決定・注意・未決を付録に集約。 |
+| 1.0 | 2026-11-12 | 案 B（CKC 内部への Mem0 OSS の組み込み）の合意を開発仕様書に反映。 |
+| 1.1 | 2026-11-12 | Owner 決定「その方針を採用」（ADR-0037）。Mem0 を最初は入れず 1003 の `memory/` で作る構成に改訂。1003 の実態の調査（§2）、v1.0 の要件との対応（§4）、Mem0 の判断の基準（§6）を追加。要件の正本をワークスペースの spec §3.3.14 に移した。 |

@@ -312,6 +312,16 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
   - 呼び出しの見込み: 始める前に最大の数（初めの dev・val ＋ 各回の 候補×dev ＋ val ＋ test×2。60 問・3 回・4 候補で 480 回）を表示する。ollama は上限なし。claude_warm・claude_cli は `--max-llm-calls`（既定 200）を超える見込みなら始めない（`--max-iterations`・`--candidates` を減らす、`--no-answer`、ollama を案内する）。実行中も残りの回数を各評価の上限にする。`--no-answer` は LLM を呼ばない
   - 結果: `data/eval/tuned/<日時>.json`（採用した設定 `tuned`、始めの設定、始めと終わりの dev・val・test の点と集計、各回の dev の失敗の傾向・候補と dev の点・選んだ候補の val の点・採否と理由、採用した変更、評価セットの版、LLM と呼び出しの数）と `data/eval/reports/<日時>-improve.md`（前後の比較の表、test のデータソース別・形別の変化、採用した変更、各回の候補）。本番の設定・コードは書き換えない（反映は PR）
 
+#### 4-13. 会話の記憶（Conversation Memory）
+
+全体仕様 `../docs/spec.md` §3.3.14（ADR-0037）を正とし、設計は `../docs/architecture.md` §10.9、受け入れ基準は `../docs/testing.md` §17、タスクは `../docs/tasks.md` §22（T-2101〜T-2106）。Mem0 案からの経緯と対応は `docs/ckc-mem0-integration-spec-v1.0.md`（v1.1）。
+
+- 会話ごとに会話 ID と経路を持ち、会話の履歴に入る発言を `data/memory/sessions/` の JSONL（原文）と `jarvis.db` の `memory_*`（索引）に記録する（`memory/store.py`、`orchestrator.add_turn`）
+- 次の会話の起動時に、まだ要約していない会話を Ollama だけで 4 項目・400 字以内に要約する（`memory/summarize.py`）
+- 経路 A・B のプロンプトに、承認済みの好み → 直前の会話 → 関係する過去の会話の「記憶パック」（1,200 字以内）を渡す（`memory/recall.py`）
+- CLI `python -m memory`（list・show・summarize・rebuild・stats・forget）。`JARVIS_MEMORY=0` で無効
+- 状態: 仕様済み、実装は Codex（T-2101 から 1 件ずつ）
+
 ## 4. データモデル
 
 - ノード型: Category / Task / Knowledge / Source / Skill / Agent
