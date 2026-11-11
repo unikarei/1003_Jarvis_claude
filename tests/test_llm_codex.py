@@ -65,6 +65,7 @@ def fake_codex(tmp_path, monkeypatch):
     script.chmod(0o755)
     log = tmp_path / "codex.jsonl"
     monkeypatch.setattr(llm, "CODEX_BIN", str(script))
+    monkeypatch.setattr(llm, "CODEX_APP_SERVER", False)   # このファイルは codex exec（app-server は test_llm_codex_app.py）
     monkeypatch.setenv("FAKE_CODEX_LOG", str(log))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-used")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-not-used")
@@ -128,6 +129,7 @@ def test_codex_not_logged_in_is_auth(fake_codex):
 
 def test_codex_missing_binary(monkeypatch, tmp_path):
     monkeypatch.setattr(llm, "CODEX_BIN", str(tmp_path / "no-such-codex"))
+    monkeypatch.setattr(llm, "CODEX_APP_SERVER", False)
     with pytest.raises(llm.LLMUnavailable) as e:
         llm.complete("問い", provider="codex")
     assert e.value.reason == "missing"

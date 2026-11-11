@@ -340,3 +340,4 @@
 
 - [x] T-2001 `codex` のプロバイダー（`llm.py`: 答えるだけの `codex exec --json`、逐次表示、取り消し、API キーを渡さない、`LLMUnavailable`・`failure_reason`）
 - [x] T-2002 ハーネスの選択・会話の途中の切り替え・自動の切り替えと休止（`orchestrator.py`、Task の meta `llm`、遅延の記録 `harness`）。実機の確認は T-2003（Owner のマージの後）
+- [x] T-2004 Codex を常駐の app-server（標準入出力の JSON-RPC）で呼び、答えを逐次表示する（`llm._CodexAppServer`・`warm_up_codex`・`stop_codex_app_server`、使えなければ `codex exec`、`JARVIS_CODEX_APP_SERVER`）

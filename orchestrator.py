@@ -993,11 +993,14 @@ def warm_up() -> None:
         active = skills.active(quiet=True)
     except Exception:  # noqa: BLE001  索引が読めなくても会話は始める
         return
-    for name, load in ((CHAT_SKILL, llm.warm_up_ollama), (DEFAULT_SKILL, llm.warm_up_claude)):
+    loads = [(CHAT_SKILL, llm.warm_up_ollama), (DEFAULT_SKILL, llm.warm_up_claude)]
+    if answer_order()[0] == "codex":               # おまかせの経路 B が Codex から（ADR-0035、T-2004）
+        loads.append((DEFAULT_SKILL, llm.warm_up_codex))
+    for name, load in loads:
         if name in active:
             try:
                 load()
-            except Exception:  # noqa: BLE001  Ollama・claude がなくても会話は始める
+            except Exception:  # noqa: BLE001  Ollama・claude・codex がなくても会話は始める
                 pass
 
 
