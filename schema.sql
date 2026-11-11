@@ -66,3 +66,25 @@ CREATE TABLE IF NOT EXISTS ckc_candidates (
 
 CREATE INDEX IF NOT EXISTS idx_ckc_candidates_status ON ckc_candidates(status);
 CREATE INDEX IF NOT EXISTS idx_ckc_candidates_conversation ON ckc_candidates(conversation_id);
+
+-- 会話の記憶。原文 JSONL から作り直せる索引（T-2101）。
+CREATE TABLE IF NOT EXISTS memory_sessions (
+    session_id TEXT PRIMARY KEY,
+    channel TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    last_at TEXT NOT NULL,
+    ended_at TEXT,
+    owner_turns INTEGER NOT NULL DEFAULT 0,
+    summary TEXT,
+    summary_status TEXT NOT NULL DEFAULT 'none',
+    summary_tries INTEGER NOT NULL DEFAULT 0,
+    summarized_at TEXT
+);
+CREATE TABLE IF NOT EXISTS memory_turns (
+    session_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    speaker TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, seq)
+);

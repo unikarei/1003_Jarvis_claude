@@ -13,7 +13,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 import latency  # noqa: E402
 import orchestrator  # noqa: E402
-from ckc.models import Speaker, Turn  # noqa: E402
+from ckc.models import Speaker  # noqa: E402
 from db import init_db  # noqa: E402
 from run_task import record  # noqa: E402
 
@@ -45,8 +45,8 @@ def ask(prompt: str, spoken: str | None = None, expect: str | None = None) -> st
 def main():
     print(GREETING)
     init_db()
-    orchestrator.start_warm_up()   # 使う LLM を裏で読み込んでおく（最初の答えを速くする、T-1405）
-    ctx = orchestrator.Context(stream=_stream)
+    ctx = orchestrator.Context(stream=_stream, channel="text")
+    orchestrator.start_warm_up(exclude_session_id=ctx.session_id)
 
     while True:
         try:
@@ -60,6 +60,7 @@ def main():
         if user_input.lower() in ("exit", "quit"):
             from chat_actions import offer_capture_at_end
             offer_capture_at_end(ctx.history, ask)   # 会話の終わりに知識にするか聞く（T-1803。y のときだけ）
+            orchestrator.end_session(ctx)
             print("終了します。")
             return
 
@@ -85,9 +86,9 @@ def main():
         if getattr(outcome, "private", False):
             continue
         if not (outcome.skill == "knowledge-capture" and outcome.method == "rule"):
-            ctx.history.append(Turn(Speaker.OWNER, user_input))
+            orchestrator.add_turn(ctx, Speaker.OWNER, user_input)
             if outcome.ok and outcome.error is None:
-                ctx.history.append(Turn(Speaker.AI, outcome.text))
+                orchestrator.add_turn(ctx, Speaker.AI, outcome.text)
 
 
 if __name__ == "__main__":

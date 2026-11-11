@@ -19,7 +19,7 @@ import numpy as np
 
 import latency
 import orchestrator
-from ckc.models import Speaker as Who, Turn
+from ckc.models import Speaker as Who
 from db import init_db
 from run_task import record
 from voice import duplex, tts
@@ -247,7 +247,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
                     session.arm()             # 確認の後の生成・読み上げでも割り込めるように
         return ask
 
-    ctx = orchestrator.Context(voice=True)
+    ctx = orchestrator.Context(voice=True, channel="voice")
     print("JARVIS と声で会話します。そのまま話しかけてください。JARVIS が話している途中でも、話し始めれば止まります。"
           "（「終了」と話すか q と Enter で終了）")
     info = session.calibrate("ジャービスです。どうぞ。")
@@ -342,15 +342,15 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
             latency.finish(lat, ok=False)      # 割り込まれた発言
             if worker.is_alive():              # 止まらない処理（逐次表示のないスキル）は、文脈を分けて切り離す
                 print("[前の処理は裏で終わるまで続きます。結果は使いません]")
-                ctx = orchestrator.Context(voice=True, history=list(ctx.history))
+                ctx = orchestrator.Context(voice=True, history=list(ctx.history), session_id=ctx.session_id, channel=ctx.channel)
             if "outcome" in result:
                 _record(text, result["outcome"])
                 if getattr(result["outcome"], "private", False):
                     from_barge = True
                     continue
-            ctx.history.append(Turn(Who.OWNER, text))
+            orchestrator.add_turn(ctx, Who.OWNER, text)
             if heard:                         # 聞いた文だけを履歴に残す
-                ctx.history.append(Turn(Who.AI, "".join(heard) + INTERRUPTED_MARK))
+                orchestrator.add_turn(ctx, Who.AI, "".join(heard) + INTERRUPTED_MARK)
             from_barge = True
             continue
 
@@ -359,10 +359,10 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
         latency.finish(lat)                             # 読み上げの後（最初の声の時刻が入ってから）保存する
         _record(text, outcome)
         if not getattr(outcome, "private", False) and not (outcome.skill == "knowledge-capture" and outcome.method == "rule"):
-            ctx.history.append(Turn(Who.OWNER, text))
+            orchestrator.add_turn(ctx, Who.OWNER, text)
             heard = "".join(speaker.heard(turn))         # 読み上げた文だけ（表示だけの出典・一覧の残りは入れない）
             if outcome.ok and outcome.error is None and heard:
-                ctx.history.append(Turn(Who.AI, heard))
+                orchestrator.add_turn(ctx, Who.AI, heard)
         state["status"] = "IDLE"
     return _end(speaker, session, ctx, keys)
 
@@ -437,6 +437,8 @@ def _end(speaker, session, ctx=None, keys=None) -> int:
     session.disarm()
     speaker.new_turn()
     offer_capture(ctx, keys, speaker)
+    if ctx is not None:
+        orchestrator.end_session(ctx)
     speaker.say("終了します。")
     speaker.wait()
     speaker.close()
@@ -519,7 +521,9 @@ def _stop_on_signals(launcher):
 
 def _main(listen, transcribe, speaker, push_to_talk, keys, barge_in, launcher) -> int:
     use_voice_model()
-    orchestrator.start_warm_up()              # 使う LLM を裏で読み込んでおく（最初の答えを速くする、T-1405）
+    # 使う LLM を裏で読み込み、前の会話を要約しておく（最初の答えを速くする、T-1405。音声認識のモデルより先に始める）。
+    # 始めたばかりの会話はまだ記録がないので、要約の対象から除く ID は要らない（T-2101）
+    orchestrator.start_warm_up()
     if listen is None:
         print("音声認識のモデルを読み込んでいます（初回はダウンロードに数分かかります）…")
         from speech_to_text import load_model, transcribe_array
@@ -567,7 +571,7 @@ def _main(listen, transcribe, speaker, push_to_talk, keys, barge_in, launcher) -
     state = {"started": False, "latency": None}
     track_first_audio(speaker, lambda: state["latency"])
     spoken = SpeechEnd()
-    ctx = orchestrator.Context(stream=stream, voice=True)
+    ctx = orchestrator.Context(stream=stream, voice=True, channel="voice")
     if push_to_talk:
         print("JARVIS と声で会話します。Enter を押してから話してください（q と Enter で終了）。")
     else:
@@ -632,12 +636,13 @@ def _main(listen, transcribe, speaker, push_to_talk, keys, barge_in, launcher) -
         except Exception as e:  # 記録の失敗で会話を止めない
             print(f"[記録できませんでした] {type(e).__name__}: {e}")
         if not getattr(outcome, "private", False) and not (outcome.skill == "knowledge-capture" and outcome.method == "rule"):
-            ctx.history.append(Turn(Who.OWNER, text))
+            orchestrator.add_turn(ctx, Who.OWNER, text)
             if outcome.ok and outcome.error is None:
-                ctx.history.append(Turn(Who.AI, outcome.text))
+                orchestrator.add_turn(ctx, Who.AI, outcome.text)
 
     finish_latency()
     speaker.stop()
+    orchestrator.end_session(ctx)
     offer_capture(ctx, keys, speaker)          # 会話の終わりに知識にするか聞く（T-1803。y のときだけ）
     speaker.say("終了します。")
     speaker.wait()

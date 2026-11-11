@@ -76,7 +76,7 @@ def _chat(monkeypatch, inputs):
     monkeypatch.setattr(builtins, "input", lambda prompt="": next(feed))
     monkeypatch.setattr(chat, "init_db", lambda: None)
     monkeypatch.setattr(chat, "record", lambda *a: None)
-    monkeypatch.setattr(orc, "start_warm_up", lambda: None)
+    monkeypatch.setattr(orc, "start_warm_up", lambda **kwargs: None)
     monkeypatch.setattr(orc, "handle", lambda text, ctx, ask=None, use_llm=None:
                         orc.Outcome("general-chat", "default", {}, "答え", True, 0.0))
     chat.main()
