@@ -24,6 +24,7 @@ import llm
 import obsidian_note
 import skills
 import tuning
+from ckc.models import new_id, Turn
 
 DEFAULT_SKILL = "knowledge-answer"
 CHAT_SKILL = "general-chat"
@@ -35,6 +36,8 @@ _TRIM = " 　、。,.?？!！は"
 @dataclass
 class Context:
     """対話の間だけ覚えておくもの（保存しない）。"""
+    session_id: str = field(default_factory=lambda: new_id("sess"))
+    channel: str = "text"
     history: list = field(default_factory=list)   # ckc.models.Turn（ナレッジ化に使う）
     items: list[dict] = field(default_factory=list)   # 直前の結果の知識 {"knowledge_id", "title", "url"}
     last_skill: str | None = None
@@ -53,6 +56,19 @@ class Context:
     harness: str = field(default_factory=lambda: _initial_harness())   # auto か ollama・claude・codex（ADR-0035）
     resting: dict = field(default_factory=dict)   # 休止中のハーネス → (期限の clock(), 理由)。保存しない
     llm_info: dict | None = None                  # 直前の答えのハーネス・プロバイダー・切り替えの理由（Task の記録）
+
+
+def add_turn(ctx, speaker, text):
+    """従来の履歴を追加し、安全な入口で会話の記憶にも記録する。"""
+    ctx.history.append(Turn(speaker, text))
+    from memory import store
+    store.safe_call(store.safe_log_turn, ctx.session_id, ctx.channel, speaker, text)
+
+
+def end_session(ctx):
+    """正常に終わった会話を記録する。記録の失敗で終了を妨げない。"""
+    from memory import store
+    store.safe_call(store.end_session, ctx.session_id)
 
 
 @dataclass
@@ -1024,8 +1040,17 @@ def warm_up() -> None:
                 pass
 
 
-def start_warm_up() -> threading.Thread:
+def start_warm_up(exclude_session_id=None) -> threading.Thread:
     """warm_up() をバックグラウンドのスレッドで呼ぶ（chat.py・voice_chat.py の起動時）。"""
-    thread = threading.Thread(target=warm_up, name="jarvis-warm-up", daemon=True)
+    def run():
+        try:
+            warm_up()
+        except Exception:  # 読み込みに失敗しても会話を始め、要約は別に試す。
+            pass
+        finally:
+            from memory.summarize import start_background_summary
+            from memory import store
+            store.safe_call(start_background_summary, exclude_session_id)
+    thread = threading.Thread(target=run, name="jarvis-warm-up", daemon=True)
     thread.start()
     return thread

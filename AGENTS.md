@@ -178,6 +178,11 @@ JARVISはこの契約に従う。
 - 調べるだけで何も変更しない。Registry の YAML（設計上の意図）は書き換えない
 - `--acc` で、書いた後に ACC（`reports/acc/index.html`）を作り直す（T-704。日次の launchd はこの引数で動かす）
 
+## 会話の記憶（T-2101）
+
+- 記録・要約・管理 CLI は `memory/`。正本は `data/memory/sessions/` の JSONL、`jarvis.db` の `memory_*` は復元可能な索引。詳細は `docs/spec.md` 4-13 と統合ワークスペースの仕様 §3.3.14 を参照する。
+- `python -m memory rebuild` で索引を復元する。`forget` は y/N で確認し、原文と索引を削除する。要約の LLM は Ollama のみ。`JARVIS_MEMORY=0` で記録・要約を無効にする。
+
 ## テスト
 
 - 実行: `.venv/bin/python -m pytest tests -q`（開発用の `.venv` に `requirements-dev.txt` を入れておく）

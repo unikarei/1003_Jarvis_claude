@@ -320,7 +320,7 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
 - 次の会話の起動時に、まだ要約していない会話を Ollama だけで 4 項目・400 字以内に要約する（`memory/summarize.py`）
 - 経路 A・B のプロンプトに、承認済みの好み → 直前の会話 → 関係する過去の会話の「記憶パック」（1,200 字以内）を渡す（`memory/recall.py`）
 - CLI `python -m memory`（list・show・summarize・rebuild・stats・forget）。`JARVIS_MEMORY=0` で無効
-- 状態: 仕様済み、実装は Codex（T-2101 から 1 件ずつ）
+- 状態: T-2101（記録・要約・CLI）実装済み。想起・注入と評価は T-2102 以降。要約失敗回数・skipped は JSONL の `status` レコードにも追記し、索引の作り直しで復元する。
 
 ## 4. データモデル
 

@@ -191,7 +191,7 @@ class WebSession:
         self.emit = emit if emit is not None else (lambda event: None)
         self.record = record or _record
         self.launcher = launcher
-        self.ctx = orchestrator.Context(voice=True, terminal=False)
+        self.ctx = orchestrator.Context(voice=True, terminal=False, channel="web")
         self.clock = clock
         self.closed = False
         self.turn = 0
@@ -219,6 +219,11 @@ class WebSession:
             voice_chat.start_engine(launcher)      # 起動し始めるだけ（待たない）
         except Exception as e:  # noqa: BLE001  起動できなくても say で読む
             self._notice(f"[音声] エンジンを起動できません（{type(e).__name__}）。macOS の say（Kyoko）で読み上げます。")
+
+        # サーバーを起動したまま次の会話を始めた場合も、現在の会話を除いて要約する。
+        from memory import store
+        from memory.summarize import start_background_summary
+        store.safe_call(start_background_summary, self.ctx.session_id)
 
     # ------------------------------------------------------------ イベント
 
@@ -370,6 +375,8 @@ class WebSession:
             self._cancel_approval_locked()    # 待っている承認の要求を取り消す（実行しない）
             self.closed = True
             history = list(self.ctx.history) if capture else []
+        if capture:
+            orchestrator.end_session(self.ctx)
         if history:
             self._capture_in_background(history)
         try:
@@ -522,9 +529,10 @@ class WebSession:
                 self._after = st
             else:
                 if st.outcome is None:
-                    self.ctx = orchestrator.Context(voice=True, terminal=False, history=list(self.ctx.history))
+                    self.ctx = orchestrator.Context(voice=True, terminal=False, history=list(self.ctx.history), session_id=self.ctx.session_id, channel=self.ctx.channel)
                 if not getattr(st.outcome, "private", False):
-                    self.ctx.history.extend(lines)
+                    for line in lines:
+                        orchestrator.add_turn(self.ctx, line.speaker, line.text)
         self._emit_locked("turn_done", st.turn, interrupted=True)
         return st
 
@@ -598,12 +606,12 @@ class WebSession:
             return
         if getattr(outcome, "private", False):
             return                            # Obsidian のノートの編集などは履歴に入れない（T-1702）
-        self.ctx.history.append(Turn(Who.OWNER, st.text))
+        orchestrator.add_turn(self.ctx, Who.OWNER, st.text)
         if outcome is None:
             return
         heard = "".join(self.speaker.heard(st.turn))
         if outcome.ok and outcome.error is None and heard:
-            self.ctx.history.append(Turn(Who.AI, heard))
+            orchestrator.add_turn(self.ctx, Who.AI, heard)
 
     def _answer(self, st: _TurnState, audio: np.ndarray, result: dict) -> None:
         """認識して答え、読み上げを始める。result に最後に送るイベントを入れ、st に発言・結果を入れる。"""

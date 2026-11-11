@@ -622,6 +622,6 @@ def test_chat_keeps_obsidian_turns_out_of_history(env, monkeypatch):
     inputs = iter(["Obsidian の大洗メモに追加して", "y", "exit"])
     monkeypatch.setattr(builtins, "input", lambda prompt="": next(inputs))
     monkeypatch.setattr(chat, "init_db", lambda: None)
-    monkeypatch.setattr(orc, "start_warm_up", lambda: None)
+    monkeypatch.setattr(orc, "start_warm_up", lambda **kwargs: None)
     chat.main()
     assert "秘密の追記" in read(env["oarai"], MEMO) and contexts[0].history == []

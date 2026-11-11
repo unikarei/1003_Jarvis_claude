@@ -533,7 +533,7 @@ def chat(monkeypatch):
 
 def test_chat_starts_warm_up_and_records_each_turn(chat, log, index, ollama, monkeypatch):
     started = []
-    monkeypatch.setattr(orc, "start_warm_up", lambda: started.append(1))
+    monkeypatch.setattr(orc, "start_warm_up", lambda **kwargs: started.append(1))
     answers = iter(["こんにちは", SECRET_Q, "exit"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     chat.main()
@@ -591,7 +591,7 @@ def test_voice_chat_starts_warm_up_and_records_voice_stages(log, index, ollama, 
     import voice_chat
     from voice import duplex
     started = []
-    monkeypatch.setattr(orc, "start_warm_up", lambda: started.append(1))
+    monkeypatch.setattr(orc, "start_warm_up", lambda **kwargs: started.append(1))
     texts = iter(["こんにちは", "終了"])
     player = duplex.Player(stream_factory=_OutputStream)
     sp = duplex.DuplexSpeaker(player, synth=lambda sentence, cancel: np.zeros(10, dtype=np.float32))
@@ -617,7 +617,7 @@ def test_voice_chat_without_microphone_does_not_warm_up(monkeypatch):
     import voice_chat
     from voice import record as rec
     started = []
-    monkeypatch.setattr(orc, "start_warm_up", lambda: started.append(1))
+    monkeypatch.setattr(orc, "start_warm_up", lambda **kwargs: started.append(1))
     monkeypatch.setattr(rec, "has_input_device", lambda: False)
     assert voice_chat.main() == 1 and started == []
 

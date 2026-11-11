@@ -349,8 +349,14 @@
 
 ## 会話の記憶（`../docs/tasks.md` T-2101〜T-2106、spec 4-13）
 
-- [ ] T-2101 会話の記録・要約・CLI（`memory/store.py`・`summarize.py`・`__main__.py`、`orchestrator.add_turn`）
+- [x] T-2101 会話の記録・要約・CLI（`memory/store.py`・`summarize.py`・`__main__.py`、`orchestrator.add_turn`）
 - [ ] T-2102 想起と経路 A・B のプロンプトへの注入（`memory/recall.py`）
 - [ ] T-2103 記憶の評価セットと測定（`evaluation/memory/`）
 - [ ] T-2104 意味検索（Ollama の embedding、測ってから採否）
 - [ ] T-2106 本番への反映と実機の確認
+
+T-2101 作業記録（2026-11-12）: 承認済み仕様に従い、メインからコード実行サブエージェントへ実装・テストを委譲（Owner 事前承認、上位 AGENTS.md §2.1）。commit・push とワークスペース文書の更新は Claude が担当。
+
+T-2101 検証（2026-11-12）: Codex のサンドボックスではソケットを開けず全件は未実行だったため、Claude が制限のない環境で実行し `pytest tests -q` 1,443 passed。Claude の修正 2 点: Mac の声の会話の LLM の事前の読み込みを音声認識モデルの読み込みより前に戻した（Codex の変更で後ろに回り、最初の答えが遅くなるため）、要約の検証で空行・全角のコロンを許す。本物の Ollama（gemma4:12b）で架空の会話を 4.8 秒で要約し、`rebuild` で同じ件数に戻ることを確認。
+
+実装上の詳細: 要約失敗回数と skipped を JSONL の追加 `status` レコードに保存して rebuild で復元する。Web サーバーの継続起動に対応するため、WebSession の開始ごとにも現在 ID を除いた要約を裏で開始する。要件の緩和はない。

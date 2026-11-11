@@ -55,7 +55,7 @@ def production_paths_in_use(paths: list[Path]) -> list[Path]:
 
 
 def pytest_sessionstart(session):
-    hits = production_paths_in_use([config.DB_PATH, config.VAULT_ROOT, config.CKC_DATA_DIR])
+    hits = production_paths_in_use([config.DB_PATH, config.VAULT_ROOT, config.CKC_DATA_DIR, config.MEMORY_DIR])
     if hits:
         pytest.exit(f"本番のパスを指しているためテストを中止します: {hits}", returncode=2)
 
@@ -133,3 +133,10 @@ def no_real_claude_stream(monkeypatch):
     def refuse(prompt, on_text, timeout=None):
         raise llm.LLMError("テストでは本物の claude -p を呼ばない（complete_stream を差し替えること）")
     monkeypatch.setattr(llm, "_stream_claude_cli", refuse)
+
+
+@pytest.fixture(autouse=True)
+def no_background_memory_summary(monkeypatch):
+    """別テストの DB・パスへ遅れて書かないよう、起動時の要約は個別テストでだけ動かす。"""
+    from memory import summarize
+    monkeypatch.setattr(summarize, "start_background_summary", lambda *args, **kwargs: None)
