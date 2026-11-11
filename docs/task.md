@@ -346,3 +346,11 @@
 
 - [x] T-1901 自然な会話の自己改善（Codex、2026-11-10）: 固定 110 会話の隔離評価（`python -m evaluation conversation`）と比較レポート。
 - [x] T-1902 Claude の再検証と採用（2026-11-11）: 評価を T-2002 の後も Ollama だけに固定、候補 1（相づちに LLM を呼ばず「はい。」、`orchestrator.is_backchannel`）を採用（dev +0.027・val +0.023）
+
+## 会話の記憶（`../docs/tasks.md` T-2101〜T-2106、spec 4-13）
+
+- [ ] T-2101 会話の記録・要約・CLI（`memory/store.py`・`summarize.py`・`__main__.py`、`orchestrator.add_turn`）
+- [ ] T-2102 想起と経路 A・B のプロンプトへの注入（`memory/recall.py`）
+- [ ] T-2103 記憶の評価セットと測定（`evaluation/memory/`）
+- [ ] T-2104 意味検索（Ollama の embedding、測ってから採否）
+- [ ] T-2106 本番への反映と実機の確認
