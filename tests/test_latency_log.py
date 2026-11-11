@@ -372,7 +372,8 @@ def test_general_chat_records_ollama_stages(log, index, ollama):
     assert "fallback" not in rec and "warm" not in rec
 
 
-def test_knowledge_answer_records_search_and_warm(log, index, fake_claude):
+def test_knowledge_answer_records_search_and_warm(log, index, fake_claude, monkeypatch):
+    monkeypatch.setattr(config, "HEAVY_HARNESS", "claude")   # 経路 B の最初を Claude に（待機中の claude を測る）
     ctx = orc.Context(stream=lambda t: None)
     records = []
     for _ in range(2):                         # 1 回目はその場で起動、2 回目は待機中の claude を使う
