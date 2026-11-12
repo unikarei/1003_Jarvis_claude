@@ -47,7 +47,7 @@ _NO = ("いいえ", "いや", "違う", "ちがう", "作らない", "no", "い�
 _END = ("末尾", "最後", "なし", "ない", "どこでも")
 _KANJI_NUM = {"一": 1, "二": 2, "三": 3, "四": 4}
 _VAULT_WORDS = {"vault-oarai-obsidian": ("大洗", "oarai", "民泊"),
-                "vault-jarvis-knowledge": ("jarvis", "ジャービス", "knowledge", "ナレッジ", "汎用")}
+                "vault-jarvis-knowledge": ("jarvis", "ジャービス", "汎用")}   # 「ナレッジ」は普通の語なので Vault の語にしない（T-2202）
 VAULT_LABELS = {"vault-oarai-obsidian": "大洗（oarai-obsidian）", "vault-jarvis-knowledge": "汎用（jarvis-knowledge）"}
 TOP_FOLDER = "（Vault の一番上）"
 _FORBIDDEN = re.compile(r'[/\\:*?"<>|#^\[\]\x00-\x1f]')
@@ -103,6 +103,19 @@ def has_op_word(text: str) -> bool:
 def matches(text: str) -> bool:
     """「Obsidian」と操作の語の両方を含むか（このスキルに必ず振り分ける発言）。"""
     return has_obsidian(text) and has_op_word(text)
+
+
+# ナレッジ化（knowledge-capture）に回す依頼の語と、ノートを指す語（spec §3.4.11、T-2202）
+KNOWLEDGE_WORDS = ("ナレッジ", "知識")
+NOTE_WORDS = ("ノート", "メモ")
+
+
+def is_knowledge_request(text: str) -> bool:
+    """「大洗の Obsidian にナレッジを入れて」のように、決まったノートではなく知識として残す依頼か（T-2202）。
+    Obsidian と操作の語に加えて「ナレッジ」「知識」を含み、ノートを指す語・かぎかっこを含まないもの。"""
+    t = normalize(text)
+    return (matches(text) and any(normalize(w) in t for w in KNOWLEDGE_WORDS)
+            and not any(normalize(w) in t for w in NOTE_WORDS) and not re.search(r"[「」『』]", text))
 
 
 def is_cancel(text: str) -> bool:
