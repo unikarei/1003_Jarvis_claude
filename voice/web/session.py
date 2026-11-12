@@ -37,6 +37,10 @@ MAX_AUDIO_SECONDS = 20.5      # 発話 1 回分の長さの上限（ページの
 MIN_RATE, MAX_RATE = 8000, 96000
 POLL_SECONDS = 0.02           # 読み上げの終わりを確かめる間隔
 CALIBRATION_TEXT = "ジャービスです。どうぞ。"   # 回り込みの測定のあいさつ（voice_chat.run_barge_in と同じ）
+# 雑音の割り込みからの答え直し（spec §3.4.9、T-2203）: 答えが一言も聞こえる前に割り込まれ、その後この秒数以内の発話が
+# 雑音だったら、取り消した発言にもう一度答える。書き込みのないスキルだけ（None は振り分けの前）
+REANSWER_SECONDS = 15.0
+REANSWER_SKILLS = (None, "general-chat", "knowledge-answer")
 CALIBRATION_TURN = 0          # あいさつの番号（発言は 1 から。履歴・遅延の記録に入れない）
 CALIBRATE_TIMEOUT = 60.0      # あいさつの合成を待つ上限（最初の合成はエンジンの起動を待つ）
 APPROVAL_SECONDS = 60         # 承認の要求の期限（T-1504）
@@ -61,7 +65,7 @@ class Busy(Exception):
 class _TurnState:
     """発言 1 回分の状態（割り込みのときに履歴・遅延の記録を確定するために使う）。"""
 
-    __slots__ = ("turn", "lat", "text", "outcome", "record", "done", "ctx")
+    __slots__ = ("turn", "lat", "text", "outcome", "record", "done", "ctx", "reanswer")
 
     def __init__(self, turn: int, lat: "latency.Turn"):
         self.turn, self.lat = turn, lat
@@ -70,6 +74,7 @@ class _TurnState:
         self.record = True                # 遅延を記録するか（雑音・「終了」は答えていないので記録しない）
         self.done = threading.Event()     # この発言の処理（_process）が終わった（T-1702）
         self.ctx = None                   # この発言が使った文脈（割り込みの判定に使う、T-1702）
+        self.reanswer = False             # 雑音の割り込みで消えた発言に答え直している（T-2203）
 
 
 class _Approval:
@@ -207,6 +212,8 @@ class WebSession:
         self._approval: _Approval | None = None    # 答えを待っている承認の要求（T-1504、同時に 1 つだけ）
         # 割り込まれた、Obsidian のノートの編集の途中の発言（T-1702）。次の発言は、この処理の終わりを待つ
         self._after: _TurnState | None = None
+        # 雑音の割り込みで消えた発言（Owner の発言, 割り込んだ時刻）。次の発話が雑音なら答え直す（T-2203）
+        self._recover: tuple[str, float] | None = None
         self.player = BrowserPlayer(emit=self._player_event, clock=clock)
         self.speaker = DuplexSpeaker(self.player, voice=voice_chat.VOICE,
                                      synth=_FirstSynth(launcher, synth, self._notice, lambda: self.closed,
@@ -220,10 +227,6 @@ class WebSession:
         except Exception as e:  # noqa: BLE001  起動できなくても say で読む
             self._notice(f"[音声] エンジンを起動できません（{type(e).__name__}）。macOS の say（Kyoko）で読み上げます。")
 
-        # サーバーを起動したまま次の会話を始めた場合も、現在の会話を除いて要約する。
-        from memory import store
-        from memory.summarize import start_background_summary
-        store.safe_call(start_background_summary, self.ctx.session_id)
 
     # ------------------------------------------------------------ イベント
 
@@ -512,6 +515,7 @@ class WebSession:
         音を捨て（生成は ctx.cancel・stream で止まる）、履歴に Owner の発言と、ブラウザが再生し終えた文に割り込みの印を
         付けたもの（聞いた文がなければ AI の行を入れない）を入れる。まだ答えを作っている（取り消せない処理かもしれない）
         なら、文脈を分けて切り離す（結果は使わない）。最後に turn_done（interrupted）を 1 回だけ送る。"""
+        asked = (self._approval is not None and self._approval.turn == st.turn) or st.turn in self._ran
         self._cancel_approval_locked(st.turn)   # 待っている承認の要求を取り消す（声の「はい」も、ここで取り消しになる）
         self._cut.add(st.turn)                # これより後、この発言のイベントは送らない
         self._active = None                   # 次の発話を受け付ける
@@ -524,6 +528,11 @@ class WebSession:
             if heard:                         # 聞いた文だけを履歴に残す
                 lines.append(Turn(Who.AI, "".join(heard) + voice_chat.INTERRUPTED_MARK))
             ctx = st.ctx or self.ctx
+            skill = st.outcome.skill if st.outcome is not None else getattr(ctx, "active_skill", None)
+            # 答えが一言も聞こえる前の割り込みで、書き込みのないスキルなら、次の発話が雑音のときに答え直す（T-2203）
+            # 答え直しは元の発言につき 1 回まで。承認を求めた・実行を始めた発言は答え直さない
+            self._recover = ((st.text, self.clock()) if not heard and skill in REANSWER_SKILLS and not asked
+                             and not st.reanswer and not getattr(st.outcome, "private", False) else None)
             if voice_chat.obsidian_busy(ctx, st.outcome, st.text):
                 # Obsidian のノートの編集の途中（T-1702）: 文脈を作り直さず、履歴に入れない。次の発言は処理の終わりを待つ
                 self._after = st
@@ -594,6 +603,14 @@ class WebSession:
         failed = self.closed or st.outcome is None or not st.outcome.ok
         latency.finish(st.lat, **({"ok": False} if failed else {}))
 
+    def _take_recover(self) -> str | None:
+        """雑音の割り込みで消えた発言（REANSWER_SECONDS 以内）を 1 回だけ取り出す（T-2203）。"""
+        with self._lock:
+            recover, self._recover = self._recover, None
+        if recover is not None and self.clock() - recover[1] <= REANSWER_SECONDS:
+            return recover[0]
+        return None
+
     def _wait_spoken(self, turn: int) -> None:
         while not self.closed and self._active is not None and self._active.turn == turn and self.speaker.speaking():
             time.sleep(POLL_SECONDS)
@@ -606,7 +623,8 @@ class WebSession:
             return
         if getattr(outcome, "private", False):
             return                            # Obsidian のノートの編集などは履歴に入れない（T-1702）
-        orchestrator.add_turn(self.ctx, Who.OWNER, st.text)
+        if not st.reanswer:                   # 答え直しでは、Owner の発言は割り込みのときに入れてある（T-2203）
+            orchestrator.add_turn(self.ctx, Who.OWNER, st.text)
         if outcome is None:
             return
         heard = "".join(self.speaker.heard(st.turn))
@@ -623,9 +641,15 @@ class WebSession:
             return
         st.lat.mark("stt")
         if is_noise(text):
-            st.record = False
-            result["last"] = ("ignored", {"reason": "noise" if text.strip(" 　。、.!！?？") else "empty"})
-            return
+            recovered = self._take_recover()
+            if recovered is None:
+                st.record = False
+                result["last"] = ("ignored", {"reason": "noise" if text.strip(" 　。、.!！?？") else "empty"})
+                return
+            text, st.reanswer = recovered, True   # 雑音の割り込みで消えた発言に答え直す（T-2203）
+        else:
+            with self._lock:
+                self._recover = None
         self._settle_after()                  # 前の発言が Obsidian のノートの編集の途中なら、その終わりを待つ（T-1702）
         with self._lock:
             if self.closed or turn in self._cut:
