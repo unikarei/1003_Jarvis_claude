@@ -87,7 +87,7 @@ class _Retry(Exception):
 
 def normalize(text: str) -> str:
     """比べるための形: NFKC・英字の小文字化・空白の除去。"""
-    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text or "").lower())
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text or "").lower()).replace("オブシリアン", "オブシディアン")
 
 
 def has_obsidian(text: str) -> bool:
@@ -776,3 +776,17 @@ def run(text: str, ctx, state: dict | None = None, asks: dict | None = None, llm
                       {**meta, "result": "聞き返しました"})
     short = "中止しました" if message == CANCELLED_TEXT else message.split("。", 1)[0] + "。"
     return Result(message, meta={**meta, "result": short})
+
+
+# T-2301: 知識として残す明示的な命令だけ。質問・否定は保存の入口にしない。
+def is_capture_request(text: str) -> bool:
+    t = normalize(text).rstrip("。.!！")
+    if re.search(r"[?？]|(?:ないで|なくていい|不要|しない|するな|残さない|保存しなく|記録しなく)", t):
+        return False
+    if has_obsidian(text):
+        return False                 # ノート名を指定した操作は既存の編集経路
+    command = re.search(r"(?:記録して|残して|保存して|覚えておいて)(?:おいて)?(?:ください|下さい|ね|よ|お願い)?$", t)
+    if not command:
+        return False
+    return ("覚えておいて" in command.group() or
+            any(w in t for w in ("進捗", "この話", "この内容", "この情報", "今の話", "今の内容", "それを", "ナレッジ", "知識")))

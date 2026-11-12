@@ -156,3 +156,8 @@
 ### 記憶評価（T-2103、2026-11-12）
 
 `evaluation/memory/` に固定 JSON・CLI・runner を置く。シナリオとモードごとの TemporaryDirectory 内で DB・JSONL・Vault・CKC・遅延ログを隔離し、設定差し替えは終了時に復元する。既存の Ollama 限定ガードを再利用し、承認と外部操作は拒否する。採点に LLM は使わず、発言単位の期待をすべて満たしたシナリオを合格として集計する。想起関数を計時して回答生成時間と分ける。実環境の測定・改善は本実装の対象外（Owner 依頼）。
+
+
+## ナレッジ保存と接続状態（2026-11-13）
+
+要件・設計の正本は統合ワークスペース docs/spec.md §3.4.13 と docs/architecture.md §22。既存 orchestrator のルール、knowledge_connections の読み取り診断、CKC schema の検証を使う。依存・DB スキーマは追加しない。

@@ -97,6 +97,13 @@ def _validate_item(item, turns, known_projects):
                 evidence.append(Evidence(quote, speaker))
     if kind in (Kind.DECISION, Kind.PREFERENCE) and not any(e.speaker == Speaker.OWNER for e in evidence):
         reasons.append(f"{kind.value} に Owner の発言の根拠がない")
+    # 発言にあるというだけでは実測にならない。AI だけのシステム状態は
+    # Task/Hypothesis 等への言い換えでも長期知識へ持ち込まない（T-2303）。
+    if evidence and all(e.speaker == Speaker.AI for e in evidence):
+        statement = " ".join([str(title), str(body)] + [e.quote for e in evidence])
+        if (re.search(r"ツール|接続|連携|権限|保存|記録|Obsidian|オブシ[デリ]ィ?アン|ナレッジ|Jarvis|ジャービス", statement, re.I)
+                and re.search(r"無効|有効|未接続|未設定|設定済|でき[なまる]|出来|使え|保存され|接続され|失敗|利用不可", statement)):
+            reasons.append("システムの接続・権限・保存状態が AI の発言だけを根拠としている")
     if reasons:
         return None, reasons, None
     warning = None

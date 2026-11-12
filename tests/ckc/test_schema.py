@@ -156,3 +156,21 @@ def test_empty_items_and_warning_copy():
     result.warnings.append("追加")
     assert warnings == ["元の警告"]
     assert result.items == result.rejected == []
+
+@pytest.mark.parametrize('kind', ['Finding', 'Task', 'Hypothesis'])
+def test_ai_only_system_state_is_rejected(kind):
+    conv = _conversation()
+    conv.turns.append(Turn(Speaker.AI, 'Obsidianのツールが無効で保存できません。'))
+    result = _validate(_item(kind=kind, title='保存ツールの状態', body='ツールが無効なので接続を調査する',
+                            evidence=[{'quote': 'Obsidianのツールが無効で保存できません。', 'speaker': 'ai'}]),
+                       conversation=conv)
+    assert not result.items and 'AI の発言だけ' in result.rejected[0][1][0]
+
+
+def test_owner_system_report_and_investigation_remain_candidates():
+    conv = _conversation()
+    conv.turns.append(Turn(Speaker.OWNER, 'Obsidianへの保存ができない原因を調べて。'))
+    result = _validate(_item(kind='Task', title='保存の調査',
+                            evidence=[{'quote': 'Obsidianへの保存ができない原因を調べて。', 'speaker': 'owner'}]),
+                       conversation=conv)
+    assert len(result.items) == 1

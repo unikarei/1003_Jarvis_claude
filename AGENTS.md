@@ -215,3 +215,7 @@ JARVISはこの契約に従う。
 ## 記憶の評価（T-2103）
 
 `python -m evaluation.memory` は架空の固定評価セットを一時 DB・記憶フォルダで実行する。Ollama だけを使い、機械判定の記憶あり/なし結果を JSON と Markdown に出す。`--limit`・`--kind`・`--no-summary` に対応。worktree から会話の評価（`evaluation conversation`）を動かすときは、`--skills`・`--registry` に本物の場所を渡す（既定の場所が `.worktrees/` の下を指し、予備の索引で動くため）。2026-11-12 の結果は `docs/memory-eval-2026-11-12.md`。
+
+## ナレッジ保存と接続状態の確認（T-2301〜T-2304）
+
+要件は統合ワークスペース `docs/spec.md` §3.4.13。`knowledge_connections.report()` は読み取り専用で、Vault への書き込み成功や Windows 側の同期を保証しない。保存・再検索の自動試験は一時 DB と一時 Vault に限り、Windows 実機の確認とは分けて記録する。実機手順は統合ワークスペース `docs/knowledge-save-acceptance.md` を参照する。

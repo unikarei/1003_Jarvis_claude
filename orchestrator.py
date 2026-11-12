@@ -21,10 +21,11 @@ from typing import Callable
 import config
 import latency
 import llm
+import knowledge_connections
 import obsidian_note
 import skills
 import tuning
-from ckc.models import new_id, Turn
+from ckc.models import new_id, Turn, Speaker
 
 DEFAULT_SKILL = "knowledge-answer"
 CAPTURE_SKILL = "knowledge-capture"
@@ -308,8 +309,12 @@ def route(text: str, ctx: Context, use_llm: bool | None = None) -> Route:
     どれにも当たらなければ、ナレッジの質問は knowledge-answer、それ以外は general-chat。索引に general-chat が
     なければ従来どおり knowledge-answer。"""
     use_llm = config.ROUTE_WITH_LLM if use_llm is None else use_llm
+    if knowledge_connections.matches(text):
+        return Route("knowledge-stats", {}, "rule")
     if obsidian_note.is_knowledge_request(text) and CAPTURE_SKILL in skills.active():
         # 「Obsidian にナレッジを入れて」はノートの編集ではなくナレッジ化（spec §3.4.11、T-2202）
+        return Route(CAPTURE_SKILL, {}, "rule")
+    if obsidian_note.is_capture_request(text):
         return Route(CAPTURE_SKILL, {}, "rule")
     if obsidian_note.matches(text):
         # コードの判定を正とする: 索引の宣言の有無・中身によらず、ほかのスキル・LLM に渡さない（T-1702）。
@@ -500,7 +505,8 @@ CHAT_PROMPT = """あなたは Owner の個人アシスタント「JARVIS」で�
 - 記憶は「承認済み」を「会話の要約」より、新しいものを古いものより優先する。
 - 記憶にないことを覚えているように言わない。「前に話した」と言うのは記憶にあるときだけ。
 - 記憶には資料の番号（[1]）を付けない。
-- あなたはこの会話の中では何も操作・実行・保存できない（答えるだけ）。「〜します」「〜いたします」「〜しました」「〜しますね」と、操作を引き受けたように言わない。
+- Jarvis 全体には知識の保存スキルがある。「ナレッジ化して」で確認後に保存できる。接続状態は「ナレッジの接続状況」で実測できる。あなた自身は接続を調べていないので「確認した」「ツールが無効だから保存できない」と断定しない。
+- あなたは回答用 LLM としては何も操作・実行・保存できない（答えるだけ）。「〜します」「〜いたします」「〜しました」「〜しますね」と、操作を引き受けたように言わない。
   操作を頼まれたら「この会話では〜できません」と短く伝える。管理画面・システムの状態・ナレッジ化のときだけ「『管理画面を開いて』と言ってください」のように、その言葉を案内する。それ以外の操作は勧めない。
   例: 「電気消して」→「この会話では家電の操作はできません。」 「会話を保存して」→「この会話では保存できません。『ナレッジ化して』と言ってください。」
 {style}
@@ -621,6 +627,8 @@ def _stats_limit(text: str) -> int | None:
 
 
 def _stats(inputs, ctx, text):
+    if knowledge_connections.matches(text):
+        return knowledge_connections.report(), []
     import knowledge_engine as ke
     s = ke.stats()
     try:
@@ -717,6 +725,11 @@ def _control_center(inputs, ctx, text):
 
 
 def _capture(inputs, ctx, text):
+    # Web は今回の発言を処理後に履歴へ入れるため、保存の依頼内の情報もここで渡す。
+    # CLI は既に入れている場合があるので、末尾が同じなら重ねない。
+    if ((obsidian_note.is_capture_request(text) or obsidian_note.is_knowledge_request(text)) and
+            (not ctx.history or ctx.history[-1].text != text)):
+        ctx.history.append(Turn(Speaker.OWNER, text))
     if not ctx.terminal and ctx.review is not None:
         return _capture_with_cards(ctx)
     from chat_actions import run_ckc
