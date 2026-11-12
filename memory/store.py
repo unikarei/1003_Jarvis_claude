@@ -1,10 +1,13 @@
 """追記専用の原文 JSONL と、原文から復元できる SQLite 索引。"""
 
+import atexit
 import json
 import os
+import queue
 import re
 import sys
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import closing
@@ -34,6 +37,60 @@ def safe_call(function, *args, **kwargs):
         return None
 
 
+# ---------------------------------------------------------------- 裏の書き込み（T-2203）
+# 記録は裏の 1 本のスレッドで順に書く。会話の処理（とくにブラウザの会話のロックの中）でファイル・DB の書き込みを
+# 待たない（2026-11-12 のブラウザの会話が固まった対策）。順番は保たれる（同じ会話の発言 → 終わり）。
+_QUEUE: "queue.Queue" = queue.Queue()
+_WRITER = None
+_WRITER_LOCK = threading.Lock()
+FLUSH_SECONDS = 5.0
+
+
+def _writer_loop():
+    while True:
+        function, args = _QUEUE.get()
+        try:
+            safe_call(function, *args)
+        finally:
+            _QUEUE.task_done()
+
+
+def submit(function, *args):
+    """記録の処理を裏のスレッドに渡す（待たない）。記憶が無効なら何もしない。"""
+    global _WRITER
+    if not enabled():
+        return
+    with _WRITER_LOCK:
+        if _WRITER is None or not _WRITER.is_alive():
+            _WRITER = threading.Thread(target=_writer_loop, name="jarvis-memory-writer", daemon=True)
+            _WRITER.start()
+    _QUEUE.put((function, args))
+
+
+def discard_pending() -> int:
+    """まだ書いていない記録を捨てる（テストの後片付け用。次のテストの DB・フォルダに遅れて書かないように）。"""
+    with _QUEUE.mutex:
+        n = len(_QUEUE.queue)
+        _QUEUE.queue.clear()
+        _QUEUE.unfinished_tasks -= n
+        if _QUEUE.unfinished_tasks <= 0:
+            _QUEUE.all_tasks_done.notify_all()
+    return n
+
+
+def flush(timeout: float = FLUSH_SECONDS) -> bool:
+    """渡した記録を書き終えるまで待つ（最大 timeout 秒）。書き終えたら True。"""
+    deadline = time.monotonic() + timeout
+    while _QUEUE.unfinished_tasks:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+    return True
+
+
+atexit.register(flush)   # プロセスの終わりに、残りの記録を書き終える（最大 5 秒）
+
+
 def _path(session_id):
     match = _ID.fullmatch(session_id)
     if not match:
@@ -47,9 +104,10 @@ def _append(session_id, *records):
     folders = [Path(config.MEMORY_DIR)]
     folders += [Path(config.MEMORY_DIR) / part for part in ("sessions", f"sessions/{path.parent.parent.name}",
                                                           f"sessions/{path.parent.parent.name}/{path.parent.name}")]
-    for folder in folders:
-        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-        folder.chmod(0o700)
+    if not path.parent.is_dir():          # 作るのは最初の 1 回だけ（毎回の権限の付け直しをしない、T-2203）
+        for folder in folders:
+            folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+            folder.chmod(0o700)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a", encoding="utf-8") as stream:
         os.fchmod(stream.fileno(), 0o600)
@@ -57,8 +115,15 @@ def _append(session_id, *records):
             stream.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+_INITIALIZED: set[str] = set()
+_LAST_SEQ: dict[str, int] = {}   # このプロセスで最後に振った発言の番号（会話ごと）   # 表を作った DB（書くたびに作成のスクリプト全体を流さない、T-2203）
+
+
 def _connection():
-    db.init_db()
+    key = str(Path(db.DB_PATH).resolve())
+    if key not in _INITIALIZED:
+        db.init_db()
+        _INITIALIZED.add(key)
     return db.get_connection()
 
 
@@ -69,7 +134,7 @@ def _apply(conn, session_id, record):
         conn.execute("INSERT OR IGNORE INTO memory_sessions(session_id, channel, started_at, last_at) VALUES(?,?,?,?)",
                      (session_id, record["channel"], at, at))
     elif kind == "turn":
-        conn.execute("INSERT INTO memory_turns VALUES(?,?,?,?,?)",
+        conn.execute("INSERT OR REPLACE INTO memory_turns VALUES(?,?,?,?,?)",
                      (session_id, record["seq"], record["speaker"], record["text"], at))
         conn.execute("UPDATE memory_sessions SET last_at=?, owner_turns=owner_turns+? WHERE session_id=?",
                      (at, int(record["speaker"] == "owner"), session_id))
@@ -98,20 +163,18 @@ def log_turn(session_id, channel, speaker, text):
     text = mask_secrets(text)
     at = datetime.now().isoformat()
     with _LOCK, closing(_connection()) as conn, conn:
-        # 前回の JSONL 追記後に DB 更新だけが失敗していても、原文を先に復元する。
-        path = _path(session_id)
-        if path.exists():
-            conn.execute("DELETE FROM memory_turns WHERE session_id=?", (session_id,))
-            conn.execute("DELETE FROM memory_sessions WHERE session_id=?", (session_id,))
-            for line in path.read_text(encoding="utf-8").splitlines():
-                _apply(conn, session_id, json.loads(line))
+        # 1 発言分だけ書く（発言のたびに JSONL を読み直して入れ直すと、会話が長いほど重くなるため、T-2203）。
+        # JSONL と索引がずれたら `python -m memory rebuild` で原文から作り直す
         records = []
         if conn.execute("SELECT 1 FROM memory_sessions WHERE session_id=?", (session_id,)).fetchone() is None:
             records.append(dict(type="session", session_id=session_id, channel=channel, at=at))
-        seq = conn.execute("SELECT COALESCE(MAX(seq),0)+1 FROM memory_turns WHERE session_id=?",
-                           (session_id,)).fetchone()[0]
+        seq = max(conn.execute("SELECT COALESCE(MAX(seq),0) FROM memory_turns WHERE session_id=?",
+                               (session_id,)).fetchone()[0], _LAST_SEQ.get(session_id, 0)) + 1
         records.append(dict(type="turn", seq=seq, speaker=speaker, text=text, at=at))
-        _write(conn, session_id, *records)
+        _append(session_id, *records)
+        _LAST_SEQ[session_id] = seq       # 索引だけ失敗しても、次の発言が同じ番号にならないように（T-2203）
+        for record in records:
+            _apply(conn, session_id, record)
 
 
 def safe_log_turn(*args):

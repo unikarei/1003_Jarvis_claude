@@ -60,16 +60,19 @@ class Context:
 
 
 def add_turn(ctx, speaker, text):
-    """従来の履歴を追加し、安全な入口で会話の記憶にも記録する。"""
+    """従来の履歴を追加し、会話の記憶にも記録する。記録は裏のスレッドで行い、ここでは待たない（T-2203）。"""
     ctx.history.append(Turn(speaker, text))
     from memory import store
-    store.safe_call(store.safe_log_turn, ctx.session_id, ctx.channel, speaker, text)
+    store.safe_call(store.submit, store.log_turn, ctx.session_id, ctx.channel, speaker, text)
 
 
 def end_session(ctx):
-    """正常に終わった会話を記録する。記録の失敗で終了を妨げない。"""
-    from memory import store
-    store.safe_call(store.end_session, ctx.session_id)
+    """正常に終わった会話を記録し、残りの記録を書き終えてから、別のプロセスで要約を始める（T-2203）。
+    記録・要約の失敗で終了を妨げない。"""
+    from memory import store, summarize
+    store.safe_call(store.submit, store.end_session, ctx.session_id)
+    store.safe_call(store.flush)
+    store.safe_call(summarize.start_detached)
 
 
 @dataclass
@@ -1075,16 +1078,14 @@ def warm_up() -> None:
 
 
 def start_warm_up(exclude_session_id=None) -> threading.Thread:
-    """warm_up() をバックグラウンドのスレッドで呼ぶ（chat.py・voice_chat.py の起動時）。"""
+    """warm_up() をバックグラウンドのスレッドで呼ぶ（chat.py・voice_chat.py の起動時）。
+    会話の記憶の要約はここでは始めない（会話の最中に Ollama・GPU を取り合うため。会話を終えたときに行う、T-2203）。
+    exclude_session_id は前の版との互換のために受け取るだけ。"""
     def run():
         try:
             warm_up()
-        except Exception:  # 読み込みに失敗しても会話を始め、要約は別に試す。
+        except Exception:  # noqa: BLE001  読み込みに失敗しても会話を始める
             pass
-        finally:
-            from memory.summarize import start_background_summary
-            from memory import store
-            store.safe_call(start_background_summary, exclude_session_id)
     thread = threading.Thread(target=run, name="jarvis-warm-up", daemon=True)
     thread.start()
     return thread

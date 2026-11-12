@@ -342,3 +342,84 @@ def test_page_js_has_barge_in_and_disconnect_handling():
     assert html.index("/static/vad.js") < html.index("/static/page.js") < html.index("/static/app.js")
     for banned in ("localStorage", "sessionStorage", "indexedDB", "caches."):
         assert banned not in js, banned
+
+
+# ---------------------------------------------------------------- 雑音の割り込みからの答え直し（T-2203）
+
+class Texts:
+    """発話ごとに認識の結果を順に返す偽の認識。"""
+
+    def __init__(self, *texts):
+        self.texts = list(texts)
+
+    def __call__(self, audio):
+        return self.texts.pop(0) if self.texts else ""
+
+
+def _reanswer_session(texts, handle, clock=None):
+    s, events, fake = make_session(handle=handle, **({"clock": clock} if clock else {}))
+    s.transcribe = Texts(*texts)
+    return s, events
+
+
+def test_noise_after_interrupt_before_anything_heard_reanswers_the_cut_question():
+    handle = Gen(["一文目です。"], gate_after=0)
+    s, events = _reanswer_session(["大洗の民泊の物件だよ", ""], handle)
+    s.submit(wav(), 48000)
+    until(lambda: handle.calls == 1)
+    assert s.interrupt(1) == "ok"                          # 雑音で割り込まれた（まだ一言も聞こえていない）
+    handle.gate.set()
+    handle.done.wait(5)
+    handle.gate = threading.Event()
+    handle.gate.set()
+    handle.done = threading.Event()
+    s.submit(wav(), 48000)                                 # 割り込んだ発話は雑音（認識の結果が空）
+    until(lambda: handle.calls == 2)
+    assert handle.done.wait(5)
+    events.wait("answer_done")
+    owner = [t.text for t in s.ctx.history if t.speaker == Who.OWNER]
+    assert owner == ["大洗の民泊の物件だよ"]                # Owner の発言は 1 回だけ
+    assert not [e for e in events.of("ignored") if e.get("turn") == 3]
+
+
+def test_noise_does_not_reanswer_after_answer_was_heard_or_too_late():
+    browser = Browser(play=1)
+    handle = Gen(["一文目です。", "二文目です。"])
+    s, events, _ = make_session(handle=handle, browser=browser)
+    s.transcribe = Texts("こんにちは", "")
+    s.submit(wav(), 48000)
+    until(lambda: ("end", 0, "ok") in browser.done)        # 一文目は聞こえた
+    browser.play = None
+    s.submit(wav(), 48000)                                 # 雑音で割り込み → 答え直さない
+    events.wait("ignored")
+    assert handle.calls == 1
+
+    clock = Clock()
+    handle2 = Gen(["一文目です。"], gate_after=0)
+    s2, events2 = _reanswer_session(["質問です", ""], handle2, clock=clock)
+    s2.submit(wav(), 48000)
+    until(lambda: handle2.calls == 1)
+    assert s2.interrupt(1) == "ok"
+    handle2.gate.set()
+    clock.t += 16                                         # 15 秒を過ぎた
+    s2.submit(wav(), 48000)
+    events2.wait("ignored")
+    assert handle2.calls == 1
+
+
+def test_noise_does_not_reanswer_write_skills():
+    handle = Gen(["一文目です。"], gate_after=0, skill="obsidian-note")
+    s, events = _reanswer_session(["Obsidian のメモに追加して", ""], handle)
+
+    def handle_with_skill(text, ctx, ask=None):
+        ctx.active_skill = "obsidian-note"
+        return handle(text, ctx, ask)
+    s.handle = handle_with_skill
+    s.submit(wav(), 48000)
+    until(lambda: handle.calls == 1)
+    assert s.interrupt(1) == "ok"
+    handle.gate.set()
+    handle.done.wait(5)
+    s.submit(wav(), 48000)
+    events.wait("ignored")
+    assert handle.calls == 1

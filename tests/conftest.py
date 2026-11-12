@@ -137,6 +137,13 @@ def no_real_claude_stream(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_background_memory_summary(monkeypatch):
-    """別テストの DB・パスへ遅れて書かないよう、起動時の要約は個別テストでだけ動かす。"""
-    from memory import summarize
+    """別テストの DB・パスへ遅れて書かないよう、要約（裏のスレッド・別のプロセス）は個別テストでだけ動かす。
+    裏の書き込み（T-2203）は、テストの前後で書き終えるまで待つ（次のテストの DB に遅れて書かないように）。"""
+    from memory import store, summarize
     monkeypatch.setattr(summarize, "start_background_summary", lambda *args, **kwargs: None)
+    monkeypatch.setattr(summarize, "start_detached", lambda *args, **kwargs: None)
+    if not store.flush(2):
+        store.discard_pending()
+    yield
+    if not store.flush(2):              # 発言を大量に作るテスト（割り込みの繰り返しなど）の残りは捨てる
+        store.discard_pending()

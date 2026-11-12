@@ -2,6 +2,7 @@
 
 import json
 import stat
+import threading
 from datetime import datetime, timedelta
 
 import pytest
@@ -184,10 +185,12 @@ def test_jsonl_survives_index_failure_and_next_turn(monkeypatch):
     store.safe_log_turn(sid, 'text', 'owner', 'DB失敗')
     monkeypatch.setattr(store, '_apply', original)
     store.log_turn(sid, 'text', 'owner', '次の発言')
-    before = store.get_session(sid)
-    assert [r['text'] for r in before['turns']][-2:] == ['DB失敗', '次の発言']
+    # T-2203: 発言のたびに原文を読み直さない。索引だけ失敗した発言は、rebuild で原文から戻る
     store.rebuild()
-    assert store.get_session(sid) == before
+    after = store.get_session(sid)
+    assert [r['text'] for r in after['turns']][-2:] == ['DB失敗', '次の発言']
+    path = store._path(sid)
+    assert sum('"type": "turn"' in line for line in path.read_text(encoding='utf-8').splitlines()) == len(after['turns'])
 
 
 def test_chat_records_only_history_eligible_turns(monkeypatch):
@@ -226,6 +229,7 @@ def test_web_records_only_eligible_turns_and_heard_audio():
             state.text = skill + str(ok)
             state.outcome = orc.Outcome(skill, "rule", {}, "回答全体", ok, 0, private=private)
             session._remember(state)
+        store.flush()                     # 記録は裏のスレッドで書く（T-2203）
         row = store.get_session(session.ctx.session_id)
         assert row["channel"] == "web"
         assert [t["text"] for t in row["turns"]] == ["general-chatFalse", "general-chatTrue", "聞こえた部分"]
@@ -240,3 +244,56 @@ def test_summary_validation_allows_blank_lines_and_fullwidth_colon():
     text = "話題：記憶\n\n決まったこと: Mem0 は後で\n残っていること: なし\nOwner の好みや事情：簡単な構成\n"
     assert summarize.validate(text).splitlines() == [
         "話題: 記憶", "決まったこと: Mem0 は後で", "残っていること: なし", "Owner の好みや事情: 簡単な構成"]
+
+
+# ---------------------------------------------------------------- T-2203 会話を待たせない
+
+def test_add_turn_does_not_wait_for_slow_or_failing_writes(monkeypatch):
+    """記録の書き込みが遅くても失敗しても、add_turn はすぐ戻り、履歴は入る（ブラウザの会話のロックの中で呼ばれるため）。"""
+    import time as _time
+    gate = threading.Event()
+
+    def slow_log(*args):
+        gate.wait(5)
+        raise RuntimeError("書けない")
+    monkeypatch.setattr(store, "log_turn", slow_log)
+    ctx = orc.Context()
+    started = _time.monotonic()
+    orc.add_turn(ctx, "owner", "こんにちは")
+    assert _time.monotonic() - started < 0.5 and ctx.history[-1].text == "こんにちは"
+    gate.set()
+    assert store.flush()
+
+
+def test_end_session_writes_rest_then_starts_detached_summary(monkeypatch):
+    from memory import summarize
+    calls = []
+    monkeypatch.setattr(summarize, "start_detached", lambda: calls.append(store.list_sessions()))
+    ctx = orc.Context()
+    orc.add_turn(ctx, "owner", "一つ目")
+    orc.add_turn(ctx, "owner", "二つ目")
+    orc.end_session(ctx)
+    assert len(calls) == 1 and calls[0][0]["ended_at"] and calls[0][0]["owner_turns"] == 2   # 書き終えてから要約
+
+
+def test_warm_up_and_web_start_do_not_summarize(monkeypatch):
+    from memory import summarize
+    calls = []
+    monkeypatch.setattr(summarize, "start_background_summary", lambda *a, **k: calls.append("bg"))
+    monkeypatch.setattr(summarize, "start_detached", lambda *a, **k: calls.append("detached"))
+    monkeypatch.setattr(orc, "warm_up", lambda: None)
+    orc.start_warm_up().join(5)
+    from tests.test_voice_web import make_session
+    session, _, _ = make_session()
+    session.end()
+    assert calls == []
+
+
+def test_start_detached_runs_memory_summarize_in_new_session(monkeypatch):
+    import importlib
+    import subprocess
+    summarize = importlib.reload(importlib.import_module("memory.summarize"))   # conftest の差し替えを外した本物
+    seen = {}
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **kw: seen.update(args=args, **kw))
+    summarize.start_detached()
+    assert seen["args"][1:] == ["-m", "memory", "summarize"] and seen["start_new_session"] is True

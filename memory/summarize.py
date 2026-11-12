@@ -80,3 +80,16 @@ def start_background_summary(exclude_session_id=None):
     thread = threading.Thread(target=run, name="jarvis-memory-summary", daemon=True)
     thread.start()
     return thread
+
+
+def start_detached():
+    """会話を終えたときに、別のプロセス（python -m memory summarize）で要約を始める（T-2203）。
+    会話の最中に Ollama・GPU を使わないよう、会話の始めには要約しない。終えたプロセスが先に終わっても続く。"""
+    if not store.enabled():
+        return None
+    import subprocess
+    import sys
+    import config
+    return subprocess.Popen([sys.executable, "-m", "memory", "summarize"], cwd=str(config.BASE_DIR),
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
