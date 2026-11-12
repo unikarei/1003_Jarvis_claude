@@ -351,8 +351,8 @@
 
 - [x] T-2101 会話の記録・要約・CLI（`memory/store.py`・`summarize.py`・`__main__.py`、`orchestrator.add_turn`）
 - [x] T-2102 想起と経路 A・B のプロンプトへの注入（`memory/recall.py`）
-- [ ] T-2103 記憶の評価セットと測定（`evaluation/memory/`）
-- [ ] T-2104 意味検索（Ollama の embedding、測ってから採否）
+- [x] T-2103 記憶の評価セットと測定（`evaluation/memory/`。結果は `docs/memory-eval-2026-11-12.md`）
+- [ ] T-2104 意味検索（Ollama の embedding、測ってから採否）— 保留（T-2103 で BM25 だけで 100%、採用の基準を満たしようがない）
 - [ ] T-2106 本番への反映と実機の確認
 
 T-2101 作業記録（2026-11-12）: 承認済み仕様に従い、メインからコード実行サブエージェントへ実装・テストを委譲（Owner 事前承認、上位 AGENTS.md §2.1）。commit・push とワークスペース文書の更新は Claude が担当。
@@ -368,3 +368,9 @@ T-2102 実装（2026-11-12）: 読み取り専用 SQLite・ロック待ち上限
 T-2102 最終検証（2026-11-12）: `.venv/bin/python -m pytest tests -q` 相当の全件実行は 1,329 passed・4 failed・130 errors。失敗/エラー 134 件は JUnit の詳細を検査し、すべてソケットの bind に対する `PermissionError: Operation not permitted` と確認。その 134 件の node ID だけを `--deselect` に指定した再実行は **1,329 passed・134 deselected**（56.97 秒）。新規 20 件を含むソケット不要の全件が成功。全件の制限なしでの検証と本番の音声実機確認は Claude が担当。追加行の秘密情報 0 件、`git diff --check` 成功。commit・push は未実施。
 
 T-2102 検証（2026-11-12、Claude）: `pytest tests -q` 1,465 passed。Claude の修正 3 点: (1) 直前の会話を「正常に終了した会話」だけでなく「最後の発言から 30 分たった会話」も含める（Ctrl+C・切断・タブを閉じた会話。要約の対象と同じ基準）、(2) 好みの知識を SQL で先に絞る、(3) 本物の Ollama（gemma4:12b）で、記憶にない話に「記憶にございます」と答えたため、記憶の欄に「ここに書かれていることだけが覚えている過去の会話」「なければ『その話は記憶にありません』」「Owner は話し相手」を足した。修正後、記憶にない話 3 問×2 回はすべて「記憶にありません」、記憶にある話 2 問×2 回はすべて正答。想起は 8〜16 ms。
+
+T-2103 着手（2026-11-12）: Owner 事前承認（上位 AGENTS.md §2.1）。固定架空セット・隔離 runner・偽 LLM テストまでをコード実行サブエージェントへ委譲。実測・改善・既存評価比較は Claude に引き継ぐ。worktree 外の変更、commit・push は行わない。
+
+T-2103 実装・検証（2026-11-12）: 全架空36件（6種類×6、37質問、承認済み好み3/会話だけ3）、Ollama固定・シナリオ/モードごとの空の一時環境、機械判定とJSON/Markdown出力、`--kind`・`--limit`・`--no-summary`を実装。新規39テスト成功。全件コマンドは1,331 passed・4 failed・130 errorsで、失敗134件のJUnit詳細すべてがソケットbindのOperation not permittedだった。その134件だけをdeselectした新規込み全件は **1,370 passed・134 deselected**（55.67秒、終了コード0）。CLI helpとgit diff --check成功。実Ollama、改善ループ、既存評価比較、commit・pushは未実施。コード実装をサブエージェントへ委譲し、メインが差分・テストを確認（追加API費用の測定なし）。
+
+T-2103 測定（2026-11-12、Claude）: 評価セットに `retrieval`（2〜3 週間前の会話を、関係のない会話 6 回の中から探す。言い換えの質問 4 件を含む）8 件を追加し、全 44 件。本物の Ollama で記憶あり 44/44・記憶なし 12/44、作り話 0 件。会話の評価 dev 0.931（T-1902 0.915）、QA の評価 dev 0.9897（記憶の前の版と同じ）。詳細は `docs/memory-eval-2026-11-12.md`。

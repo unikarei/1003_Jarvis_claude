@@ -323,6 +323,17 @@ JARVIS側からもボルトを更新できるようにする。自動実行は�
 - CLI `python -m memory`（list・show・summarize・rebuild・stats・forget）。`JARVIS_MEMORY=0` で無効
 - 状態: T-2101（記録・要約・CLI）実装済み。T-2102（想起・経路 A/B への注入）実装済み（Owner 事前承認、上位 AGENTS.md §2.1）。評価は T-2103 以降。要約失敗回数・skipped は JSONL の `status` レコードにも追記し、索引の作り直しで復元する。
 
+
+#### 4-13-1. 記憶の隔離評価（T-2103）
+
+Owner 事前承認（上位 AGENTS.md §2.1、2026-11-12 の依頼範囲）。`python -m evaluation.memory` で全架空の固定評価セット（30 件以上、continue / decision / preference / temporal / absent / irrelevant 各 4 件以上。Claude が retrieval 8 件を追加し全 44 件）を実行する。過去の会話は 1〜3 回（retrieval は関係のない会話を挟むため 1〜8 回）、質問は 1〜2 回。承認済み Preference と会話だけの好みの両方を含む。
+
+- シナリオ・記憶あり/なしごとに空の一時 DB と記憶フォルダを使う。本番の DB・会話・Vault は読まず、書かない。日付と評価日時を固定して再現し、原文と索引を一致させる。
+- 過去の発言を `memory.store` で保存し、要約は Ollama のみ。`--no-summary` は要約を作らず既存の直前発言フォールバックを測る。回答は `orchestrator.handle` を通し、両モードで同じ質問と設定を使う。記憶なしは `JARVIS_MEMORY=0`。
+- ハーネス・要約・回答はローカル Ollama に固定し、Claude/Codex と外部操作を禁止する。含むべき語と禁止語による機械判定を使い、空応答・実行失敗は不合格。absent の肯定的な記憶主張（「覚えている」「前に話した」「記憶にございます」等）を作り話として数える。単なる否定は数えない。機械判定の対象表現を結果に残し、人の意味理解による完全な検出とは区別する。
+- JSON と Markdown にモード別・種類別・全体の合格率、作り話件数、想起時間、失敗一覧を保存。`--limit` と `--kind` で部分実行でき、部分結果は全件の受け入れ判定と区別する。
+- 結果（2026-11-12）: 記憶あり 44/44、作り話 0 件、会話の評価・QA の評価の低下なし（`docs/memory-eval-2026-11-12.md`）。意味検索（T-2104）は保留、Mem0（T-2105）の検討は閉じる。
+
 ## 4. データモデル
 
 - ノード型: Category / Task / Knowledge / Source / Skill / Agent
