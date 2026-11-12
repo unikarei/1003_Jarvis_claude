@@ -211,3 +211,7 @@ JARVISはこの契約に従う。
 - 全体に影響する変更（他リポジトリとの連携方式、API契約、層構成）は、統合ワークスペース直下の `../AGENTS.md` のルールに従い、先にユーザーの確認を取る
 - 回答・コメント・ドキュメントは日本語
 - 変更は小さく、動作確認してからコミットする
+
+## 記憶の評価（T-2103）
+
+`python -m evaluation.memory` は架空の固定評価セットを一時 DB・記憶フォルダで実行する。Ollama だけを使い、機械判定の記憶あり/なし結果を JSON と Markdown に出す。`--limit`・`--kind`・`--no-summary` に対応。worktree から会話の評価（`evaluation conversation`）を動かすときは、`--skills`・`--registry` に本物の場所を渡す（既定の場所が `.worktrees/` の下を指し、予備の索引で動くため）。2026-11-12 の結果は `docs/memory-eval-2026-11-12.md`。
