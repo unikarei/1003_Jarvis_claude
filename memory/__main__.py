@@ -9,9 +9,9 @@ from memory.summarize import summarize_pending
 def main(argv=None):
     parser = argparse.ArgumentParser(description="会話の記憶を確認・管理します")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("list", "summarize", "rebuild", "stats"):
+    for name in ("list", "summarize", "rebuild", "stats", "notes"):
         commands.add_parser(name)
-    for name in ("show", "forget"):
+    for name in ("show", "forget", "forget-note"):
         commands.add_parser(name).add_argument("id")
     args = parser.parse_args(argv)
     try:
@@ -31,7 +31,17 @@ def main(argv=None):
             print(f"{summarize_pending()} 件を要約しました。")
         elif args.command in ("stats", "rebuild"):
             result = store.rebuild() if args.command == "rebuild" else store.stats()
-            print(f"会話 {result['sessions']} 件・発言 {result['turns']} 件・要約 {result['summaries']} 件")
+            print(f"会話 {result['sessions']} 件・発言 {result['turns']} 件・要約 {result['summaries']} 件"
+                  f"・記憶のメモ {result.get('notes', 0)} 件")
+        elif args.command == "notes":
+            for note in store.list_notes():
+                print(f"{note['note_id']} {note['created_at'][:16]} {note['kind']} {note['text']}"
+                      f"（{note['session_id'] or '会話不明'}）")
+        elif args.command == "forget-note":
+            if input("この記憶のメモを消しますか？ [y/N] ").strip().lower() == "y":
+                print("削除しました。" if store.forget_note(args.id) else "記憶のメモが見つかりません。")
+            else:
+                print("削除しませんでした。")
         elif input("この会話の記録を消しますか？ [y/N] ").strip().lower() == "y":
             print("削除しました。" if store.forget(args.id) else "会話が見つかりません。")
         else:

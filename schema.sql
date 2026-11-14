@@ -88,3 +88,12 @@ CREATE TABLE IF NOT EXISTS memory_turns (
     created_at TEXT NOT NULL,
     PRIMARY KEY (session_id, seq)
 );
+-- 記憶のメモ（会話の中で Owner が言った大事な事実・決定・好み）。原文 data/memory/notes/ の JSONL から作り直せる索引（T-2406、ADR-0038）。
+CREATE TABLE IF NOT EXISTS memory_notes (
+    note_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_notes_session ON memory_notes(session_id);

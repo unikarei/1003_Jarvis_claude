@@ -1,4 +1,5 @@
-"""未要約の会話をローカル Ollama だけで要約する。"""
+"""未要約の会話を要約する。要約のハーネスは会話と同じ順番の claude → codex → ollama（1 回限りの呼び出し、道具なし。
+有料の API は使わない）。../docs/spec.md §3.3.14 B（2026-11-14 改訂、ADR-0038。前は Ollama だけ）。"""
 
 import threading
 
@@ -6,6 +7,7 @@ import llm
 from memory import store
 
 LABELS = ("話題", "決まったこと", "残っていること", "Owner の好みや事情")
+PROVIDERS = ("claude_cli", "codex", "ollama")   # 上から試す。anthropic_api は入れない（ADR-0020）
 _RUN_LOCK = threading.Lock()
 
 
@@ -48,6 +50,17 @@ def _prompt(turns):
             + "\n".join(reversed(selected)) + "\n</会話>")
 
 
+def _summarize(prompt):
+    """PROVIDERS の順に要約を作り、形の検証に通った最初のものを返す。どれもだめなら最後の失敗を上げる。"""
+    error = None
+    for provider in PROVIDERS:
+        try:
+            return validate(llm.complete(prompt, provider=provider))
+        except (llm.LLMError, ValueError) as failure:   # 使えない・形が違う → 次のハーネス
+            error = failure
+    raise error
+
+
 def summarize_pending(exclude_session_id=None):
     if not store.enabled() or not _RUN_LOCK.acquire(blocking=False):
         return 0
@@ -57,7 +70,7 @@ def summarize_pending(exclude_session_id=None):
             sid = session["session_id"]
             try:
                 conversation = store.get_session(sid)
-                summary = validate(llm.complete(_prompt(conversation["turns"]), provider="ollama"))
+                summary = _summarize(_prompt(conversation["turns"]))
                 store.save_summary(sid, summary)
                 count += 1
             except Exception as error:

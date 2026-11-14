@@ -94,20 +94,24 @@ def test_target_conditions_and_retry_limit():
     assert [r["session_id"] for r in store.sessions_to_summarize(now, current)] == [idle]
 
 
-def test_summary_local_only_validation_and_retry(monkeypatch):
+def test_summary_harness_order_validation_and_retry(monkeypatch):
+    """要約は claude → codex → ollama の順（2026-11-14 spec §3.3.14 B 改訂、ADR-0038。前は Ollama だけ）。
+    使えない・形が違うものは次へ進み、有料の API は使わない。"""
     sid = conversation()
-    calls = []
+    calls, providers = [], []
     def complete(prompt, provider=None):
-        assert provider == "ollama"
+        providers.append(provider)
+        if provider == "anthropic_api":
+            pytest.fail("有料の API を呼んだ")
+        if provider == "claude_cli":
+            raise llm.LLMUnavailable("You've hit your usage limit.", "limit")
+        if provider == "codex":
+            return "形の違う答え"
         calls.append(prompt)
         return "\n".join(label + ": " + "長" * 300 for label in summarize.LABELS)
     monkeypatch.setattr(llm, "complete", complete)
-    # 外部プロバイダーに到達すれば失敗する。
-    def external(*a, **k):
-        pytest.fail("外部 LLM を呼んだ")
-    for name in ("claude_cli", "anthropic_api", "codex"):
-        monkeypatch.setitem(llm.PROVIDERS, name, external)
     assert summarize.summarize_pending() == 1
+    assert providers == ["claude_cli", "codex", "ollama"]
     summary = store.get_session(sid)["summary"]
     assert len(summary) <= 400 and len(summary.splitlines()) == 4
     assert calls and "Owner: 発言0" in calls[0]
