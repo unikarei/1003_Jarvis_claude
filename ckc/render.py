@@ -8,6 +8,8 @@ from datetime import datetime
 from ckc.models import Confidence, Evidence, Kind, KnowledgeNote, NoteStatus, Origin, SourceRef, Speaker
 
 
+UNVERIFIED_NOTICE = "※ 未検証の知識です。根拠を確認してから利用してください。\n\n"
+
 _FIELDS = (
     "ckc_id", "kind", "status", "title", "projects", "category", "confidence",
     "source", "evidence", "supersedes", "superseded_by", "created", "approved", "tags",
@@ -34,7 +36,8 @@ def render_note(note: KnowledgeNote) -> str:
     values = asdict(note)
     values["tags"] = ["ckc", "ckc/" + note.kind.value.lower()]
     lines = [f"{key}: {json.dumps(values[key], ensure_ascii=False)}" for key in _FIELDS]
-    return "---\n" + "\n".join(lines) + f"\n---\n\n# {note.title}\n\n{note.body}" + _footer(note)
+    caution = UNVERIFIED_NOTICE if note.confidence == Confidence.UNVERIFIED else ""
+    return "---\n" + "\n".join(lines) + f"\n---\n\n# {note.title}\n\n{caution}{note.body}" + _footer(note)
 
 
 def _string(value):
@@ -100,6 +103,8 @@ def parse_note(markdown: str) -> KnowledgeNote:
             content = content[1:].split("\n\n", 1)[1]
         else:
             raise ValueError("本文の題名が不正です")
+        if note.confidence == Confidence.UNVERIFIED and content.startswith(UNVERIFIED_NOTICE):
+            content = content[len(UNVERIFIED_NOTICE):]
         footer = _footer(note)
         # 生成した末尾を先に照合し、本文内の同じ見出しを保持する。
         if content.endswith(footer):

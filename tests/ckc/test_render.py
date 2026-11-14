@@ -139,3 +139,11 @@ def test_renamed_heading_in_obsidian_still_reads_body():
     edited = render_note(note).replace("\n# 元の題名\n", "\n# 書き換えた見出し\n")
     parsed = parse_note(edited)
     assert (parsed.title, parsed.body) == ("元の題名", "本文の内容")
+
+
+def test_unverified_notice_visible_and_roundtrips_once():
+    note = _note(confidence=Confidence.UNVERIFIED)
+    markdown = render_note(note)
+    assert '※ 未検証の知識です' in markdown
+    assert parse_note(markdown) == note
+    assert render_note(parse_note(markdown)) == markdown
