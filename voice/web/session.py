@@ -197,6 +197,7 @@ class WebSession:
         self.record = record or _record
         self.launcher = launcher
         self.ctx = orchestrator.Context(voice=True, terminal=False, channel="web")
+        orchestrator.prewarm_session(self.ctx)
         self.clock = clock
         self.closed = False
         self.turn = 0
@@ -380,6 +381,12 @@ class WebSession:
             history = list(self.ctx.history) if capture else []
         if capture:
             orchestrator.end_session(self.ctx)
+        else:                                 # 切断・サーバーの停止でも、会話のハーネスのセッションは閉じる（ADR-0038）
+            import harness_session
+            try:
+                harness_session.close(self.ctx.session_id)
+            except Exception:  # noqa: BLE001
+                pass
         if history:
             self._capture_in_background(history)
         try:
@@ -538,7 +545,7 @@ class WebSession:
                 self._after = st
             else:
                 if st.outcome is None:
-                    self.ctx = orchestrator.Context(voice=True, terminal=False, history=list(self.ctx.history), session_id=self.ctx.session_id, channel=self.ctx.channel)
+                    self.ctx = orchestrator.renew_context(self.ctx, voice=True, terminal=False)
                 if not getattr(st.outcome, "private", False):
                     for line in lines:
                         orchestrator.add_turn(self.ctx, line.speaker, line.text)
