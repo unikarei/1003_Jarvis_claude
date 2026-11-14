@@ -195,9 +195,10 @@ _STREAM_OPTIONS = ["-p", "--tools", "", "--no-session-persistence", "--output-fo
                    "--verbose", "--include-partial-messages"]
 
 
-def _read_json_lines(proc, handle, deadline: float, timeout: int, cancel, label: str) -> None:
+def _read_json_lines(proc, handle, deadline: float, timeout: int, cancel, label: str, until=None) -> None:
     """子プロセスの標準出力の JSON の行を終わり（EOF）まで読み、1 行ずつ handle(event) に渡す。
     改行を待たずに読み、行ごとと 0.1 秒ごとに取り消しを、0.1 秒ごとに時間切れを確かめる。
+    until を渡すと、handle の後に until() が True になった時点で読むのをやめる（会話の間保つプロセス、ADR-0038）。
     プロセスは止めない（呼び出し側で止める）。"""
     selector = selectors.DefaultSelector()
     selector.register(proc.stdout, selectors.EVENT_READ)
@@ -217,6 +218,8 @@ def _read_json_lines(proc, handle, deadline: float, timeout: int, cancel, label:
                     continue
                 if isinstance(event, dict):
                     handle(event)
+                    if until is not None and until():
+                        break
                 continue
             if eof:
                 break
@@ -409,6 +412,136 @@ def _stream_claude_warm(prompt: str, on_text, timeout: int | None = None, cancel
 
 def _complete_claude_warm(prompt: str, timeout: int | None = None) -> str:
     return _stream_claude_warm(prompt, lambda _text: None, timeout)
+
+
+# --- 会話の間保つ claude -p（ハーネスのセッション、ADR-0038、../docs/spec.md §3.4.12 G・H、T-2404・T-2407） ---
+# 1 つの会話に 1 つのプロセス。発言ごとに stream-json の 1 行を送り、result のイベントまで読む（標準入力は閉じない）。
+# 道具は Jarvis の MCP サーバーの 4 つと（設定で）Web 検索だけ。--restricted でコマンド・コードを実行する道具を外し、
+# ユーザー・プロジェクトの設定を読まない。--permission-mode dontAsk で許可していないものは聞かずに断る。
+
+CLAUDE_MCP_TOOLS = ("mcp__jarvis__knowledge_search", "mcp__jarvis__memory_recall", "mcp__jarvis__memory_note",
+                    "mcp__jarvis__jarvis_status")
+CLAUDE_WEB_TOOLS = ("WebSearch", "WebFetch")
+
+
+class ClaudeSessionLost(LLMError):
+    """会話の間保つ claude -p が使えなくなった（落ちた・送れない）。呼び出し側はセッションを作り直せる。"""
+
+
+def claude_session_command(system_prompt: str, mcp_config_path: str | None, web_search: bool) -> list[str]:
+    """会話の間保つ claude -p の引数。mcp_config_path がなければ道具なし（答えるだけ）。"""
+    cmd = [CLAUDE_BIN, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+           "--include-partial-messages", "--no-session-persistence", "--restricted", "--strict-mcp-config",
+           "--disable-slash-commands", "--permission-mode", "dontAsk", "--system-prompt", system_prompt,
+           *_model_options()]
+    if mcp_config_path:
+        web = CLAUDE_WEB_TOOLS if web_search else ()
+        cmd += ["--mcp-config", mcp_config_path, "--tools", ",".join(web),
+                "--allowedTools", ",".join((*CLAUDE_MCP_TOOLS, *web))]
+    else:
+        cmd += ["--tools", ""]
+    return cmd
+
+
+class ClaudeSession:
+    """会話の間保つ claude -p。ask() は (答えの全文, 使った道具の名前の一覧) を返す。"""
+
+    def __init__(self, system_prompt: str, mcp_config: dict | None = None, web_search: bool = False):
+        self.workdir = tempfile.TemporaryDirectory(prefix="jarvis-session-")
+        config_path = None
+        if mcp_config is not None:
+            config_path = os.path.join(self.workdir.name, "mcp.json")
+            fd = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(mcp_config, f, ensure_ascii=False)
+        self.allowed = set((*CLAUDE_MCP_TOOLS, *(CLAUDE_WEB_TOOLS if web_search else ()))) if config_path else set()
+        # 標準エラーはファイルへ（会話の間に管が詰まって止まらないように）
+        self.stderr = open(os.path.join(self.workdir.name, "stderr.log"), "w+", encoding="utf-8")
+        try:
+            self.proc = subprocess.Popen(claude_session_command(system_prompt, config_path, web_search),
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, text=True,
+                                         cwd=self.workdir.name, env=_cli_env())
+        except FileNotFoundError:
+            self.stderr.close()
+            self.workdir.cleanup()
+            raise LLMUnavailable(f"Claude Code CLI が見つかりません: {CLAUDE_BIN}", "missing") from None
+        self.turns = 0
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def _detail(self) -> str:
+        try:
+            self.stderr.flush()
+            self.stderr.seek(0)
+            return self.stderr.read()[-500:].strip()
+        except (OSError, ValueError):
+            return ""
+
+    def ask(self, message: str, on_text, timeout: int | None = None, cancel=None) -> tuple[str, list[str]]:
+        timeout = timeout or CLAUDE_CLI_TIMEOUT_SECONDS
+        line = json.dumps({"type": "user", "message": {"role": "user", "content": message}}, ensure_ascii=False) + "\n"
+        try:
+            self.proc.stdin.write(line)
+            self.proc.stdin.flush()
+        except (OSError, ValueError):
+            raise ClaudeSessionLost(f"Claude Code CLI に発言を送れませんでした: {self._detail()}") from None
+        self.turns += 1
+        parts: list[str] = []
+        tools: list[str] = []
+        found: dict = {}
+        state = {"new_message": False}
+
+        def handle(event):
+            kind = event.get("type")
+            if kind == "stream_event":
+                inner = event.get("event") or {}
+                if inner.get("type") == "message_start" and parts:
+                    state["new_message"] = True          # 道具の後の答え（前の文と改行で分ける）
+                delta = inner.get("delta") or {}
+                if delta.get("type") == "text_delta" and delta.get("text"):
+                    text = delta["text"]
+                    if state["new_message"]:
+                        text, state["new_message"] = "\n" + text, False
+                    parts.append(text)
+                    on_text(text)
+            elif kind == "assistant":
+                for block in (event.get("message") or {}).get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        name = str(block.get("name") or "")
+                        if name not in self.allowed:   # 起動の引数で出していない。来たら止める（安全装置）
+                            raise LLMError(f"Claude が許可していない道具（{name}）を使おうとしたため止めました")
+                        tools.append(name)
+            elif kind == "result":
+                found["result"] = event
+
+        deadline = time.monotonic() + timeout
+        _read_json_lines(self.proc, handle, deadline, timeout, cancel, "Claude Code CLI", until=lambda: "result" in found)
+        result = found.get("result")
+        if result is None:
+            raise ClaudeSessionLost(f"Claude Code CLI が答えの途中で終了しました（利用上限の可能性あり）: {self._detail()}")
+        if result.get("is_error") or result.get("subtype") != "success":
+            raise LLMError(f"Claude Code CLI がエラーを返しました: subtype={result.get('subtype')} "
+                           f"result={str(result.get('result', ''))[:200]}")
+        return ("".join(parts).strip() or str(result.get("result") or "")), tools
+
+    def close(self) -> None:
+        if self.proc.poll() is None:
+            try:
+                self.proc.stdin.close()               # 正常に終わらせる（MCP サーバーも止まる）
+                self.proc.wait(timeout=2)
+            except (OSError, ValueError, subprocess.TimeoutExpired):
+                pass
+        if self.proc.poll() is None:
+            self.proc.kill()
+        self.proc.wait()
+        for stream in (self.proc.stdin, self.proc.stdout, self.stderr):
+            try:
+                if stream:
+                    stream.close()
+            except (OSError, ValueError):
+                pass
+        self.workdir.cleanup()
 
 
 # --- ローカルの Ollama（"ollama"、ADR-0027、T-1402） ---
@@ -879,82 +1012,152 @@ def stop_codex_app_server() -> None:
         server.close()
 
 
+def _thread_params(server: "_CodexAppServer", developer_instructions: str | None = None) -> dict:
+    params = {"cwd": server.workdir.name, "sandbox": "read-only", "approvalPolicy": "never",
+              "ephemeral": True, "config": {"web_search": "disabled"}}
+    if CODEX_REASONING:
+        params["config"]["model_reasoning_effort"] = CODEX_REASONING
+    if CODEX_MODEL:
+        params["model"] = CODEX_MODEL
+    if developer_instructions:
+        params["developerInstructions"] = developer_instructions
+    return params
+
+
+def _drain(server: "_CodexAppServer") -> None:
+    """前の答えの残りの通知を捨てる。"""
+    while True:
+        try:
+            if server.events.get_nowait() is None:
+                raise _AppServerDown("app-server が終わっています")
+        except queue.Empty:
+            return
+
+
+def _app_turn(server: "_CodexAppServer", thread_id: str, prompt: str, on_text, timeout: int, cancel) -> str:
+    """スレッドに turn/start を送り、答えの差分を on_text に渡して全文を返す（呼び出し側が turn_lock を持つ）。"""
+    deadline = time.monotonic() + timeout
+    _drain(server)
+    server.turns += 1
+    latency.mark("llm_ready")
+    turn = server.request("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}]},
+                          _APP_START_TIMEOUT)
+    turn_id = (turn.get("turn") or {}).get("id")
+    parts: list[str] = []
+    final = {"text": None, "error": None}
+
+    def stop(error):
+        try:
+            server.send({"id": -1, "method": "turn/interrupt", "params": {"threadId": thread_id, "turnId": turn_id}})
+        except _AppServerDown:
+            pass
+        raise error
+
+    while True:
+        if cancel is not None and cancel():
+            stop(LLMCancelled("取り消されました"))
+        if time.monotonic() > deadline:
+            stop(LLMError(f"Codex が {timeout} 秒でタイムアウトしました"))
+        try:
+            message = server.events.get(timeout=0.1)
+        except queue.Empty:
+            continue
+        if message is None:
+            if parts:
+                raise LLMError("Codex の app-server が答えの途中で終わりました")
+            raise _AppServerDown("app-server が答えの前に終わりました")
+        method = message.get("method", "")
+        params = message.get("params") or {}
+        if "id" in message:                    # app-server からの要求（承認など）は断って止める
+            server.reject(message)
+            stop(LLMError(f"Codex が {method} を求めたため止めました"))
+        if params.get("threadId") not in (None, thread_id):
+            continue
+        if method == "item/agentMessage/delta":
+            delta = params.get("delta") or ""
+            if delta:
+                parts.append(delta)
+                on_text(delta)
+        elif method in ("item/started", "item/completed"):
+            item = params.get("item") or {}
+            if item.get("type") not in _APP_ITEMS_OK:
+                stop(LLMError(f"Codex がツール（{item.get('type')}）を使おうとしたため止めました"))
+            if method == "item/completed" and item.get("type") == "agentMessage":
+                final["text"] = item.get("text")
+        elif method == "error" and not params.get("willRetry"):
+            final["error"] = (params.get("error") or {}).get("message")
+        elif method == "turn/completed":
+            info = params.get("turn") or {}
+            if info.get("status") == "completed":
+                return "".join(parts) or final["text"] or ""
+            message_text = (info.get("error") or {}).get("message") or final["error"] or info.get("status")
+            raise _codex_failure(str(message_text))
+
+
 def _stream_codex_app(prompt: str, on_text, timeout: int | None = None, cancel=None) -> str:
     timeout = timeout or CODEX_TIMEOUT_SECONDS
-    deadline = time.monotonic() + timeout
     server = _take_app_server()
     if not server.turn_lock.acquire(blocking=False):
         raise _AppServerBusy("app-server は別の答えを作っています")
     try:
-        while True:                                # 前の答えの残りの通知を捨てる
-            try:
-                if server.events.get_nowait() is None:
-                    raise _AppServerDown("app-server が終わっています")
-            except queue.Empty:
-                break
-        server.turns += 1
-        thread_params = {"cwd": server.workdir.name, "sandbox": "read-only", "approvalPolicy": "never",
-                         "ephemeral": True, "config": {"web_search": "disabled"}}
-        if CODEX_REASONING:
-            thread_params["config"]["model_reasoning_effort"] = CODEX_REASONING
-        if CODEX_MODEL:
-            thread_params["model"] = CODEX_MODEL
-        thread_id = server.request("thread/start", thread_params, _APP_START_TIMEOUT)["thread"]["id"]
-        latency.mark("llm_ready")
-        turn = server.request("turn/start", {"threadId": thread_id, "input": [{"type": "text", "text": prompt}]},
-                              _APP_START_TIMEOUT)
-        turn_id = (turn.get("turn") or {}).get("id")
-        parts: list[str] = []
-        final = {"text": None, "error": None}
-
-        def stop(error):
-            try:
-                server.send({"id": -1, "method": "turn/interrupt", "params": {"threadId": thread_id, "turnId": turn_id}})
-            except _AppServerDown:
-                pass
-            raise error
-
-        while True:
-            if cancel is not None and cancel():
-                stop(LLMCancelled("取り消されました"))
-            if time.monotonic() > deadline:
-                stop(LLMError(f"Codex が {timeout} 秒でタイムアウトしました"))
-            try:
-                message = server.events.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            if message is None:
-                if parts:
-                    raise LLMError("Codex の app-server が答えの途中で終わりました")
-                raise _AppServerDown("app-server が答えの前に終わりました")
-            method = message.get("method", "")
-            params = message.get("params") or {}
-            if "id" in message:                    # app-server からの要求（承認など）は断って止める
-                server.reject(message)
-                stop(LLMError(f"Codex が {method} を求めたため止めました"))
-            if params.get("threadId") not in (None, thread_id):
-                continue
-            if method == "item/agentMessage/delta":
-                delta = params.get("delta") or ""
-                if delta:
-                    parts.append(delta)
-                    on_text(delta)
-            elif method in ("item/started", "item/completed"):
-                item = params.get("item") or {}
-                if item.get("type") not in _APP_ITEMS_OK:
-                    stop(LLMError(f"Codex がツール（{item.get('type')}）を使おうとしたため止めました"))
-                if method == "item/completed" and item.get("type") == "agentMessage":
-                    final["text"] = item.get("text")
-            elif method == "error" and not params.get("willRetry"):
-                final["error"] = (params.get("error") or {}).get("message")
-            elif method == "turn/completed":
-                info = params.get("turn") or {}
-                if info.get("status") == "completed":
-                    return "".join(parts) or final["text"] or ""
-                message_text = (info.get("error") or {}).get("message") or final["error"] or info.get("status")
-                raise _codex_failure(str(message_text))
+        _drain(server)
+        thread_id = server.request("thread/start", _thread_params(server), _APP_START_TIMEOUT)["thread"]["id"]
+        return _app_turn(server, thread_id, prompt, on_text, timeout, cancel)
     finally:
         server.turn_lock.release()
+
+
+class CodexSessionUnavailable(Exception):
+    """会話のスレッドを使えない（app-server がない・使用中・作り直された）。呼び出し側は codex exec で答える。LLMError ではない。"""
+
+
+class CodexThread:
+    """会話ごとの Codex のスレッド（常駐の app-server の中、ADR-0038）。ask() は答えの全文を返す。"""
+
+    def __init__(self, developer_instructions: str):
+        if not CODEX_APP_SERVER:
+            raise CodexSessionUnavailable("app-server を使わない設定です（JARVIS_CODEX_APP_SERVER=0）")
+        try:
+            self.server = _take_app_server()       # コマンドがなければ LLMUnavailable（そのまま上げる）
+        except _AppServerDown as e:
+            raise CodexSessionUnavailable(str(e)) from None
+        if not self.server.turn_lock.acquire(blocking=False):
+            raise CodexSessionUnavailable("app-server は別の答えを作っています")
+        try:
+            _drain(self.server)
+            result = self.server.request("thread/start", _thread_params(self.server, developer_instructions),
+                                         _APP_START_TIMEOUT)
+            self.thread_id = result["thread"]["id"]
+        except _AppServerDown as e:
+            raise CodexSessionUnavailable(str(e)) from None
+        finally:
+            self.server.turn_lock.release()
+
+    def alive(self) -> bool:
+        return self.server.alive() and _app_server is self.server
+
+    def ask(self, message: str, on_text, timeout: int | None = None, cancel=None) -> tuple[str, list[str]]:
+        if not self.alive():
+            raise CodexSessionUnavailable("app-server が作り直されました")
+        if not self.server.turn_lock.acquire(blocking=False):
+            raise CodexSessionUnavailable("app-server は別の答えを作っています")
+        sent = []
+
+        def track(text):
+            if text:
+                sent.append(True)
+            on_text(text)
+        try:
+            return _app_turn(self.server, self.thread_id, message, track, timeout or CODEX_TIMEOUT_SECONDS, cancel), []
+        except _AppServerDown as e:
+            if sent:
+                raise LLMError(f"Codex の app-server が答えの途中で使えなくなりました: {e}") from None
+            raise CodexSessionUnavailable(str(e)) from None
+        finally:
+            self.server.turn_lock.release()
+
+    def close(self) -> None:
+        """スレッドは保存しない（ephemeral）。app-server は止めない（ほかの会話・次の会話で使う）。"""
 
 
 def _stream_codex(prompt: str, on_text, timeout: int | None = None, cancel=None) -> str:
