@@ -154,6 +154,14 @@ def run_parent(args, argv: list[str], run=subprocess.run) -> int:
                     'JARVIS_OLLAMA_URL':'http://127.0.0.1:11434', 'JARVIS_CAPTURE_ON_END':'0',
                     'CLAUDE_BIN':str(root/'no-claude'), 'JARVIS_CODEX_BIN':str(root/'no-codex'),
                     'JARVIS_CODEX_APP_SERVER':'0', 'JARVIS_HARNESS':'ollama'})
+        if getattr(args, 'harness', 'ollama') != 'ollama':
+            # 答えの LLM だけを指定のハーネスにする（T-2401）。サブスクリプションのログインを使い、API キーは渡さない
+            for key in ('CLAUDE_BIN','JARVIS_CODEX_BIN','JARVIS_CODEX_APP_SERVER'):
+                if key in os.environ:
+                    env[key] = os.environ[key]
+                else:
+                    env.pop(key, None)
+            env['JARVIS_HARNESS'] = args.harness
         for key in ('ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','OPENAI_API_KEY'):
             env.pop(key, None)
         if args.skills:
@@ -262,13 +270,54 @@ def ollama_only(counter: list[int], available: bool):
         yield
 
 
-def run_scenarios(items: list[dict], judge: bool, judge_model: str, available: bool = True, progress=None) -> list[dict]:
+@contextlib.contextmanager
+def harness_only(counter: list[int], harness: str, order: tuple[str, ...] | None = None):
+    """答えを指定のハーネスだけで作る（T-2401。claude・codex は利用枠を使う）。ほかのハーネスに切り替えない。
+    counter は答えの試行（run_with_harnesses の run）と llm.complete の呼び出しの数（no_llm_needed の判定用）。"""
+    import llm
+    import orchestrator
+    real_run = orchestrator.run_with_harnesses
+    real_complete = llm.complete
+
+    def counted_run(run, ctx, kind):
+        def wrapped(provider, stream):
+            counter[0] += 1
+            return run(provider, stream)
+        return real_run(wrapped, ctx, kind)
+
+    def counted_complete(*args, **kwargs):
+        counter[0] += 1
+        return real_complete(*args, **kwargs)
+
+    def handler_denied(*args, **kwargs):
+        raise orchestrator.SkillError('このスキルは会話評価の安全範囲外です')
+
+    def paid_denied(*args, **kwargs):
+        raise llm.LLMError('評価では有料の API を使いません')
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch.object(orchestrator,'harness_order',lambda ctx,kind:order or (harness,)))
+        stack.enter_context(patch.object(orchestrator,'run_with_harnesses',counted_run))
+        stack.enter_context(patch.object(llm,'complete',counted_complete))
+        for name in ('ask_claude','ask_claude_tiered','_complete_anthropic_api'):   # 有料の API は使わない
+            stack.enter_context(patch.object(llm,name,paid_denied))
+        handlers={k:v if k in ALLOWED_HANDLERS else handler_denied for k,v in orchestrator.HANDLERS.items()}
+        stack.enter_context(patch.object(orchestrator,'HANDLERS',handlers))
+        yield
+
+
+def answer_llm(counter: list[int], available: bool, harness: str = 'ollama'):
+    """評価で答えに使う LLM の範囲。ollama は従来どおり Ollama だけに固定する。"""
+    return ollama_only(counter, available) if harness == 'ollama' else harness_only(counter, harness)
+
+
+def run_scenarios(items: list[dict], judge: bool, judge_model: str, available: bool = True, progress=None,
+                  harness: str = 'ollama') -> list[dict]:
     import llm
     import orchestrator
     import evaluation
     from ckc.models import Turn, Speaker
     rows=[]; counter=[0]
-    with ollama_only(counter,available), llm.ollama_options(evaluation.EVAL_OLLAMA_OPTIONS):
+    with answer_llm(counter,available,harness), llm.ollama_options(evaluation.EVAL_OLLAMA_OPTIONS):
         for item in items:
             ctx=orchestrator.Context(terminal=False,voice=True)
             transcript=[]
@@ -318,7 +367,7 @@ def write_results(result: dict, output: Path) -> tuple[Path,Path]:
     json_path.parent.mkdir(parents=True,exist_ok=True);md_path.parent.mkdir(parents=True,exist_ok=True)
     json_path.write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     summary=result['summary']
-    lines=[f"# 会話評価 {stamp}",'',f"組: {result['split']} / {summary['score_mode']} / 集計: {summary['aggregation']}",
+    lines=[f"# 会話評価 {stamp}",'',f"組: {result['split']} / ハーネス: {result.get('harness','ollama')} / {summary['score_mode']} / 集計: {summary['aggregation']}",
            f"全体: {summary['overall']['score']:.4f}、{summary['conversations']} 会話・{summary['turns']} 発言",'',
            '|種類|会話|発言|checks|score|','|---|---:|---:|---:|---:|']
     for k,v in summary['by_kind'].items():
@@ -341,6 +390,8 @@ def parser():
     p.add_argument('--judge',action=argparse.BooleanOptionalAction,default=True)
     p.add_argument('--limit',type=int,help='dev の pilot の会話数だけ制限（val/test 禁止）')
     p.add_argument('--label',default='')
+    p.add_argument('--harness',choices=('ollama','claude','codex'),default='ollama',
+                   help='答えのハーネス（既定 ollama。claude・codex は利用枠を使う、T-2401）')
     return p
 
 
@@ -368,11 +419,12 @@ def main(argv=None):
     judged=args.judge and available
     started=time.monotonic();stamp=datetime.now().strftime('%Y%m%d-%H%M%S-%f')
     rows=run_scenarios(items,judged,args.judge_model,available,
-                       progress=lambda r:print(f"{r['id']} turn={r['turn']} score={r['score']:.3f} seconds={r['seconds']:.1f}",flush=True) if args.split=='dev' else None)
+                       progress=lambda r:print(f"{r['id']} turn={r['turn']} score={r['score']:.3f} seconds={r['seconds']:.1f}",flush=True) if args.split=='dev' else None,
+                       harness=args.harness)
     result={'stamp':stamp,'label':args.label,'split':args.split,'pilot':args.limit is not None,
             'scenario_sha256':hashlib.sha256(args.scenarios.read_bytes()).hexdigest(),'split_seed':data['seed'],
             'ollama_options':dict(evaluation.EVAL_OLLAMA_OPTIONS),
-            'model':args.model,'judge_model':args.judge_model,'ollama_available':available,'judge_requested':args.judge,
+            'harness':args.harness,'model':args.model,'judge_model':args.judge_model,'ollama_available':available,'judge_requested':args.judge,
             'seconds':round(time.monotonic()-started,3),'rows':rows,'summary':summarize(rows,judged),**isolate.source_info()}
     paths=write_results(result,output)
     print(json.dumps({'summary':result['summary'],'seconds':result['seconds'],'paths':[str(p) for p in paths]},ensure_ascii=False),flush=True)
