@@ -394,3 +394,16 @@ T-2301〜T-2304 検証（2026-11-13、Codex）: 最終版で `pytest tests -q` *
 T-2304 の隔離確認: 汎用・大洗それぞれで自然な依頼→抽出（LLM の応答だけ偽物）→候補の確認→実ファイル保存→新しい Context で実検索・回答への資料注入を確認。否認ではファイル・検索結果なし。WebSession でも実際の確認カード→実ファイル作成を確認。正式 Vault への書き込みと Windows の実マイクは未実施。手順は全体 `docs/knowledge-save-acceptance.md`。
 
 本番の読み取り診断: 実際の Registry・スキル索引・DB を指定し、orchestrator.handle から LLM なしで成功。両 Vault が存在し、保存スキルが有効、汎用 3 件・大洗 32 件、保存待ち 44 件を確認した。DB・Vault は変更していない。Codex は PR まで、Claude のレビュー・マージ・本番反映を待つ。
+
+## 会話のハーネスのセッション化と引き継ぎ（`../docs/tasks.md` T-2400〜T-2409、spec 4-14）
+
+- [x] T-2401 評価の `--harness`（ollama・claude・codex）と `evaluation.session`（long・switch・note・explain の 15 件）。変更前の版で基準を測る（Ollama は全件、Claude は縮小版）
+- [x] T-2402 正本からの引き継ぎメモ（`harness_session.handoff_memo`・`canonical_turns`、`knowledge_engine.format_history` も同じ形）
+- [x] T-2403 既定 `JARVIS_HARNESS=claude`、選んだハーネスの順番（claude → codex → ollama、codex → claude → ollama）
+- [x] T-2404 会話ごとのセッション（`llm.ClaudeSession`・`llm.CodexThread`・`harness_session.answer`）、閉じる条件、割り込みの `renew_context`
+- [x] T-2405 切り替えのときの引き継ぎ（前のハーネスに戻るときも新しく）
+- [x] T-2406 要約のハーネス（claude_cli → codex → ollama）、記憶のメモ（`memory_notes`・CLI）、記憶パックでの優先
+- [x] T-2407 Jarvis の MCP サーバー（4 つの道具）、claude の許可リスト、プロンプト（`prompts.py`）、使った道具の記録
+- [ ] T-2408 変更後の評価と比較のレポート
+- [ ] T-2409 本番への反映（`memory_notes` の追加は Owner の確認の後）と実機の確認
+

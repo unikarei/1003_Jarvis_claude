@@ -334,6 +334,21 @@ Owner 事前承認（上位 AGENTS.md §2.1、2026-11-12 の依頼範囲）。`p
 - JSON と Markdown にモード別・種類別・全体の合格率、作り話件数、想起時間、失敗一覧を保存。`--limit` と `--kind` で部分実行でき、部分結果は全件の受け入れ判定と区別する。
 - 結果（2026-11-12）: 記憶あり 44/44、作り話 0 件、会話の評価・QA の評価の低下なし（`docs/memory-eval-2026-11-12.md`）。意味検索（T-2104）は保留、Mem0（T-2105）の検討は閉じる。
 
+#### 4-14. 会話のハーネスのセッション化と引き継ぎ（T-2401〜T-2409）
+
+全体仕様 `../docs/spec.md` §3.4.12 G〜I・§3.3.14 B・C・I（ADR-0038）を正とし、設計は `../docs/architecture.md` §19.9、受け入れ基準は `../docs/testing.md` §19、タスクは `../docs/tasks.md` §24。
+
+- 会話の正本は `memory_turns`（`JARVIS_MEMORY=0` なら `ctx.history`）。ハーネスのセッションは捨ててよい作業台（`harness_session.py`）
+- 会話 1 回につきセッション 1 つ: claude は会話の間保つ `claude -p --input-format stream-json`（`llm.ClaudeSession`）、codex は app-server のスレッド（`llm.CodexThread`）。ollama はセッションなしで毎回引き継ぎメモ付き
+- 引き継ぎメモ: それより前の機械的なまとめ（Owner 100 字・答えの最初の 1 文 60 字、新しい方から 1,500 字）＋直近 6 往復（`JARVIS_HANDOFF_EXCHANGES`）＋記憶パック。ハーネスを変えたとき（戻るときも）は新しいセッションに渡す
+- 2 回目以降は今回の発言・その間にセッションの外で答えた発言・まだ渡していない記憶の項目だけを送る
+- 閉じる: 会話の終わり（`end_session`・ブラウザの切断）、30 分の無発言（`JARVIS_SESSION_IDLE_MIN`）、取り消し・時間切れ・エラー・使用中（次の答えで作り直す）
+- 既定 `JARVIS_HARNESS=claude`。Claude を選ぶと A・B とも claude → codex → ollama、Codex は codex → claude → ollama
+- 道具（claude だけ）: Jarvis の MCP サーバー `jarvis_mcp.py`（knowledge_search・memory_recall・memory_note・jarvis_status）と Web 検索（`JARVIS_WEB_SEARCH`）。`--restricted --strict-mcp-config --tools --allowedTools --permission-mode dontAsk`。`JARVIS_HARNESS_TOOLS=0` で道具なし。Codex はこの版では答えるだけ（MCP の道具がコードの実行を通してしか使えないため）
+- 記憶のメモ: `data/memory/notes/<YYYY>/<MM>.jsonl`（600）と `memory_notes`。記憶パックで要約より前。`python -m memory notes`・`forget-note`
+- 要約のハーネス: claude_cli → codex → ollama
+- `JARVIS_HARNESS_SESSION=0` で会話のセッションを使わない（毎回 1 回限り。テストの既定）
+
 ## 4. データモデル
 
 - ノード型: Category / Task / Knowledge / Source / Skill / Agent

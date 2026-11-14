@@ -181,7 +181,14 @@ JARVISはこの契約に従う。
 ## 会話の記憶（T-2101・T-2102）
 
 - 記録・要約・管理 CLI は `memory/`。正本は `data/memory/sessions/` の JSONL、`jarvis.db` の `memory_*` は復元可能な索引。詳細は `docs/spec.md` 4-13 と統合ワークスペースの仕様 §3.3.14 を参照する。
-- `python -m memory rebuild` で索引を復元する。`forget` は y/N で確認し、原文と索引を削除する。要約の LLM は Ollama のみ。`JARVIS_MEMORY=0` で記録・要約・想起を無効にする。T-2102 の想起はローカル SQLite だけを読み、経路 A・B の回答にのみ注入する。
+- `python -m memory rebuild` で索引を復元する。`forget` は y/N で確認し、原文と索引（その会話の記憶のメモも）を削除する。要約は claude_cli → codex → ollama の順（2026-11-14、ADR-0038。前は Ollama のみ）。`JARVIS_MEMORY=0` で記録・要約・想起を無効にする。T-2102 の想起はローカル SQLite だけを読み、経路 A・B の回答にのみ注入する。
+
+## 会話のハーネスのセッション（T-2401〜T-2409、ADR-0038）
+
+- 会話の正本は `memory_turns`。`harness_session.py` が会話ごとに claude の常駐プロセス・codex のスレッドを 1 つ保ち、切り替えのときは引き継ぎメモで新しく始める。詳細は `docs/spec.md` 4-14。
+- claude の道具は `jarvis_mcp.py` の 4 つと Web 検索だけ（`--restricted` ほか）。シェル・書き込み・別のエージェントを使わせない。道具を足すときは全体の spec §3.4.12 H を先に改め、実機で制限を確かめる。Codex はこの版では答えるだけ。
+- テストは `JARVIS_HARNESS=auto`・`JARVIS_HARNESS_SESSION=0`（`tests/conftest.py`）。セッションのテストは `tests/test_harness_session.py`（偽のハンドル・偽の claude のスクリプト）。
+- 評価: `python -m evaluation.session --harness claude`、`python -m evaluation.memory --harness claude --with-memory-only`、`python -m evaluation conversation --split dev --harness claude --limit 30`。claude・codex は利用枠を使う。
 
 ## テスト
 
