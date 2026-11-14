@@ -428,16 +428,17 @@ class ClaudeSessionLost(LLMError):
     """会話の間保つ claude -p が使えなくなった（落ちた・送れない）。呼び出し側はセッションを作り直せる。"""
 
 
-def claude_session_command(system_prompt: str, mcp_config_path: str | None, web_search: bool) -> list[str]:
+def claude_session_command(system_prompt: str, mcp_config_path: str | None, web_search: bool,
+                           allowed_tools=None) -> list[str]:
     """会話の間保つ claude -p の引数。mcp_config_path がなければ道具なし（答えるだけ）。"""
     cmd = [CLAUDE_BIN, "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
            "--include-partial-messages", "--no-session-persistence", "--restricted", "--strict-mcp-config",
            "--disable-slash-commands", "--permission-mode", "dontAsk", "--system-prompt", system_prompt,
            *_model_options()]
     if mcp_config_path:
-        web = CLAUDE_WEB_TOOLS if web_search else ()
+        web = tuple(t for t in CLAUDE_WEB_TOOLS if allowed_tools is None or t in allowed_tools) if web_search else ()
         cmd += ["--mcp-config", mcp_config_path, "--tools", ",".join(web),
-                "--allowedTools", ",".join((*CLAUDE_MCP_TOOLS, *web))]
+                "--allowedTools", ",".join(allowed_tools if allowed_tools is not None else (*CLAUDE_MCP_TOOLS, *web))]
     else:
         cmd += ["--tools", ""]
     return cmd
@@ -446,7 +447,8 @@ def claude_session_command(system_prompt: str, mcp_config_path: str | None, web_
 class ClaudeSession:
     """会話の間保つ claude -p。ask() は (答えの全文, 使った道具の名前の一覧) を返す。"""
 
-    def __init__(self, system_prompt: str, mcp_config: dict | None = None, web_search: bool = False):
+    def __init__(self, system_prompt: str, mcp_config: dict | None = None, web_search: bool = False,
+                 allowed_tools=None):
         self.workdir = tempfile.TemporaryDirectory(prefix="jarvis-session-")
         config_path = None
         if mcp_config is not None:
@@ -455,10 +457,12 @@ class ClaudeSession:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(mcp_config, f, ensure_ascii=False)
         self.allowed = set((*CLAUDE_MCP_TOOLS, *(CLAUDE_WEB_TOOLS if web_search else ()))) if config_path else set()
+        if allowed_tools is not None:
+            self.allowed.intersection_update(allowed_tools)
         # 標準エラーはファイルへ（会話の間に管が詰まって止まらないように）
         self.stderr = open(os.path.join(self.workdir.name, "stderr.log"), "w+", encoding="utf-8")
         try:
-            self.proc = subprocess.Popen(claude_session_command(system_prompt, config_path, web_search),
+            self.proc = subprocess.Popen(claude_session_command(system_prompt, config_path, web_search, allowed_tools),
                                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, text=True,
                                          cwd=self.workdir.name, env=_cli_env())
         except FileNotFoundError:

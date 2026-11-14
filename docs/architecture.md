@@ -165,3 +165,7 @@
 ## ナレッジ保存と接続状態（2026-11-13）
 
 要件・設計の正本は統合ワークスペース docs/spec.md §3.4.13 と docs/architecture.md §22。既存 orchestrator のルール、knowledge_connections の読み取り診断、CKC schema の検証を使う。依存・DB スキーマは追加しない。
+
+## ツールの初回承認（T-2501）
+
+共通の窓口が構造化要求の検証、永続した道具ごとの許可、実行前の確認を担う。harness_session は Claude・Codex ともネイティブツールを渡さず窓口を経由する。Web のみ承認後の Claude 専用プロセス。正本: 統合ワークスペース docs/architecture.md §19.10、spec §3.4.12 J。

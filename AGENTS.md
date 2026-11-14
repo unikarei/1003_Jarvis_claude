@@ -186,6 +186,7 @@ JARVISはこの契約に従う。
 ## 会話のハーネスのセッション（T-2401〜T-2409、ADR-0038）
 
 - 会話の正本は `memory_turns`。`harness_session.py` が会話ごとに claude の常駐プロセス・codex のスレッドを 1 つ保ち、切り替えのときは引き継ぎメモで新しく始める。詳細は `docs/spec.md` 4-14。
+- **2026-11-15 T-2501 以降は上位 spec §3.4.12 J の共通の初回承認を優先する。** Claude・Codex とも構造化した要求を Jarvis の窓口で承認後に実行する。以下は T-2407 時点の履歴。
 - claude の道具は `jarvis_mcp.py` の 4 つと Web 検索だけ（`--restricted` ほか）。シェル・書き込み・別のエージェントを使わせない。道具を足すときは全体の spec §3.4.12 H を先に改め、実機で制限を確かめる。Codex はこの版では答えるだけ。
 - テストは `JARVIS_HARNESS=auto`・`JARVIS_HARNESS_SESSION=0`（`tests/conftest.py`）。セッションのテストは `tests/test_harness_session.py`（偽のハンドル・偽の claude のスクリプト）。
 - 評価: `python -m evaluation.session --harness claude`、`python -m evaluation.memory --harness claude --with-memory-only`、`python -m evaluation conversation --split dev --harness claude --limit 30`。claude・codex は利用枠を使う。

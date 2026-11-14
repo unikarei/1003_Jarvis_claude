@@ -60,6 +60,7 @@ class Context:
     resting: dict = field(default_factory=dict)   # 休止中のハーネス → (期限の clock(), 理由)。保存しない
     llm_info: dict | None = None                  # 直前の答えのハーネス・プロバイダー・切り替えの理由（Task の記録）
     llm_tools: list = field(default_factory=list)  # 直前の答えでハーネスが使った道具の名前（ADR-0038。引数・結果は残さない）
+    tool_ask: Callable | None = None              # ツールの初回承認。自動承認・input の代用はしない（T-2501）
 
 
 def renew_context(ctx, **kwargs) -> "Context":
@@ -464,7 +465,7 @@ def run_with_harnesses(run, ctx: "Context", kind: str):
             except llm.LLMCancelled:
                 raise
             except llm.LLMError as e:
-                if tracker is not None and tracker.sent:
+                if ctx.llm_tools or (tracker is not None and tracker.sent):
                     raise
                 reason = llm.failure_reason(e)
                 if reason:                         # 同じハーネスの別のプロバイダーも同じ理由で使えない
@@ -1044,6 +1045,7 @@ def handle(text: str, ctx: Context, ask: Callable[[str], str] | None = None, use
     ctx.shown = ""
     ctx.last_provider = None
     ctx.llm_info = None
+    ctx.llm_tools = []
     pending = ctx.pending
     command = harness_command(text) if pending is None else None
     if command is not None:
@@ -1070,10 +1072,17 @@ def handle(text: str, ctx: Context, ask: Callable[[str], str] | None = None, use
         latency.mark("route")
         latency.set("skill", r.skill)
     ctx.active_skill = r.skill
+    ctx.tool_ask = ask
+    import conversation_tools
+    tool_stop = threading.Event()
+    tool_token = conversation_tools.turn_cancel.set(tool_stop)
     try:
         outcome = execute(r, ctx, text, ask)
     finally:
+        tool_stop.set()       # 時間切れで裏に残った処理も、新たにツールを実行できない
+        conversation_tools.turn_cancel.reset(tool_token)
         ctx.active_skill = None
+        ctx.tool_ask = None
     outcome.llm = ctx.llm_info
     return _finish_handle(ctx, r, outcome)
 
