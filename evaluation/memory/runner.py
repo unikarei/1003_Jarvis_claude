@@ -164,25 +164,25 @@ def seed_history(item: dict, *, no_summary: bool) -> int:
     return count
 
 
-def run_scenario(item: dict, memory_enabled: bool, *, model="gemma4:12b", no_summary=False) -> dict:
+def run_scenario(item: dict, memory_enabled: bool, *, model="gemma4:12b", no_summary=False, harness="ollama") -> dict:
     import config
     import llm
     import orchestrator
     from ckc.models import Speaker
     from evaluation import EVAL_OLLAMA_OPTIONS
-    from evaluation.conversation.runner import ollama_only
+    from evaluation.conversation.runner import answer_llm
     from memory import store
     recall_module = importlib.import_module("memory.recall")
     counter = [0]
     rows = []
     setup_error = None
     with tempfile.TemporaryDirectory(prefix="jarvis-memory-eval-") as temporary:
-        with isolated_scenario(Path(temporary), model), ollama_only(counter, True), llm.ollama_options(EVAL_OLLAMA_OPTIONS):
+        with isolated_scenario(Path(temporary), model), answer_llm(counter, True, harness), llm.ollama_options(EVAL_OLLAMA_OPTIONS):
             try:
                 seed_history(item, no_summary=no_summary)
             except Exception as error:
                 setup_error = f"{type(error).__name__}: {error}"
-            ctx = orchestrator.Context(terminal=False, harness="ollama")
+            ctx = orchestrator.Context(terminal=False, harness=harness)
             ctx.review = lambda *args, **kwargs: "n"
             with patch.dict(os.environ, {"JARVIS_MEMORY": "1" if memory_enabled else "0"}), \
                     patch.object(config, "MEMORY_ENABLED", memory_enabled), \
@@ -215,7 +215,7 @@ def run_scenario(item: dict, memory_enabled: bool, *, model="gemma4:12b", no_sum
                     orchestrator.add_turn(ctx, Speaker.OWNER, question["text"])
                     if ok and response:
                         orchestrator.add_turn(ctx, Speaker.AI, response)
-    return {"id": item["id"], "kind": item["kind"], "memory": memory_enabled,
+    return {"id": item["id"], "kind": item["kind"], "memory": memory_enabled, "harness": harness,
             "passed": all(row["passed"] for row in rows), "turns": rows, "llm_calls": counter[0],
             "setup_error": setup_error}
 
@@ -249,7 +249,7 @@ def write_results(result: dict, output: Path) -> tuple[Path, Path]:
     stem = f"{result['stamp']}-memory"
     json_path, md_path = output / f"{stem}.json", output / f"{stem}.md"
     json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    lines = [f"# 記憶評価 {result['stamp']}", "", f"モデル: {result['model']} / Ollama のみ / 要約: {result['summary_enabled']}",
+    lines = [f"# 記憶評価 {result['stamp']}", "", f"モデル: {result['model']} / ハーネス: {result.get('harness', 'ollama')} / 要約: {result['summary_enabled']}",
              f"部分実行: {result['partial']} / 選択: {result['selected']} / 全セット: {result['total']}",
              "合格率は全質問が合格したシナリオの割合。想起時間は生成を含まない recall 呼出しの合計。", "",
              "作り話は absent の対象表現を含む返事の件数（1返事1件）。否定・仮定の接尾部を除外する表現ベースの判定。",
@@ -275,6 +275,9 @@ def parser():
     p.add_argument("--limit", type=int, help="種類の絞り込み後のシナリオ件数")
     p.add_argument("--no-summary", action="store_true", help="要約せず、既存 recall の直近発言フォールバックを使う")
     p.add_argument("--model", default="gemma4:12b")
+    p.add_argument("--harness", choices=("ollama", "claude", "codex"), default="ollama",
+                   help="答えのハーネス（既定 ollama。claude・codex は利用枠を使う、T-2401）。要約は実装のとおり")
+    p.add_argument("--with-memory-only", action="store_true", help="記憶ありだけを測る（利用枠を節約する）")
     p.add_argument("--output-dir", type=Path, default=Path("data/eval/memory"))
     return p
 
@@ -292,10 +295,10 @@ def main(argv=None):
         p.error("対象シナリオがありません")
     rows = []
     for item in items:
-        for enabled in (True, False):
+        for enabled in ((True,) if args.with_memory_only else (True, False)):
             print(f"評価中: {item['id']} / 記憶 {'あり' if enabled else 'なし'}", flush=True)
-            rows.append(run_scenario(item, enabled, model=args.model, no_summary=args.no_summary))
-    result = {"stamp": datetime.now().strftime("%Y%m%d-%H%M%S-%f"), "model": args.model,
+            rows.append(run_scenario(item, enabled, model=args.model, no_summary=args.no_summary, harness=args.harness))
+    result = {"stamp": datetime.now().strftime("%Y%m%d-%H%M%S-%f"), "model": args.model, "harness": args.harness,
               "summary_enabled": not args.no_summary, "partial": len(items) != len(data["scenarios"]),
               "selected": len(items), "total": len(data["scenarios"]), "kind_filter": args.kind,
               "aggregation": "全質問合格のシナリオ数 / シナリオ数", "rows": rows, "summary": summarize_results(rows)}

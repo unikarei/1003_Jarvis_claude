@@ -158,6 +158,10 @@
 `evaluation/memory/` に固定 JSON・CLI・runner を置く。シナリオとモードごとの TemporaryDirectory 内で DB・JSONL・Vault・CKC・遅延ログを隔離し、設定差し替えは終了時に復元する。既存の Ollama 限定ガードを再利用し、承認と外部操作は拒否する。採点に LLM は使わず、発言単位の期待をすべて満たしたシナリオを合格として集計する。想起関数を計時して回答生成時間と分ける。実環境の測定・改善は本実装の対象外（Owner 依頼）。
 
 
+### 会話のハーネスのセッションと道具（T-2401〜T-2409、2026-11-14）
+
+全体 `docs/architecture.md` §19.9 に従う。`harness_session.py` が会話 ID ごとのセッション（ハーネス・送った発言の数・送った記憶の項目・最後に使った時刻）を持ち、`orchestrator` の経路 A・B の `run(provider, stream)` から呼ばれる。決まりの文は `prompts.py`（claude は `--system-prompt`、codex は `developerInstructions`、1 回限りはプロンプトの頭）。`llm.ClaudeSession` は標準入力を閉じずに 1 行ずつ送り、`_read_json_lines(until=...)` で result まで読む。標準エラーはファイルに出す（会話の間に管が詰まらないように）。`llm.CodexThread` は常駐の app-server の中のスレッドで、`_app_turn` を重ねる。`jarvis_mcp.py` は標準ライブラリだけの標準入出力の JSON-RPC（initialize・tools/list・tools/call・ping）。起動の設定は `harness_session._mcp_config` が作り、DB・記憶フォルダなどの場所を環境変数で明示する。記憶のメモは `memory/store.py`（`add_note` など）と `schema.sql` の `memory_notes`。新しい依存はない。
+
 ## ナレッジ保存と接続状態（2026-11-13）
 
 要件・設計の正本は統合ワークスペース docs/spec.md §3.4.13 と docs/architecture.md §22。既存 orchestrator のルール、knowledge_connections の読み取り診断、CKC schema の検証を使う。依存・DB スキーマは追加しない。

@@ -248,6 +248,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
         return ask
 
     ctx = orchestrator.Context(voice=True, channel="voice")
+    orchestrator.prewarm_session(ctx)
     print("JARVIS と声で会話します。そのまま話しかけてください。JARVIS が話している途中でも、話し始めれば止まります。"
           "（「終了」と話すか q と Enter で終了）")
     info = session.calibrate("ジャービスです。どうぞ。")
@@ -342,7 +343,7 @@ def run_barge_in(session, transcribe, keys: "queue.Queue[str]") -> int:
             latency.finish(lat, ok=False)      # 割り込まれた発言
             if worker.is_alive():              # 止まらない処理（逐次表示のないスキル）は、文脈を分けて切り離す
                 print("[前の処理は裏で終わるまで続きます。結果は使いません]")
-                ctx = orchestrator.Context(voice=True, history=list(ctx.history), session_id=ctx.session_id, channel=ctx.channel)
+                ctx = orchestrator.renew_context(ctx, voice=True)
             if "outcome" in result:
                 _record(text, result["outcome"])
                 if getattr(result["outcome"], "private", False):
@@ -572,6 +573,7 @@ def _main(listen, transcribe, speaker, push_to_talk, keys, barge_in, launcher) -
     track_first_audio(speaker, lambda: state["latency"])
     spoken = SpeechEnd()
     ctx = orchestrator.Context(stream=stream, voice=True, channel="voice")
+    orchestrator.prewarm_session(ctx)
     if push_to_talk:
         print("JARVIS と声で会話します。Enter を押してから話してください（q と Enter で終了）。")
     else:

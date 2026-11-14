@@ -24,6 +24,10 @@ os.environ["JARVIS_CODEX_BIN"] = str(_TMP_ROOT / "no-codex")
 # 会話の終わりの知識化（T-1803）は、既定では止めておく（既存の会話のテストが終わりの問いかけで入力を待たないように）。
 # この機能のテスト（tests/test_capture_on_end.py）は、テストの中で 1 にする
 os.environ["JARVIS_CAPTURE_ON_END"] = "0"
+# 会話のハーネス（ADR-0038）: 既存のテストは「おまかせ」と 1 回限りの呼び出し（偽の complete_stream）を前提にする。
+# 既定（claude・会話のセッション）は tests/test_harness_session.py で確かめる
+os.environ["JARVIS_HARNESS"] = "auto"
+os.environ["JARVIS_HARNESS_SESSION"] = "0"
 
 import config  # noqa: E402
 

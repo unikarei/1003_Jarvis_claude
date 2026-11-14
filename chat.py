@@ -47,6 +47,7 @@ def main():
     init_db()
     ctx = orchestrator.Context(stream=_stream, channel="text")
     orchestrator.start_warm_up(exclude_session_id=ctx.session_id)
+    orchestrator.prewarm_session(ctx)
 
     while True:
         try:

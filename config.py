@@ -80,9 +80,16 @@ CODEX_TIMEOUT_SECONDS = int(os.environ.get("JARVIS_CODEX_TIMEOUT", "300"))
 # 常駐の codex app-server（標準入出力）で答えを逐次表示する（T-2004）。0 なら codex exec だけ
 CODEX_APP_SERVER = os.environ.get("JARVIS_CODEX_APP_SERVER", "1").strip() != "0"
 # 会話の LLM（ハーネス）の切り替え（ADR-0035、../docs/spec.md §3.4.12）
-HARNESS = os.environ.get("JARVIS_HARNESS", "auto").strip().lower() or "auto"           # auto・ollama・claude・codex
+# 2026-11-14 から既定は claude（ADR-0038。おまかせは auto）
+HARNESS = os.environ.get("JARVIS_HARNESS", "claude").strip().lower() or "claude"     # auto・ollama・claude・codex
 HEAVY_HARNESS = os.environ.get("JARVIS_HEAVY_HARNESS", "codex").strip().lower() or "codex"   # おまかせの経路 B の最初
 HARNESS_COOLDOWN_MINUTES = float(os.environ.get("JARVIS_HARNESS_COOLDOWN_MIN", "30"))
+# 会話のハーネスの道具とセッション（ADR-0038、../docs/spec.md §3.4.12 G・H）
+HARNESS_SESSION = os.environ.get("JARVIS_HARNESS_SESSION", "1").strip() != "0"   # 0 で会話のセッションを使わない（毎回 1 回限り）
+WEB_SEARCH = os.environ.get("JARVIS_WEB_SEARCH", "1").strip() != "0"           # claude の WebSearch・WebFetch（Codex はこの版では道具なし、spec §3.4.12 I）
+HARNESS_TOOLS = os.environ.get("JARVIS_HARNESS_TOOLS", "1").strip() != "0"     # 0 で Jarvis の MCP の道具も出さない（答えるだけ）
+HANDOFF_EXCHANGES = int(os.environ.get("JARVIS_HANDOFF_EXCHANGES", "6"))         # 引き継ぎメモにそのまま入れる直近の往復
+SESSION_IDLE_MINUTES = float(os.environ.get("JARVIS_SESSION_IDLE_MIN", "30"))    # これだけ発言がなければセッションを閉じる
 # 声の会話（voice_chat.py・python -m voice.web）のプロセスで claude -p に渡すモデル（2026-11-03 Owner 指示、
 # 最初の文字を速くする）。空にすると CLI の既定のモデル。chat.py・定期ジョブは CLI の既定のまま
 VOICE_CLAUDE_MODEL = os.environ.get("JARVIS_VOICE_CLAUDE_MODEL", "claude-sonnet-5-5")

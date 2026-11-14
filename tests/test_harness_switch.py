@@ -121,8 +121,13 @@ def test_chosen_harness_falls_back_in_chat_order(index, fake_llm):  # noqa: F811
     ctx = orc.Context(stream=lambda t: None)
     _say("Claude にして", ctx)
     out = _say("こんにちは", ctx)
-    assert fake_llm["calls"] == ["claude_warm", "ollama"]        # 上限なら claude_cli は試さない。次は A の順番
-    assert out.text == "Claude の利用枠が上限のため、Ollama で答えます。\nollamaの答え"
+    # 上限なら claude_cli は試さない。次は Claude を選んだときの順番の codex（2026-11-14 ADR-0038 で claude → codex → ollama に変更。
+    # 前は claude → ollama → codex）
+    assert fake_llm["calls"] == ["claude_warm", "codex"]
+    assert out.text == "Claude の利用枠が上限のため、Codex で答えます。\ncodexの答え"
+    fake_llm["fail"]["codex"] = LIMIT                               # Codex も上限 → 最後に Ollama
+    out = _say("こんにちは", ctx)
+    assert fake_llm["calls"][-2:] == ["codex", "ollama"] and out.text.endswith("ollamaの答え")
 
 
 def test_switch_is_not_taken_while_pending(index, fake_llm, monkeypatch):  # noqa: F811

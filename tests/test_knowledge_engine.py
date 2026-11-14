@@ -79,10 +79,13 @@ def test_answer_passes_recent_history_and_voice_style(kb, monkeypatch):
     from ckc.models import Speaker, Turn
     seen = []
     monkeypatch.setattr(llm, "complete", lambda prompt, provider=None: seen.append(prompt) or "はい")
-    history = [Turn(Speaker.OWNER, f"質問{i}") for i in range(10)] + [Turn(Speaker.AI, "前の答え")]
+    long = "あ" * 200
+    history = [Turn(Speaker.OWNER, f"質問{i}{long}") for i in range(14)] + [Turn(Speaker.AI, "前の答え")]
     ke.answer("それは？", history=history, voice=True)
     p = seen[-1]
-    assert "JARVIS: 前の答え" in p and "Owner: 質問9" in p and "質問3" not in p   # 直近 6 発言だけ
+    # 直近 6 往復（12 発言）はそのまま、それより前は短いまとめ（ADR-0038 の引き継ぎメモ。前は直近 6 発言だけ）
+    assert "JARVIS: 前の答え" in p and f"Owner: 質問13{long}" in p and f"Owner: 質問3{long}" in p
+    assert "それより前の会話の短いまとめ" in p and "Owner: 質問0" in p and f"質問0{long}" not in p
     assert "2〜3 文で短く話す" in p
     ke.answer("それは？")
     assert "# これまでの会話\n（なし）" in seen[-1] and "2〜3 文" not in seen[-1]

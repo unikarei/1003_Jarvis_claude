@@ -260,10 +260,112 @@ def sessions_to_summarize(now=None, exclude_session_id=None):
     return result
 
 
+def session_turns(session_id):
+    """会話の発言（正本の索引）を順に返す: [{"speaker", "text"}]。引き継ぎメモの元（spec §3.4.12 G）。"""
+    if not enabled():
+        return []
+    with _LOCK, closing(_connection()) as conn:
+        return [dict(row) for row in conn.execute(
+            "SELECT speaker, text FROM memory_turns WHERE session_id=? ORDER BY seq", (session_id,))]
+
+
+# ---------------------------------------------------------------- 記憶のメモ（T-2406、spec §3.3.14 I）
+# 会話の中でハーネスが Jarvis の MCP の道具 memory_note で書く。原文は月ごとの JSONL（追記だけ、600）、索引は memory_notes。
+# MCP サーバーは別のプロセスで動くため、ここでは裏のスレッドを使わずにその場で書く。
+NOTE_KINDS = ("fact", "decision", "preference")
+NOTE_MAX_CHARS = 200
+_NOTE_ID = re.compile(r"note_\d{8}_\d{6}_[0-9a-f]{4}\Z")
+
+
+def _notes_root():
+    return Path(config.MEMORY_DIR) / "notes"
+
+
+def _note_path(at: datetime):
+    return _notes_root() / f"{at:%Y}" / f"{at:%m}.jsonl"
+
+
+def _apply_note(conn, record):
+    conn.execute("INSERT OR REPLACE INTO memory_notes VALUES(?,?,?,?,?)",
+                 (record["note_id"], record["session_id"], record["kind"], record["text"], record["at"]))
+
+
+def add_note(session_id, kind, text):
+    """記憶のメモを 1 件書いて返す。秘密情報は伏せてから書く。"""
+    if not enabled():
+        raise RuntimeError("会話の記憶が無効です")
+    if kind not in NOTE_KINDS:
+        raise ValueError("記憶のメモの種類が不正です")
+    session_id = session_id or ""
+    if session_id and not _ID.fullmatch(session_id):
+        raise ValueError("会話 ID が不正です")
+    text = mask_secrets(" ".join(str(text).split()))
+    if not text or len(text) > NOTE_MAX_CHARS:
+        raise ValueError(f"記憶のメモは 1〜{NOTE_MAX_CHARS} 字です")
+    now = datetime.now()
+    record = dict(type="note", note_id=f"note_{now:%Y%m%d_%H%M%S}_{os.urandom(2).hex()}", session_id=session_id,
+                  kind=kind, text=text, at=now.isoformat())
+    path = _note_path(now)
+    with _LOCK:
+        if not path.parent.is_dir():
+            for folder in (Path(config.MEMORY_DIR), _notes_root(), path.parent):
+                folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+                folder.chmod(0o700)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+        with closing(_connection()) as conn, conn:
+            _apply_note(conn, record)
+    return record
+
+
+def list_notes(session_id=None):
+    if not enabled():
+        return []
+    with _LOCK, closing(_connection()) as conn:
+        query = "SELECT * FROM memory_notes" + (" WHERE session_id=?" if session_id is not None else "")
+        return [dict(row) for row in conn.execute(query + " ORDER BY created_at, note_id",
+                                                   (session_id,) if session_id is not None else ())]
+
+
+def count_notes(session_id):
+    return len(list_notes(session_id))
+
+
+def _rewrite_notes(keep):
+    """記憶のメモの原文から keep(record) が False のものを除く（一時ファイルに書いてから置き換える）。消した件数。"""
+    removed = 0
+    for path in sorted(_notes_root().glob("*/*.jsonl")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        kept = [line for line in lines if not line.strip() or keep(json.loads(line))]
+        if len(kept) == len(lines):
+            continue
+        removed += len(lines) - len(kept)
+        temp = path.with_name(path.name + ".tmp")
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write("".join(line + "\n" for line in kept))
+        os.replace(temp, path)
+    return removed
+
+
+def forget_note(note_id):
+    if not enabled() or not _NOTE_ID.fullmatch(note_id or ""):
+        return False
+    with _LOCK:
+        removed = _rewrite_notes(lambda r: r.get("note_id") != note_id)
+        with closing(_connection()) as conn, conn:
+            deleted = conn.execute("DELETE FROM memory_notes WHERE note_id=?", (note_id,)).rowcount
+    if removed or deleted:
+        print(f"[記憶] メモを削除: {note_id}", file=sys.stderr)
+    return bool(removed or deleted)
+
+
 def stats():
     sessions = list_sessions()
     return {"sessions": len(sessions), "turns": sum(len(get_session(s["session_id"])["turns"]) for s in sessions),
-            "summaries": sum(s["summary_status"] == "done" for s in sessions)}
+            "summaries": sum(s["summary_status"] == "done" for s in sessions), "notes": len(list_notes())}
 
 
 def rebuild():
@@ -275,10 +377,15 @@ def rebuild():
             with conn:
                 conn.execute("DELETE FROM memory_turns")
                 conn.execute("DELETE FROM memory_sessions")
+                conn.execute("DELETE FROM memory_notes")
                 for path in sorted((Path(config.MEMORY_DIR) / "sessions").glob("*/*/*.jsonl")):
                     _path(path.stem)  # 不正な ID は受け入れない
                     for line in path.read_text(encoding="utf-8").splitlines():
                         _apply(conn, path.stem, json.loads(line))
+                for path in sorted(_notes_root().glob("*/*.jsonl")):
+                    for line in path.read_text(encoding="utf-8").splitlines():
+                        if line.strip():
+                            _apply_note(conn, json.loads(line))
         finally:
             conn.close()
         return stats()
@@ -298,6 +405,8 @@ def forget(session_id):
                 path.unlink(missing_ok=True)
                 conn.execute("DELETE FROM memory_turns WHERE session_id=?", (session_id,))
                 conn.execute("DELETE FROM memory_sessions WHERE session_id=?", (session_id,))
+                conn.execute("DELETE FROM memory_notes WHERE session_id=?", (session_id,))
+            _rewrite_notes(lambda r: r.get("session_id") != session_id)   # その会話で書いた記憶のメモも消す
         finally:
             conn.close()
         # 削除の監査には ID のみを残す（発言・要約は残さない）。
