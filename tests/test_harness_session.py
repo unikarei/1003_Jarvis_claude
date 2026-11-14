@@ -261,6 +261,20 @@ def test_cancel_and_lost_rebuild(sessions):
     assert hs.current(ctx.session_id) is None                 # 取り消したら捨てる
 
 
+def test_old_worker_failure_does_not_close_new_session(sessions):
+    """声の割り込みで裏に残った前の答えが失敗しても、同じ会話で新しく作ったセッションは閉じない。"""
+    ctx = orc.Context(harness="claude", stream=lambda t: None)
+    _say("一つ目", ctx)
+    old = hs.current(ctx.session_id)
+    old.busy.acquire()                                        # 前の答えがまだ動いている
+    _say("二つ目", ctx)                                       # 使用中 → 捨てて新しいセッションで答える
+    new = hs.current(ctx.session_id)
+    assert new is not old and new.handle.messages
+    old.busy.release()
+    hs._discard(old)                                          # 前の答えの失敗の後片付け
+    assert hs.current(ctx.session_id) is new and not new.handle.closed
+
+
 def test_codex_unavailable_falls_back_to_one_shot(sessions, monkeypatch):
     def start(ctx, harness):
         raise llm.CodexSessionUnavailable("使用中")

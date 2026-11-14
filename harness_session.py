@@ -185,6 +185,14 @@ def close(session_id: str, keep: str | None = None) -> None:
     _close(session)
 
 
+def _discard(session: Session) -> None:
+    """このセッションだけを閉じる（同じ会話で新しく作られたものは閉じない。裏に残った前の答えの失敗のとき）。"""
+    with _lock:
+        if _sessions.get(session.session_id) is session:
+            del _sessions[session.session_id]
+    _close(session)
+
+
 def close_all() -> None:
     with _lock:
         items = list(_sessions.values())
@@ -309,7 +317,7 @@ def answer(ctx, provider: str, kind: str, question: str, owner_text: str, pack=N
             new_items = set(unsent)
         latency.set("warm", not created)          # 使い続けた・前もって起動したもの（True）か、その場で起動した（False）
         if not session.busy.acquire(blocking=False):
-            close(ctx.session_id)
+            _discard(session)
             continue
         sent = []
 
@@ -322,7 +330,7 @@ def answer(ctx, provider: str, kind: str, question: str, owner_text: str, pack=N
             text, used = session.handle.ask(message, track, cancel=ctx.cancel)
         except llm.CodexSessionUnavailable:
             session.busy.release()
-            close(ctx.session_id)
+            _discard(session)
             if sent:
                 raise llm.LLMError("Codex のセッションが答えの途中で使えなくなりました") from None
             if attempt == 1:
@@ -330,13 +338,13 @@ def answer(ctx, provider: str, kind: str, question: str, owner_text: str, pack=N
             return _one_shot(ctx, "codex", kind, question, context, name, pack, stream)
         except llm.ClaudeSessionLost:
             session.busy.release()
-            close(ctx.session_id)
+            _discard(session)
             if sent or attempt == 2:
                 raise
             continue
         except BaseException:
             session.busy.release()
-            close(ctx.session_id)                  # 取り消し・時間切れ・エラー → 次の答えで作り直す
+            _discard(session)                      # 取り消し・時間切れ・エラー → 次の答えで作り直す
             raise
         session.busy.release()
         session.asked = True
