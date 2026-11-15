@@ -188,7 +188,7 @@ def test_decode_wav_checks_format_rate_and_length():
         decode_wav(wav(0.1, 16000, channels=2), 16000)       # ステレオ
     assert e.value.status == 400
     with pytest.raises(AudioError) as e:
-        decode_wav(wav(21, 8000), 8000)                      # 20.5 秒を超える
+        decode_wav(wav(121, 8000), 8000)                     # 120.5 秒を超える（T-2901）
     assert e.value.status == 413
     for rate in (7999, 96001):
         with pytest.raises(AudioError) as e:
@@ -507,8 +507,9 @@ def test_config(served, monkeypatch):
     port, _, _ = served
     monkeypatch.delenv("JARVIS_VOICE_SILENCE_SECONDS", raising=False)
     monkeypatch.delenv("JARVIS_VOICE_BARGE_MARGIN", raising=False)
+    monkeypatch.delenv("JARVIS_VOICE_WEB_MAX_SECONDS", raising=False)
     assert json.loads(call(port, "GET", "/api/config")[1]) == {
-        "silence_seconds": 0.8, "max_seconds": 20, "preroll_seconds": 0.3, "threshold_factor": 4.0,
+        "silence_seconds": 0.8, "max_seconds": 120.0, "preroll_seconds": 0.3, "threshold_factor": 4.0,
         "min_threshold": 0.002, "barge_margin": 5.0}
     monkeypatch.setenv("JARVIS_VOICE_SILENCE_SECONDS", "1.2")
     assert json.loads(call(port, "GET", "/api/config")[1])["silence_seconds"] == 1.2
@@ -542,15 +543,16 @@ def test_utterance_limits(served):
     assert _utter(port, sid, wav(0.1, 48000), rate="abc")[0].status == 400
     assert _utter(port, sid, wav(0.1, 7000), rate=7000)[0].status == 400              # 範囲の外
     assert _utter(port, sid, wav(0.1, 48000), ctype="application/octet-stream")[0].status == 400
-    assert _utter(port, sid, wav(21, 8000), rate=8000)[0].status == 413               # 長すぎる
+    assert _utter(port, sid, wav(121, 8000), rate=8000)[0].status == 413              # 長すぎる（120.5 秒を超える）
     assert _utter(port, "other", wav())[0].status == 404
 
-    # 4 MB を超える本文は読まずに 413
+    # 上限（最長 120.5 秒・96 kHz・16 bit の大きさ）を超える本文は読まずに 413（T-2901）
+    from voice.web import limits
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     conn.putrequest("POST", f"/api/utterance?session={sid}&rate=48000", skip_host=True)
     for k, v in {"Host": f"localhost:{port}", "Cookie": f"jv={TOKEN}", "Origin": f"http://localhost:{port}",
                  "X-Jarvis-Voice": "1", "Content-Type": "audio/wav",
-                 "Content-Length": str(4 * 1024 * 1024 + 1)}.items():
+                 "Content-Length": str(limits.max_body() + 1)}.items():
         conn.putheader(k, v)
     conn.endheaders()
     assert conn.getresponse().status == 413
@@ -698,3 +700,23 @@ def test_page_js_syntax(name):
     r = subprocess.run(["node", "--check", str(ROOT / "voice" / "web" / "static" / name)], cwd=ROOT,
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_utterance_length_limit_is_120_seconds_and_configurable(monkeypatch):
+    """発話 1 回の上限（T-2901、上位 testing §26）。既定 120 秒、10〜300 秒で変えられ、範囲外・不正は既定。"""
+    from voice import record
+    from voice.web import limits, server
+    from voice.web.session import AudioError, decode_wav
+    monkeypatch.delenv("JARVIS_VOICE_WEB_MAX_SECONDS", raising=False)
+    assert limits.max_seconds() == 120.0 and server.page_config()["max_seconds"] == 120.0
+    assert len(decode_wav(wav(60, 8000), 8000)) == 60 * 8000           # 1 分の発話を受け付ける
+    assert limits.max_body() >= 120.5 * 96000 * 2                       # 96 kHz でも最長が収まる
+    for value, expected in (("30", 30.0), ("300", 300.0), ("10", 10.0), ("9", 120.0), ("301", 120.0),
+                            ("abc", 120.0), ("nan", 120.0), ("inf", 120.0)):
+        monkeypatch.setenv("JARVIS_VOICE_WEB_MAX_SECONDS", value)
+        assert limits.max_seconds() == expected, value
+    monkeypatch.setenv("JARVIS_VOICE_WEB_MAX_SECONDS", "30")
+    with pytest.raises(AudioError) as e:
+        decode_wav(wav(31, 8000), 8000)
+    assert e.value.status == 413
+    assert record.MAX_SECONDS == 20                                    # 端末の声の会話は変えない
