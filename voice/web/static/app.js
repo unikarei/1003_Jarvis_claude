@@ -340,6 +340,7 @@
     if (!ev) return;
     const action = P.micAction(ev.type, awaiting, approval !== null);
     if (action === "ignore") {              // 確認のカードを出している間はボタンだけで決める（T-2503）
+      if (candidate && !candidate.confirmed) finishCandidate(candidate, false);
       current = null;
       ring = [];
       if (ev.type === "start") note("確認を待っている間は声を受け付けません。画面のボタンで選んでください");

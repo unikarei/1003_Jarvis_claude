@@ -117,3 +117,14 @@ test('approval is held during confirmation and restored only before its deadline
     h.api.clearApproval();
   }
 });
+
+test('a card arriving during a short candidate cannot leave playback or buttons held', () => {
+  const h=harness(), frame=new Float32Array(160);
+  for(let i=0;i<15;i++) h.api.onFrame(.1,frame,i/100);
+  assert.ok(h.api.candidate);
+  h.api.showApproval({turn:1,id:'approval',expires_in:30,text:'確認'});
+  for(let i=0;i<100;i++) h.api.onFrame(0,frame,.15+i/100);
+  assert.equal(h.api.candidate,null);
+  assert.equal(h.elements.get('approve-run').disabled,false);
+  h.api.clearApproval();
+});
