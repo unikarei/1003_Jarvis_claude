@@ -114,7 +114,7 @@ class FakeHandle:
         if self.fail:
             raise self.fail.pop(0)
         on_text(f"{self.kind}の答え{len(self.messages)}")
-        return f"{self.kind}の答え{len(self.messages)}", (["mcp__jarvis__memory_note"] if "覚えて" in message else [])
+        return f"{self.kind}の答え{len(self.messages)}", []
 
     def close(self):
         self.closed = True
@@ -284,10 +284,22 @@ def test_codex_unavailable_falls_back_to_one_shot(sessions, monkeypatch):
     assert out.text == "codexの答え" and sessions["one_shot"][0][0] == "codex"
 
 
-def test_tools_used_are_recorded_by_name(sessions):
+def test_tools_used_are_recorded_by_name(sessions, monkeypatch, tmp_path):
+    # T-2501: モデルからの直接実行ではなく、承認した窓口の実行を記録する。
+    import tool_consent
+    monkeypatch.setattr(tool_consent, "PATH", tmp_path / "consent.json")
+    monkeypatch.setattr(jarvis_mcp, "call_tool", lambda *a: {"content": [{"text": "記憶しました"}]})
+    class ToolHandle(FakeHandle):
+        def ask(self, message, on_text, **kwargs):
+            if not self.messages:
+                self.messages.append(message)
+                return json.dumps({"jarvis_tool": {"name": "memory_note", "arguments": {
+                    "text": "好きな色は群青色", "kind": "preference"}}}), []
+            return "記憶しました。", []
+    monkeypatch.setattr(hs, "_start", lambda ctx, harness: ToolHandle(harness, []))
     ctx = orc.Context(harness="claude", stream=lambda t: None)
-    out = orc.handle("これ覚えておいて: 好きな色は群青色", ctx, use_llm=False)
-    assert out.llm["tools"] == ["mcp__jarvis__memory_note"] and out.llm["harness"] == "claude"
+    out = orc.handle("これ覚えておいて: 好きな色は群青色", ctx, ask=lambda _: "y", use_llm=False)
+    assert out.llm["tools"] == ["memory_note"] and out.llm["harness"] == "claude"
 
 
 # ---------------------------------------------------------------- 会話の間保つ claude -p（偽のスクリプト）

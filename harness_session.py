@@ -159,11 +159,14 @@ def _mcp_config(session_id: str) -> dict:
 
 def _start(ctx, harness: str):
     """新しいセッションの中身を作る。claude はプロセスを起動、codex はスレッドを作る。"""
+    import conversation_tools
+    tools = config.HARNESS_TOOLS
+    rules = prompts.rules(tools=tools, voice=ctx.voice)
+    if tools:
+        rules += conversation_tools.guide()
     if harness == "claude":
-        tools = config.HARNESS_TOOLS
-        return llm.ClaudeSession(prompts.rules(tools=tools, voice=ctx.voice),
-                                 _mcp_config(ctx.session_id) if tools else None, web_search=tools and config.WEB_SEARCH)
-    return llm.CodexThread(prompts.rules(tools=False, voice=ctx.voice))   # Codex は答えるだけ（spec §3.4.12 I）
+        return llm.ClaudeSession(rules)    # 実行は共通の承認窓口だけ（spec §3.4.12 J）
+    return llm.CodexThread(rules)
 
 
 def _close(session: Session | None) -> None:
@@ -307,7 +310,7 @@ def answer(ctx, provider: str, kind: str, question: str, owner_text: str, pack=N
                 _sessions[ctx.session_id] = session
             if old is not None and old is not session:
                 _close(old)
-        tools = harness == "claude" and config.HARNESS_TOOLS
+        tools = config.HARNESS_TOOLS
         if fresh:
             message = prompts.first_message(handoff_memo(canonical_turns(ctx)), _pack_text(pack), turn, tools)
             new_items = set(items)
@@ -327,11 +330,15 @@ def answer(ctx, provider: str, kind: str, question: str, owner_text: str, pack=N
             if stream is not None:
                 stream(text)
         try:
-            text, used = session.handle.ask(message, track, cancel=ctx.cancel)
+            if tools:
+                import conversation_tools
+                text, used = conversation_tools.answer(session.handle, message, ctx, track)
+            else:
+                text, used = session.handle.ask(message, track, cancel=ctx.cancel)
         except llm.CodexSessionUnavailable:
             session.busy.release()
             _discard(session)
-            if sent:
+            if sent or ctx.llm_tools:
                 raise llm.LLMError("Codex のセッションが答えの途中で使えなくなりました") from None
             if attempt == 1:
                 continue
@@ -339,7 +346,7 @@ def answer(ctx, provider: str, kind: str, question: str, owner_text: str, pack=N
         except llm.ClaudeSessionLost:
             session.busy.release()
             _discard(session)
-            if sent or attempt == 2:
+            if sent or ctx.llm_tools or attempt == 2:
                 raise
             continue
         except BaseException:

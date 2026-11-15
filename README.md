@@ -13,7 +13,7 @@ python chat.py
 Mac mini では、1003 の直下の起動用ファイルでも始められる（Finder でダブルクリック、またはターミナルで実行）。
 
 - `run_text_chat.command`: 文字で会話する（`chat.py`）
-  - 会話の LLM（2026-11-14 から既定は Claude、`JARVIS_HARNESS=claude`）: 経路 A・B とも Claude で答え、使えなければ Codex → Ollama に自動で切り替える。会話の間は同じ Claude のプロセスを使い続け（毎回起動しない）、切り替えたときは直近 6 往復と、それより前の短いまとめ・記憶を引き継ぐ。「Codex にして」「Ollama にして」「おまかせにして」で切り替え（おまかせは前の既定: 通常の会話は Ollama、ナレッジの質問は Codex から）。Claude は Jarvis の道具（ナレッジの検索・記憶の検索・記憶のメモ・状態）と Web 検索だけを使える（シェル・ファイルの書き込みは使えない）。「覚えておいて」と言うと記憶のメモに書き、次の会話でも思い出す（`python -m memory notes` で一覧、`forget-note <ID>` で消す）。設定は `.env.example` の `JARVIS_HARNESS`・`JARVIS_WEB_SEARCH` など
+  - 会話の LLM（2026-11-14 から既定は Claude、`JARVIS_HARNESS=claude`）: 経路 A・B とも Claude で答え、使えなければ Codex → Ollama に自動で切り替える。会話の間は同じ Claude のプロセスを使い続け（毎回起動しない）、切り替えたときは直近 6 往復と、それより前の短いまとめ・記憶を引き継ぐ。「Codex にして」「Ollama にして」「おまかせにして」で切り替え（おまかせは前の既定: 通常の会話は Ollama、ナレッジの質問は Codex から）。Claude・Codex は共通の窓口で Jarvis の道具（ナレッジの検索・記憶の検索・記憶のメモ・状態）と Web を使える。ツールごとの初回だけ確認し、一度承認すると次の会話も確認不要（削除・送信・課金など既存の操作ごとの確認は残る）。Web の検索・取得は Codex 選択中も専用の Claude を使う。シェル・任意のファイル書き込みは使えない。「覚えておいて」と言うと記憶のメモに書き、次の会話でも思い出す（`python -m memory notes` で一覧、`forget-note <ID>` で消す）。設定は `.env.example` の `JARVIS_HARNESS`・`JARVIS_WEB_SEARCH` など
   - 会話の終わりの知識化（T-1803）: Owner の発言が 3 回以上ある会話を exit・quit（声の会話は「終了」・q）で終えると「この会話から知識の候補を作りますか？」と聞く（`y` で「ナレッジ化して」と同じ流れ）。ブラウザでは「終了」・「会話を終える」で候補を保存待ちにし、次の会話の始めに件数を知らせる（「ナレッジ化して」で 1 件ずつ確認）。止めるときは `JARVIS_CAPTURE_ON_END=0`
   - Obsidian のノートの編集（`obsidian-note`、T-1702）: 「Obsidian の〈ノート〉に〜を追加して」「Obsidian で〜ってノートを作って」「Obsidian の〜を削除して」のように話すと、足りない項目を聞き返し、書く前に内容を見せて確認する（削除と全体の書き直しは続けて「削除」「置き換え」と入力）。jarvis-skills で宣言が有効になるまでは「今は使えません」と答える
 - 声の選択: `.venv/bin/python -m acc.voice_settings` で音声エンジン・話者・話速・抑揚を選んで試聴し、「この音声を使う」で保存する（次に起動する声の会話から使う）。「候補の比較」で、AivisSpeech・VOICEVOX・macOS の候補を同じ文で聞き比べられる
@@ -217,3 +217,15 @@ python run_task.py "先週のAIニュースで重要だったのは？"         
 `config.py` の `RSS_FEEDS` にエントリを追記する。
 
 - 会話の隔離評価: `python -m evaluation conversation --help`（固定110会話、Ollamaのみ、DB/Vaultコピー・確認は拒否。結果と制限は [T-1901レポート](docs/conversation-selfimprove-2026-11-10.md)）。
+
+### 会話のツールの初回承認（T-2501）
+
+初回は用途と今回の入力を表示し、端末では `y`、ブラウザでは「実行する」で承認します。拒否・時間切れ・切断時は実行しません。承認は `data/tool-consent.json` に保存し（Git の管理外）、Claude・Codex と後続の会話で共有します。`JARVIS_TOOL_CONSENT_PATH` で保存先を指定できます。ツールの権限の版が変わった場合は再承認が必要です。
+
+```sh
+python -m tool_consent                       # 承認の一覧
+python -m tool_consent --revoke web_search   # Web 検索の許可を取り消す
+python -m tool_consent --revoke all          # すべての許可を取り消す
+```
+
+Web の初回承認には、検索語・URL の外部送信と Claude の利用枠を使うことも表示します。会話の履歴・記憶は Web 専用プロセスには渡しません。`JARVIS_HARNESS_TOOLS=0` で全ツール、`JARVIS_WEB_SEARCH=0` で Web を停止できます。制御用の JSON を読み上げないよう、ツールの使えるセッションでは最終回答がそろってから表示・読み上げます。
