@@ -123,13 +123,11 @@ def test_expired_card_stays_pending(env):
     assert statuses() == ["pending", "published", "rejected"] and len(notes(env)) == 1
 
 
-@pytest.mark.parametrize("how", ["interrupt", "speak", "end"])
+@pytest.mark.parametrize("how", ["speak", "end"])
 def test_interrupt_speech_or_end_leaves_the_rest_pending(env, how):
     s, events, fake, _ = start()
     first = card(events, 1)
-    if how == "interrupt":
-        assert s.interrupt(1) == "ok"
-    elif how == "speak":
+    if how == "speak":
         fake.text = "はい"                                       # 声の「はい」は答えにならない（割り込みで取り消し）
         s.submit(wav(), 48000)
     else:
@@ -188,3 +186,32 @@ def test_without_cards_browser_still_refuses_and_theme_register_stays_terminal_o
 
 def test_capture_status_values_are_known():
     assert {s.value for s in CandidateStatus} >= {"pending", "published", "rejected"}
+
+
+def test_capture_holds_the_mic_and_refuses_interrupts_until_cards_end(env):
+    """ナレッジ化の実行中（候補を作る間とカードの間）はマイクで割り込ませない（T-2903、上位 testing §28）。"""
+    s, events, _, _ = start()
+    first = card(events, 1)
+    holds = events.of("mic_hold")
+    assert [h["on"] for h in holds] == [True] and holds[0]["turn"] == 1
+    order = [e["type"] for e in events]
+    assert order.index("mic_hold") < len(order) - 1 - order[::-1].index("approval")   # カードより先に知らせる
+    assert s.interrupt(1) == "stale"                                           # 割り込みは 409（取り消さない）
+    assert s.approve(1, first["id"], "run") == "ok"
+    second = card(events, 2)
+    assert s.interrupt(1) == "stale"
+    s.approve(1, second["id"], "decline")
+    s.approve(1, card(events, 3)["id"], "later")
+    events.wait("turn_done")
+    assert [h["on"] for h in events.of("mic_hold")] == [True, False]
+    assert statuses() == ["pending", "published", "rejected"]
+
+
+def test_mic_hold_is_only_for_knowledge_capture(env):
+    from tests.test_voice_web import Fake, make_session, wav
+    from tests.test_voice_web_speech import Clock
+    s, events, _ = make_session(Fake(text="こんにちは"), handle=real_handle, clock=Clock())
+    s.submit(wav(), 48000)
+    events.wait("turn_done")
+    assert events.of("mic_hold") == []
+

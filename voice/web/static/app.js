@@ -29,6 +29,7 @@
   let calibration = null;                   // 回り込みの測定 {rms, playing, source, ctrl, timer}
   let watchdog = null;
   let approval = null;                      // 画面に出している承認の要求 {turn, id, timer}
+  let micHeld = false;                      // ナレッジ化の実行中（マイクで割り込まない、T-2903）
   let withdrawn = null;                     // 割り込みで画面から消した承認の要求 {turn, id}（結果は approval_done で出す）
 
   function status(text, kind) {
@@ -210,7 +211,7 @@
     if (stream) { stream.getTracks().forEach(t => { t.onended = null; t.stop(); }); stream = null; }
     resetPlayback(0);
     if (audio) { audio.close().catch(() => {}); audio = null; }
-    detector = null; current = null; ring = []; background = []; paused = false;
+    detector = null; current = null; ring = []; background = []; paused = false; micHeld = false;
     awaiting = false; lastEnd = -Infinity; cut = -1; cutHold.clear(); pendingSend = 0;
     $("start").disabled = false;
     $("pause").disabled = true;
@@ -349,12 +350,15 @@
       finishCandidate(candidate, true);
     }
     if (!ev) return;
-    const action = P.micAction(ev.type, awaiting, approval !== null);
-    if (action === "ignore") {              // 確認のカードを出している間はボタンだけで決める（T-2503）
+    const action = P.micAction(ev.type, awaiting, approval !== null || micHeld);
+    if (action === "ignore") {              // 確認のカード・ナレッジ化の実行中はボタンだけで決める（T-2503・T-2903）
       if (candidate && !candidate.confirmed) finishCandidate(candidate, false);
       current = null;
       ring = [];
-      if (ev.type === "start") note("確認を待っている間は声を受け付けません。画面のボタンで選んでください");
+      if (ev.type === "start") {
+        note(approval !== null ? "確認を待っている間は声を受け付けません。画面のボタンで選んでください"
+                               : "知識の候補を作っています。終わるまで声は受け付けません（やめるときは「会話を終える」）");
+      }
       return;
     }
     if (ev.type === "start") {
@@ -648,6 +652,7 @@
   // 発言の処理の終わり（サーバーは最後の文の再生の知らせを受けた、または待つのをやめた）
   function onTurnDone(t) {
     if (t !== turn) return;
+    micHeld = false;
     // この発言の取得中・再生待ち・再生中の音を捨て、後から届く同じ発言の音も再生しない
     cancelCandidate();
     turnDone = true;
@@ -800,6 +805,7 @@
     $("approve-run").disabled = true;
     $("approve-decline").disabled = true;
     $("approve-run").hidden = false;
+    $("approve-decline").hidden = false;    // 「直す」で隠したボタンを次のカードに残さない（T-2903）
     $("approve-word").hidden = true;
     $("approve-word").value = "";
     $("approve-word").disabled = true;
@@ -875,6 +881,14 @@
         break;
       case "approval_done":
         onApprovalDone(ev);
+        break;
+      case "mic_hold":                      // ナレッジ化の実行中（T-2903）
+        micHeld = ev.on === true;
+        if (micHeld) {
+          if (candidate && !candidate.confirmed) finishCandidate(candidate, false);   // 仮に止めた読み上げは続ける
+          status("知識の候補を作っています", "busy");
+          note("知識の候補を作っています。終わるまで声は受け付けません（やめるときは「会話を終える」）");
+        }
         break;
       case "answer_chunk":
         if (!answerEl) answerEl = line("ai", "JARVIS", "");

@@ -115,11 +115,12 @@ def test_edit_and_hold_are_not_accepted_for_ordinary_confirmations(env):
     events.wait("turn_done")
 
 
-@pytest.mark.parametrize("how", ["interrupt", "end"])
+@pytest.mark.parametrize("how", ["speak", "end"])
 def test_cut_after_edit_before_save_does_not_save(env, how):
     import threading
+    from tests.test_voice_web import wav
     from tests.test_voice_web_speech import until
-    s, events, _, _ = start()
+    s, events, fake, _ = start()
     first = card(events, 1)
     reached, go = threading.Event(), threading.Event()
     original = s._before_run
@@ -131,8 +132,10 @@ def test_cut_after_edit_before_save_does_not_save(env, how):
     s._before_run = paused
     assert s.approve(1, first["id"], "edit", title="駐車場は 9 台", body="駐車場は 9 台にする。") == "ok"
     assert reached.wait(5)
-    if how == "interrupt":
-        s.interrupt(1)
+    if how == "speak":                                              # 新しい発話（ナレッジ化の実行中も受け付ける）
+        fake.text = "はい"
+        threading.Thread(target=s.submit, args=(wav(), 48000), daemon=True).start()
+        until(lambda: 1 in s._cut)
     else:
         s.end()
     go.set()
