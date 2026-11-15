@@ -227,3 +227,7 @@ JARVISはこの契約に従う。
 ## ナレッジ保存と接続状態の確認（T-2301〜T-2304）
 
 要件は統合ワークスペース `docs/spec.md` §3.4.13。`knowledge_connections.report()` は読み取り専用で、Vault への書き込み成功や Windows 側の同期を保証しない。保存・再検索の自動試験は一時 DB と一時 Vault に限り、Windows 実機の確認とは分けて記録する。実機手順は統合ワークスペース `docs/knowledge-save-acceptance.md` を参照する。
+
+## 管理画面のアドレス案内
+
+control-center の成功時は端末・音声・ブラウザの全経路で Windows 向けURLも表示する。要件の正本は上位 spec §3.4.5（T-2700）、本リポジトリ docs/spec.md 4-16 から参照する。
