@@ -304,7 +304,7 @@
 
   // 再生している間（文の start から最後の文の終了の 0.3 秒後まで）は再生中のしきい値
   function playingNow() {
-    return source !== null || performance.now() - lastEnd < AFTER_SPEECH_MS;
+    return source !== null || heldPlayback !== null || performance.now() - lastEnd < AFTER_SPEECH_MS;
   }
 
   function onFrame(rms, samples, t) {
@@ -328,7 +328,7 @@
       const target = V.thresholdFrom(background, config.threshold_factor, config.min_threshold);
       detector.setThreshold(detector.threshold * 0.99 + target * 0.01);
     }
-    detector.setPlaying(playingNow() || !!heldPlayback);
+    detector.setPlaying(playingNow());
     ring.push(samples);
     if (ring.length > detector.backFrames) ring.shift();
     if (current) current.push(samples);
@@ -338,9 +338,16 @@
       finishCandidate(candidate, true);
     }
     if (!ev) return;
+    const action = P.micAction(ev.type, awaiting, approval !== null);
+    if (action === "ignore") {              // 確認のカードを出している間はボタンだけで決める（T-2503）
+      current = null;
+      ring = [];
+      if (ev.type === "start") note("確認を待っている間は声を受け付けません。画面のボタンで選んでください");
+      return;
+    }
     if (ev.type === "start") {
       current = ring.slice();               // 判定の窓と、その前の 0.3 秒を含める
-      if (awaiting) beginCandidate(t, ev.onsetFrames);   // 考えている間・話している間なら割り込み
+      if (action === "barge") beginCandidate(t, ev.onsetFrames);
       return;
     }
     const frames = current;
