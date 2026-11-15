@@ -389,3 +389,7 @@ Approved（Owner指示、詳細は上位AGENTS.md §2.1の事前承認）。要�
 
 要件の正本は上位 spec §3.4.9・`../docs/browser-voice-spec.md` BV-03（受け入れ基準は上位 testing §26）。発話 1 回の上限を 20 秒から 120 秒にする。`voice/web/limits.py` が `JARVIS_VOICE_WEB_MAX_SECONDS`（10〜300 秒、範囲外・不正は既定）から、ページに渡す最長（`/api/config` の `max_seconds`）・サーバーが受け付ける WAV の長さ（最長＋0.5 秒、超えたら 413）・本文の上限（96 kHz・16 bit で最長が収まる大きさ、超えたら読まずに 413）を決める。端末の声の会話（`voice/record.py` の 20 秒）と無音の区切り 0.8 秒は変えない。
 
+
+## 4-20. 文脈に沿って知識化を始める（T-3000）
+
+Approved（Owner指示、詳細はOwner事前承認 AGENTS.md §2.1）。要件の正本は上位spec §3.3.13 B、ADR-0043、testing §28。保存の語の部分一致だけで始めず、インタビューなど前提作業は通常の会話で先に進める。既存の明示命令・確認・ノート編集は保持する。
