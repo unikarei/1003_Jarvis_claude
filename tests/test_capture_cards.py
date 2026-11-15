@@ -181,7 +181,7 @@ def test_without_cards_browser_still_refuses_and_theme_register_stays_terminal_o
     ctx = orc.Context(terminal=False)
     out = orc.execute(orc.Route("knowledge-capture", {}, "rule"), ctx, "ナレッジ化して", ask=lambda p: "y")
     assert out.error == "needs_terminal"                         # 画面で答えられないとき（評価の画面など）は今までどおり
-    ctx.review = lambda text, spoken=None: "save"
+    ctx.review = lambda text, spoken=None, edit=None: "save"
     out = orc.execute(orc.Route("theme-register", {"theme": "x"}, "rule"), ctx, "テーマ登録: x", ask=lambda p: "y")
     assert out.error == "needs_terminal"
 

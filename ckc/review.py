@@ -1,6 +1,7 @@
 """候補の表示・修正・承認（ckc_cli.py と chat.py が使う）。"""
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import registry
 import vault
@@ -10,6 +11,7 @@ from ckc.publish import PublishError, publish
 from ckc.reconcile import find_similar
 from ckc.route import default_category, route_vault
 from ckc.schema import validate_extraction
+from ckc.secrets import find_secrets
 
 KIND_LABELS = {Kind.DECISION: "決定", Kind.PREFERENCE: "好み", Kind.HYPOTHESIS: "仮説",
                Kind.FINDING: "知見", Kind.TASK: "作業", Kind.QUESTION: "疑問"}
@@ -155,6 +157,13 @@ def _projects(answer: str) -> list[str] | None:
 SAVE, REJECT, LATER, STOP = "save", "reject", "later", "stop"
 
 
+@dataclass(frozen=True)
+class Edited:
+    """画面で直した題名・本文で保存する答え（上位 spec §3.3.13 B、ADR-0042、T-2900）。"""
+    title: str
+    body: str
+
+
 def card_text(c: Candidate, index: int, total: int) -> str:
     """画面で 1 件ずつ答えるときの表示（ブラウザでの声の会話、T-1802）。似た既存の知識は題名で示す。"""
     lines = [f"知識の候補 {index}/{total}: {c.title}",
@@ -171,15 +180,20 @@ def decide_each(candidates: list[Candidate], decide: Callable[[Candidate, int, i
                 gate: Callable[[], bool] | None = None) -> dict:
     """候補を 1 件ずつ decide に聞き、「保存する」はその場で保存、「保存しない」は却下、それ以外は保存待ちのまま残す
     （T-1802）。decide が STOP を返したら、残りはすべて保存待ち。gate があれば保存の直前に呼び、False なら保存しない
-    （ブラウザの承認を使い切る）。置き換え・修正はしない。{"saved", "rejected", "later", "failed"} の件数を返す。"""
+    （ブラウザの承認を使い切る）。decide が Edited を返したら、題名・本文を直して保存する（T-2900。秘密情報・検証で
+    失敗したら直さず保存待ちのまま、failed に数える）。置き換えはしない。{"saved", "rejected", "later", "failed"} の件数を返す。"""
     counts = {"saved": 0, "rejected": 0, "later": 0, "failed": 0}
     for i, c in enumerate(candidates):
         choice = decide(c, i + 1, len(candidates))
-        if choice == SAVE:
+        if choice == SAVE or isinstance(choice, Edited):
             if gate is not None and not gate():
                 counts["later"] += len(candidates) - i
                 break
             try:
+                if isinstance(choice, Edited):
+                    if find_secrets(choice.title) or find_secrets(choice.body):
+                        raise ReviewError("秘密情報の可能性があります")
+                    edit(c, title=choice.title, body=choice.body)
                 approve(c)
                 publish(c.candidate_id)
             except (ReviewError, PublishError, store.StoreError, vault.VaultError, OSError):

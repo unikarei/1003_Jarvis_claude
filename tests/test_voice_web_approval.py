@@ -453,3 +453,18 @@ def test_previous_session_id_cannot_approve_new_session(approval_server):
     _read_events(resp2, "turn_done")
     assert counters["write"].calls == 0
     conn2.close()
+
+
+def test_hold_and_edit_over_http_are_refused_for_ordinary_confirmations(approval_server):
+    """「直す」（hold）・「直して保存」（edit）は知識の候補のカードだけ（T-2900）。一般の確認では 409、形の違う edit は 400。"""
+    port, made, _, counters = approval_server
+    sid, conn, resp, req = _start_http(port)
+    base = {"turn": req["turn"], "id": req["id"]}
+    assert _approve(port, sid, dict(base, decision="hold"))[0].status == 409
+    assert _approve(port, sid, dict(base, decision="edit", title="題名", body="本文"))[0].status == 409
+    assert _approve(port, sid, dict(base, decision="edit", title="", body="本文"))[0].status == 400
+    assert _approve(port, sid, dict(base, decision="edit"))[0].status == 400
+    assert _approve(port, sid, dict(base, decision="decline"))[0].status == 200
+    _read_events(resp, "turn_done")
+    assert counters["write"].calls == 0
+    conn.close()

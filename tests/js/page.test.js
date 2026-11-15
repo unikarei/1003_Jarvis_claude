@@ -168,3 +168,13 @@ test("確認のカードを出している間は、発話の検出で割り込�
   assert.strictEqual(P.micAction("end", false, false), "send");
   assert.strictEqual(P.micAction("end", true, false), "send");
 });
+
+test("「直して保存」で送る題名・本文は空白を除き、空・長すぎるなら送らない（T-2900）", () => {
+  assert.deepStrictEqual(P.editPayload("  題名 ", " 本文\n"), { title: "題名", body: "本文" });
+  assert.strictEqual(P.editPayload("", "本文"), null);
+  assert.strictEqual(P.editPayload("題名", "   "), null);
+  assert.strictEqual(P.editPayload("x".repeat(81), "本文"), null);
+  assert.strictEqual(P.editPayload("題名", "y".repeat(2001)), null);
+  assert.ok(P.editPayload("x".repeat(80), "y".repeat(2000)));
+  assert.match(P.approvalResultText("edited"), /直した内容で保存/);
+});
