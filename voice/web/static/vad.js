@@ -96,8 +96,10 @@
 
     return {
       push, reset, backFrames: WINDOW + frames(o.prerollSeconds),
+      setThreshold(value) { if (Number.isFinite(value) && value > 0) o.threshold = value; },
       setPlaying(value) { playing = !!value; },
       setPlayThreshold(value) { playThreshold = value; },
+      get hasEnoughSpeech() { return voicedEnd >= minN; },
       get speaking() { return speaking; },
       get threshold() { return o.threshold; },
       get playThreshold() { return Math.max(o.threshold, playThreshold); },

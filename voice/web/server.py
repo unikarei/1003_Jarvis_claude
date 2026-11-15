@@ -285,6 +285,8 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float, allowed_ho
             path, q = self._query()
             if path == "/api/utterance":
                 return self._utterance(q)
+            if path == "/api/speech-check":
+                return self._speech_check(q)
             length = self._length()
             if length is None or length > MAX_SMALL_BODY:
                 return self._json(400, {"error": "bad_length"})
@@ -385,6 +387,36 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float, allowed_ho
             except Busy:
                 return self._json(409, {"error": "calibrated"})
             self._json(200, {"audio": sent})
+
+        def _speech_check(self, q):
+            from voice.web.noise import CheckBusy, speech_check
+            from voice.web.session import AudioError
+
+            length = self._length()
+            if length is None or length > 256 * 1024:
+                self.close_connection = True
+                return self._json(413, {"error": "bad_length"})
+            if self.headers.get("Content-Type", "").split(";")[0].strip().lower() not in WAV_TYPES:
+                return self._json(400, {"error": "not_wav"})
+            try:
+                rate, turn = int(q.get("rate", "")), int(q.get("turn", ""))
+            except ValueError:
+                return self._json(400, {"error": "bad_request"})
+            session = sessions.get(q.get("session"))
+            if session is None or not session.can_check_speech(turn):
+                return self._json(409, {"error": "stale_turn"})
+            data = self.rfile.read(length)
+            try:
+                speech = speech_check(data, rate)
+            except AudioError as e:
+                return self._json(e.status, {"error": "bad_audio"})
+            except CheckBusy:
+                return self._json(429, {"error": "busy"})
+            except Exception:
+                return self._json(503, {"error": "unavailable"})
+            if not session.can_check_speech(turn):
+                return self._json(409, {"error": "stale_turn"})
+            return self._json(200, {"speech": speech})
 
         def _utterance(self, q):
             from voice.web.session import AudioError, Busy
