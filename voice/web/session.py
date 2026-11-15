@@ -30,10 +30,10 @@ import voice_chat
 from ckc.models import Speaker as Who, Turn
 from voice import tts
 from voice.duplex import DuplexSpeaker
+from voice.web import limits
 from voice.web.player import BrowserPlayer
 from voice_chat import QUIT_WORDS, is_noise   # voice_chat の import では音声の機器を開かない（sounddevice は関数の中だけ）
 
-MAX_AUDIO_SECONDS = 20.5      # 発話 1 回分の長さの上限（ページの最長 20 秒＋前の 0.3 秒＋余裕）
 MIN_RATE, MAX_RATE = 8000, 96000
 POLL_SECONDS = 0.02           # 読み上げの終わりを確かめる間隔
 CALIBRATION_TEXT = "ジャービスです。どうぞ。"   # 回り込みの測定のあいさつ（voice_chat.run_barge_in と同じ）
@@ -126,7 +126,7 @@ def decode_wav(data: bytes, rate: int) -> np.ndarray:
                 raise AudioError(400, "PCM 16 bit・モノラルの WAV ではありません")
             if w.getframerate() != rate:
                 raise AudioError(400, "WAV のサンプルレートが rate と違います")
-            if w.getnframes() > MAX_AUDIO_SECONDS * rate:
+            if w.getnframes() > limits.max_audio_seconds() * rate:
                 raise AudioError(413, "発話が長すぎます")
             frames = w.readframes(w.getnframes())
     except (wave.Error, EOFError) as e:
@@ -134,7 +134,7 @@ def decode_wav(data: bytes, rate: int) -> np.ndarray:
     samples = np.frombuffer(frames[: len(frames) // 2 * 2], dtype="<i2")
     if not len(samples):
         raise AudioError(400, "音声が空です")
-    if len(samples) > MAX_AUDIO_SECONDS * rate:
+    if len(samples) > limits.max_audio_seconds() * rate:
         raise AudioError(413, "発話が長すぎます")
     return samples.astype(np.float32) / 32768.0
 

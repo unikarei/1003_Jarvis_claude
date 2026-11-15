@@ -24,13 +24,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from voice import record as rec
+from voice.web import limits
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8771
 COOKIE = "jv"
 CSRF_HEADER = "X-Jarvis-Voice"
 STATIC_DIR = Path(__file__).parent / "static"
-MAX_BODY = 4 * 1024 * 1024        # 発話 1 回分の WAV の上限
 MAX_SMALL_BODY = 10_000           # 音声以外の POST の本文の上限
 PING_SECONDS = 5.0                # ページは 15 秒イベントも ping も来なければ切断として扱う
 ATTACH_SECONDS = 30.0             # 会話を始めてから SSE をつなぐまでの猶予（つながなかった会話は次の開始で終える）
@@ -62,7 +62,7 @@ def page_config() -> dict:
     margin = rec._env_float("JARVIS_VOICE_BARGE_MARGIN", BARGE_MARGIN)
     if not 0 < margin < float("inf"):
         margin = BARGE_MARGIN
-    return {"silence_seconds": silence, "max_seconds": rec.MAX_SECONDS, "preroll_seconds": PREROLL_SECONDS,
+    return {"silence_seconds": silence, "max_seconds": limits.max_seconds(), "preroll_seconds": PREROLL_SECONDS,
             "threshold_factor": THRESHOLD_FACTOR, "min_threshold": MIN_THRESHOLD, "barge_margin": margin}
 
 
@@ -433,7 +433,7 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float, allowed_ho
             length = self._length()
             if length is None:
                 return self._json(400, {"error": "bad_length"})
-            if length > MAX_BODY:
+            if length > limits.max_body():   # 発話 1 回分の WAV の上限（T-2901）
                 self.close_connection = True          # 大きすぎる本文は読まずに切る
                 return self._json(413, {"error": "too_large"})
             ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
