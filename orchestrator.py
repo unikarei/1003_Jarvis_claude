@@ -56,6 +56,7 @@ class Context:
     ask: Callable | None = None                   # 自分で確認するスキル（SELF_CONFIRM）にだけ渡す確認（T-1702）
     active_skill: str | None = None               # 振り分けが決まってから終わるまでのスキル名（声の会話の割り込み、T-1702）
     note_meta: dict | None = None                 # private な結果の記録に残す項目（op・vault・path・結果の短い文）
+    hold_mic: Callable | None = None              # ナレッジ化の実行中はマイクで割り込ませない（ブラウザ、T-2903）。(on) → None
     review: Callable | None = None                # 知識の候補を画面で 1 件ずつ聞く（ブラウザ、T-1802）。(表示, 読み上げ, edit=直す欄の初期値) → 答え
     harness: str = field(default_factory=lambda: _initial_harness())   # auto か ollama・claude・codex（ADR-0035）
     resting: dict = field(default_factory=dict)   # 休止中のハーネス → (期限の clock(), 理由)。保存しない
@@ -778,7 +779,18 @@ PENDING_SPOKEN = "この会話からは新しい候補がありませんでし�
 
 
 def _capture_with_cards(ctx):
-    """ブラウザでのナレッジ化（T-1802）: 候補を画面で 1 件ずつ聞き、「保存する」はその場で保存する。"""
+    """ブラウザでのナレッジ化（T-1802）: 候補を画面で 1 件ずつ聞き、「保存する」はその場で保存する。
+    候補を作る間とカードの間は、マイクで割り込ませない（T-2903、上位 spec §3.4.9）。"""
+    if ctx.hold_mic is not None:
+        ctx.hold_mic(True)
+    try:
+        return _capture_with_cards_run(ctx)
+    finally:
+        if ctx.hold_mic is not None:
+            ctx.hold_mic(False)
+
+
+def _capture_with_cards_run(ctx):
     from chat_actions import review_pending_with_cards, run_ckc_with_cards
     from ckc.review import card_text
 

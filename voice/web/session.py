@@ -226,6 +226,7 @@ class WebSession:
         self._tts_failed: int | None = None        # 合成の失敗を知らせた発言の番号（発言ごとに 1 回だけ知らせる）
         self._latency: tuple[int, latency.Turn] | None = None   # （発言の番号, その発言の遅延の記録）
         self._approval: _Approval | None = None    # 答えを待っている承認の要求（T-1504、同時に 1 つだけ）
+        self._mic_held: int | None = None          # ナレッジ化の実行中の発言の番号（マイクで割り込ませない、T-2903）
         # 割り込まれた、Obsidian のノートの編集の途中の発言（T-1702）。次の発言は、この処理の終わりを待つ
         self._after: _TurnState | None = None
         # 雑音の割り込みで消えた発言（Owner の発言, 割り込んだ時刻）。次の発話が雑音なら答え直す（T-2203）
@@ -340,6 +341,20 @@ class WebSession:
                          daemon=True).start()
         return st.turn
 
+    def _hold_mic(self, turn: int, on: bool) -> None:
+        """ナレッジ化の実行中（候補を作る間とカードの間）は、マイクで割り込ませない（T-2903、上位 spec §3.4.9）。
+        ページに mic_hold を知らせ、その間の interrupt を受け付けない。「会話を終える」では今までどおり終わる。"""
+        with self._lock:
+            if on:
+                if self.closed or turn in self._cut or self._mic_held == turn:
+                    return
+                self._mic_held = turn
+            else:
+                if self._mic_held != turn:
+                    return
+                self._mic_held = None
+            self._send_locked("mic_hold", turn, on=on)
+
     def can_check_speech(self, turn: int) -> bool:
         """Read-only validity check; a probe never cancels a turn or approval."""
         with self._lock:
@@ -348,9 +363,9 @@ class WebSession:
 
     def interrupt(self, turn: int) -> str:
         """ブラウザが割り込んだ（/api/interrupt）。返り値は "ok" / "stale"（今処理している発言の番号でない・
-        すでに割り込んだ・処理を終えた・終えた会話）。stale は何もしない（server.py が 409 にする）。"""
+        すでに割り込んだ・処理を終えた・終えた会話・ナレッジ化の実行中（T-2903））。stale は何もしない（server.py が 409 にする）。"""
         with self._lock:
-            if self.closed or turn != self.turn:
+            if self.closed or turn != self.turn or self._mic_held == turn:
                 return "stale"
             st = self._active
             if st is None or st.turn != turn:
@@ -741,6 +756,7 @@ class WebSession:
         ctx.cancel = lambda t=turn: self.closed or t != self.speaker.turn   # voice_chat.run_barge_in と同じ
         ctx.before_run = lambda t=turn: self._before_run(t)   # 承認の後、実行の直前にもう一度確かめる（T-1504）
         ctx.review = lambda text, spoken=None, edit=None, t=turn: self._review(t, text, spoken, edit)   # 知識の候補の確認（T-1802・T-2900）
+        ctx.hold_mic = lambda on, t=turn: self._hold_mic(t, on)   # ナレッジ化の実行中（T-2903）
         try:
             outcome = self.handle(text, ctx, ask=lambda prompt, spoken=None, expect=None:   # 確認は画面で（T-1504）
                                   self._ask(turn, prompt, spoken=spoken, expect=expect))
@@ -751,6 +767,8 @@ class WebSession:
             ctx.stream = None
             ctx.before_run = None
             ctx.review = None
+            ctx.hold_mic = None
+            self._hold_mic(turn, False)
             with self._lock:
                 self._cancel_approval_locked(turn)   # 実行の直前の確認を通らなかった要求を残さない
         st.outcome = outcome

@@ -185,3 +185,11 @@ test("会話の記録は一番下を見ているときだけ新しい行で送�
   assert.strictEqual(P.atBottom(500, 400, 1000), false);    // 上を読んでいる間は送らない
   assert.strictEqual(P.atBottom(0, 400, 300), true);        // 記録が短く、スクロールしない
 });
+
+test("ナレッジ化の実行中も発話の検出で割り込みも送信もしない（T-2903）", () => {
+  // app.js は micAction の 3 つ目に「カードを出している、またはナレッジ化の実行中」を渡す
+  for (const type of ["start", "end"]) for (const awaiting of [true, false]) {
+    assert.strictEqual(P.micAction(type, awaiting, true), "ignore");
+  }
+});
+

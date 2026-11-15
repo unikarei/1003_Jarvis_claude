@@ -397,3 +397,8 @@ Approved（Owner指示、詳細は上位AGENTS.md §2.1の事前承認）。要�
 ## 4-21. 文脈に沿って知識化を始める（T-3000）
 
 Approved（Owner指示、詳細はOwner事前承認 AGENTS.md §2.1）。要件の正本は上位spec §3.3.13 B、ADR-0043、testing §28。保存の語の部分一致だけで始めず、インタビューなど前提作業は通常の会話で先に進める。既存の明示命令・確認・ノート編集は保持する。
+
+## 4-21. ナレッジ化の実行中もマイクで割り込まない（T-2903）
+
+要件の正本は上位 spec §3.4.9（受け入れ基準は上位 testing §28）。`orchestrator._capture_with_cards` が実行の間 `ctx.hold_mic(True/False)` を呼び、`voice/web/session.py` が `mic_hold`（on・off）をページに送って、その間の `interrupt` を stale（409）にする。ページは `mic_hold` の間、確認のカードと同じく発話の検出を使わない（仮に止めた読み上げは続ける）。新しい発話の送信（`/api/utterance`）と「会話を終える」は今までどおり。あわせて、「直す」の後に次のカードの「実行しない」が隠れたままになる不具合（T-2900）を直す。
+
