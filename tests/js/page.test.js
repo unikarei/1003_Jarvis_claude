@@ -156,3 +156,15 @@ test("切断とみなすまでの時間は ping の間隔（5 秒）より長い
   assert.strictEqual(P.SILENCE_LIMIT_MS, 15000);
   assert.strictEqual(P.PLAYBACK_FAILS_TO_WARN, 3);
 });
+
+test("確認のカードを出している間は、発話の検出で割り込みも送信もしない（T-2503、ADR-0040）", () => {
+  for (const type of ["start", "end"]) {
+    for (const awaiting of [true, false]) {
+      assert.strictEqual(P.micAction(type, awaiting, true), "ignore");   // 声・物音・読み上げの回り込みで取り消さない
+    }
+  }
+  assert.strictEqual(P.micAction("start", true, false), "barge");        // カードがなければ今までどおり割り込む
+  assert.strictEqual(P.micAction("start", false, false), "start");
+  assert.strictEqual(P.micAction("end", false, false), "send");
+  assert.strictEqual(P.micAction("end", true, false), "send");
+});

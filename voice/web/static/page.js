@@ -167,9 +167,18 @@
     return APPROVAL_RESULTS[result] || "実行しませんでした";
   }
 
+  // 発話の検出のイベント（start・end）をどう扱うか（T-2503、上位 spec §3.4.9、ADR-0040）。
+  // 確認のカードを出している間は、声・物音・読み上げの回り込みで確認を取り消さないよう、割り込みも送信もしない（ボタンだけで決める）。
+  //   "ignore": 何もしない / "barge": 割り込んで録り始める / "start": 録り始める / "send": 録った発話を送る
+  function micAction(type, awaiting, approvalOpen) {
+    if (approvalOpen) return "ignore";
+    if (type === "start") return awaiting ? "barge" : "start";
+    return "send";
+  }
+
   const api = { PLAYBACK_FAILS_TO_WARN, SILENCE_LIMIT_MS, PROBLEMS, problem, micErrorKind, createSeqFilter,
                 turnDecision, createFailCounter, bargeTiming, bargeNote, postOutcome, createCutHold,
-                approvalShown, approvalMatches, secondsLeft, approvalResultText };
+                approvalShown, approvalMatches, secondsLeft, approvalResultText, micAction };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JarvisPage = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
