@@ -66,10 +66,21 @@
     body.className = "text";
     body.textContent = text;
     div.append(who, body);
-    $("log").append(div);
-    div.scrollIntoView({ block: "end" });
+    $("log").append(div);                   // 一番下へ送るのは followLog（T-2902）
     return body;
   }
+
+  // 会話の記録だけをスクロールし、一番下を見ているときは新しい行・逐次の回答・欄の大きさの変化で送り続ける（T-2902）
+  function followLog() {
+    const log = $("log");
+    if (!log || typeof log.addEventListener !== "function" || typeof MutationObserver === "undefined") return;
+    let follow = true;
+    const toBottom = () => { if (follow) log.scrollTop = log.scrollHeight; };
+    log.addEventListener("scroll", () => { follow = P.atBottom(log.scrollTop, log.clientHeight, log.scrollHeight); });
+    new MutationObserver(toBottom).observe(log, { childList: true, subtree: true, characterData: true });
+    if (typeof ResizeObserver !== "undefined") new ResizeObserver(toBottom).observe(log);
+  }
+  followLog();
 
   // 異常を表示する（種類ごとの文言と次の操作は page.js）。会話を終える異常は呼び出し側で end する
   function showProblem(kind) {

@@ -5,10 +5,14 @@
 :root { --bg:#f8fafc; --fg:#0f172a; --muted:#64748b; --card:#fff; --line:#e2e8f0; --ok:#16a34a; --ng:#dc2626; --busy:#d97706; --speak:#2563eb; }
 @media (prefers-color-scheme: dark) { :root { --bg:#0b1120; --fg:#e2e8f0; --muted:#94a3b8; --card:#111827; --line:#1f2937; --speak:#60a5fa; } }
 * { box-sizing:border-box; }
+/* 上部（見出し・ボタン・状態・確認のカード）を固定し、会話の記録だけをスクロールする（T-2902） */
+html, body { height:100%; }
+body { display:flex; flex-direction:column; height:100vh; height:100dvh; overflow:hidden; }
 body { margin:0; font-family:-apple-system, "Segoe UI", "Hiragino Sans", "Meiryo", "Noto Sans JP", sans-serif; background:var(--bg); color:var(--fg); }
-header { padding:16px 24px; border-bottom:1px solid var(--line); }
+header { flex:none; padding:16px 24px; border-bottom:1px solid var(--line); }
 header h1 { margin:0; font-size:19px; }
-main { padding:16px 24px 48px; max-width:900px; margin:0 auto; }
+main { flex:1; min-height:0; width:100%; max-width:900px; margin:0 auto; padding:16px 24px 16px; display:flex; flex-direction:column; }
+.top { flex:none; }
 .muted { color:var(--muted); font-size:13px; }
 .controls { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
 button { font:inherit; padding:6px 14px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--fg); cursor:pointer; }
@@ -17,24 +21,26 @@ button:disabled { opacity:.5; cursor:default; }
 .status.listening { color:var(--ok); } .status.busy { color:var(--busy); } .status.error { color:var(--ng); }
 .status.speaking { color:var(--speak); }
 #note { min-height:1.4em; margin:6px 0; }
-#log { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 12px; min-height:200px; }
+#log { flex:1; min-height:120px; overflow-y:auto; overscroll-behavior:contain; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 12px; }
 .line { padding:6px 0; border-bottom:1px solid var(--line); white-space:pre-wrap; word-break:break-word; }
 .line:last-child { border-bottom:0; }
 .who { display:inline-block; min-width:5.5em; color:var(--muted); font-size:13px; }
 .line.error .text { color:var(--ng); } .line.system .text { color:var(--muted); }
 .approval { margin:8px 0; padding:10px 12px; border-radius:8px; background:var(--card); border:2px solid var(--busy); }
-.approval-text { white-space:pre-wrap; word-break:break-word; margin-bottom:8px; }
+.approval-text { white-space:pre-wrap; word-break:break-word; margin-bottom:8px; max-height:28vh; overflow-y:auto; }
+.approval { max-height:60vh; overflow-y:auto; }
 .approval .controls { margin-bottom:0; align-items:center; }
 .approval input { font-size:16px; padding:6px 8px; width:9em; }
 .approval .edit-area { display:flex; flex-direction:column; gap:6px; margin-bottom:8px; }
 .approval .edit-area[hidden] { display:none; }
 .approval .edit-area input, .approval .edit-area textarea { width:100%; box-sizing:border-box; font-size:16px; padding:6px 8px; font-family:inherit; }
-.approval .edit-area textarea { min-height:8em; resize:vertical; }
+.approval .edit-area textarea { min-height:6em; max-height:25vh; resize:vertical; }
 @media (max-width:600px) { main, header { padding-left:16px; padding-right:16px; } }
 </style></head><body>
 <header><h1>JARVIS 声の会話</h1>
 <div class="muted">「会話を始める」を 1 回押してマイクを許可すると、話すたびに自動で区切って送ります。認識した文と回答を文字で表示し、回答を文ごとに読み上げます。考えている間・読み上げている間に話し始めると、読み上げを止めて新しい発言を聞きます。始めに短いあいさつを流してスピーカーからの回り込みを測ります（黙っていてください）。接続が切れたら会話を終えます（もう一度「会話を始める」で新しい会話）。「終了」と話しても終わります。書き込みのある操作は、画面の「実行する」を 60 秒以内に押したときだけ実行します（知識の候補は「直す」で題名・本文を書き換えて「直して保存」もできます。声の「はい」では実行しません。確認を待っている間は、声や物音では取り消されません。やめるときは「実行しない」を押してください）。Obsidian のノートの削除・全体の置き換えは、続けて入力欄に「削除」「置き換え」と入力して送ったときだけ実行します。</div></header>
 <main>
+<div class="top">
 <div class="controls">
   <button id="start">会話を始める</button>
   <button id="pause" disabled>マイクを一時停止</button>
@@ -61,6 +67,7 @@ button:disabled { opacity:.5; cursor:default; }
     <button id="edit-cancel" hidden>やめる</button>
     <span id="approval-left" class="muted"></span>
   </div>
+</div>
 </div>
 <div id="log" aria-live="polite"></div>
 </main>
