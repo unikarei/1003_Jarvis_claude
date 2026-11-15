@@ -180,7 +180,7 @@ def test_private_web_address_never_starts_worker(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [(None, None, None, None, ("127.0.0.1", 80))])
     monkeypatch.setattr(llm, "ClaudeSession", lambda *a, **k: pytest.fail("非公開 URL に接続した"))
     consent.grant("web_fetch")
-    with pytest.raises(ValueError):
+    with pytest.raises(tools.ToolFailed):
         tools.execute(orc.Context(), "web_fetch", {"url": "http://internal.example/"})
 
 
@@ -302,3 +302,41 @@ def test_browser_approval_reaches_common_tool_gate(monkeypatch):
     finally:
         s.end()
         skills.reset_cache()
+
+
+def test_web_failure_becomes_tool_result_not_harness_failure(monkeypatch):
+    # DNS の失敗・Web の専用 Claude の上限は、会話のハーネスの失敗（休止・切り替え）にしない（Claude レビュー T-2502）
+    def no_dns(*a, **k):
+        raise socket.gaierror("no name")
+    monkeypatch.setattr(socket, "getaddrinfo", no_dns)
+    c, _ = ctx()
+    handle = Handle([request("web_fetch", url="https://example.com/"), "取得できませんでした。"])
+    text, used = tools.answer(handle, "q", c, lambda _: None)
+    assert text == "取得できませんでした。" and used == []
+    assert '"executed": false' in handle.messages[1] and "実行できませんでした" in handle.messages[1]
+
+    class Limited:
+        def __init__(self, *a, **k):
+            pass
+        def ask(self, *a, **k):
+            raise llm.LLMUnavailable("usage limit", "limit")
+        def close(self):
+            pass
+    monkeypatch.setattr(llm, "ClaudeSession", Limited)
+    handle = Handle([request("web_search", query="今日の天気"), "調べられませんでした。"])
+    assert tools.answer(handle, "q", c, lambda _: None) == ("調べられませんでした。", [])
+
+
+def test_private_address_is_reported_to_model():
+    c, _ = ctx()
+    handle = Handle([request("web_fetch", url="http://127.0.0.1/"), "取得できません。"])
+    assert tools.answer(handle, "q", c, lambda _: None) == ("取得できません。", [])
+    assert "ローカル・プライベート宛て" in handle.messages[1]
+
+
+def test_fenced_request_is_accepted_and_hidden():
+    c, _ = ctx()
+    shown = []
+    handle = Handle(["```json\n" + request("jarvis_status") + "\n```", "正常です。"])
+    text, used = tools.answer(handle, "q", c, shown.append)
+    assert (text, used, shown) == ("正常です。", ["jarvis_status"], ["正常です。"])
