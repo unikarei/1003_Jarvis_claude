@@ -422,7 +422,8 @@
     status(source ? "話しています" : "聞いています", source ? "speaking" : "listening");
   }
 
-  const approvalControls = ["approve-run", "approve-decline", "approve-send", "approve-word", "approve-later"];
+  const approvalControls = ["approve-run", "approve-decline", "approve-send", "approve-word", "approve-later",
+                            "approve-edit", "edit-save", "edit-cancel", "edit-title", "edit-body"];
   function holdApproval(c) {
     c.approval = approval;
     c.buttons = approvalControls.map(id => $(id).disabled);
@@ -651,8 +652,8 @@
   function showApproval(ev) {
     if (!P.approvalShown(ev, turn, cut) || turnDone) return;
     clearApproval();
-    const started = performance.now();
-    const a = { turn: ev.turn, id: ev.id, timer: null, input: ev.input === true, review: ev.choices === "review" };
+    const a = { turn: ev.turn, id: ev.id, timer: null, input: ev.input === true, review: ev.choices === "review",
+                edit: ev.choices === "review" && ev.edit ? ev.edit : null, editing: false, held: false };
     approval = a;
     $("approval-text").textContent = ev.text;
     // 2 段目の確認（T-1702）: 「実行する」の代わりに入力欄と「送る」を出す。語の照合はサーバーが行う
@@ -669,17 +670,84 @@
     $("approve-decline").textContent = a.review ? "保存しない" : "実行しない";
     $("approve-later").hidden = !a.review;
     $("approve-later").disabled = !a.review;
+    $("approve-edit").hidden = !a.edit;      // 知識の候補の「直す」（T-2900）
+    $("approve-edit").disabled = !a.edit;
     if (a.input) $("approve-word").focus();
-    const tick = () => {
-      $("approval-left").textContent = "残り " + P.secondsLeft(ev.expires_in, started, performance.now()) + " 秒";
-    };
-    tick();
-    a.timer = setInterval(tick, 250);
-    a.deadline = started + Math.max(0, ev.expires_in) * 1000;
+    startCountdown(a, ev.expires_in);
     if (candidate) holdApproval(candidate);
     $("approval").hidden = false;
     status(a.input ? "確認を待っています（入力欄に入力して送ってください）" : "確認を待っています（画面のボタンで答えてください）",
            "busy");
+  }
+
+  function startCountdown(a, expiresIn) {
+    if (a.timer) clearInterval(a.timer);
+    const started = performance.now();
+    const tick = () => {
+      $("approval-left").textContent = "残り " + P.secondsLeft(expiresIn, started, performance.now()) + " 秒";
+    };
+    tick();
+    a.timer = setInterval(tick, 250);
+    a.deadline = started + Math.max(0, expiresIn) * 1000;
+  }
+
+  // 知識の候補の「直す」・「やめる」（T-2900）。入力欄とボタンを切り替える
+  function setEditing(a, on) {
+    a.editing = on;
+    $("edit-area").hidden = !on;
+    $("edit-title").disabled = !on;
+    $("edit-body").disabled = !on;
+    $("edit-save").hidden = !on;
+    $("edit-save").disabled = !on;
+    $("edit-cancel").hidden = !on;
+    $("edit-cancel").disabled = !on;
+    ["approve-run", "approve-decline", "approve-later", "approve-edit"].forEach(id => {
+      $(id).hidden = on; $(id).disabled = on;
+    });
+    if (on) $("edit-body").focus();
+  }
+
+  // 「直す」: 初めてなら期限を延ばしてもらい（1 回だけ）、題名・本文の入力欄を出す
+  async function startEdit() {
+    const a = approval;
+    if (!a || !a.edit || !session || candidate) return;
+    $("approve-edit").disabled = true;
+    if (!a.held) {
+      const sid = session;
+      let res;
+      try {
+        res = await checked("approve", await post(q("/api/approve"), JSON.stringify({ turn: a.turn, id: a.id, decision: "hold" }),
+                                                  { "Content-Type": "application/json" }), sid);
+      } catch (e) { lost(sid); return; }
+      if (approval !== a) return;
+      if (res.outcome !== "ok") { $("approve-edit").disabled = false; note("直せませんでした（期限が切れたか、取り消されました）"); return; }
+      a.held = true;
+      startCountdown(a, Number(res.body.expires_in) || 0);
+    }
+    if (!a.editingInit) {
+      $("edit-title").value = a.edit.title || "";
+      $("edit-body").value = a.edit.body || "";
+      a.editingInit = true;
+    }
+    setEditing(a, true);
+  }
+
+  function saveEdit() {
+    const a = approval;
+    if (!a || !a.editing || !session || candidate) return;
+    const fields = P.editPayload($("edit-title").value, $("edit-body").value);
+    if (!fields) { note("題名と本文を入れてください（題名は 80 文字、本文は 2,000 文字まで）"); return; }
+    approvalControls.forEach(id => { $(id).disabled = true; });
+    const sid = session;
+    post(q("/api/approve"), JSON.stringify(Object.assign({ turn: a.turn, id: a.id, decision: "edit" }, fields)),
+         { "Content-Type": "application/json" })
+      .then(r => checked("approve", r, sid))
+      .then(res => {
+        if (res.outcome === "ok" || approval !== a) return;
+        note("保存できませんでした（期限が切れたか、内容が受け付けられません）");
+        if (res.body && res.body.error === "bad_edit") setEditing(a, true);
+      })
+      .catch(() => lost(sid));
   }
 
   // 押したら 1 回だけ送り、ボタンを無効にする（結果は approval_done で出す）
@@ -728,6 +796,15 @@
     $("approve-send").disabled = true;
     $("approve-later").hidden = true;
     $("approve-later").disabled = true;
+    $("approve-edit").hidden = true;
+    $("approve-edit").disabled = true;
+    $("edit-area").hidden = true;
+    $("edit-title").value = "";
+    $("edit-body").value = "";
+    $("edit-save").hidden = true;
+    $("edit-save").disabled = true;
+    $("edit-cancel").hidden = true;
+    $("edit-cancel").disabled = true;
     $("approve-run").textContent = "実行する";
     $("approve-decline").textContent = "実行しない";
   }
@@ -813,6 +890,9 @@
   $("approve-decline").onclick = () => answerApproval("decline");
   $("approve-send").onclick = () => answerApproval("run");
   $("approve-later").onclick = () => answerApproval("later");
+  $("approve-edit").onclick = () => { startEdit(); };
+  $("edit-save").onclick = saveEdit;
+  $("edit-cancel").onclick = () => { if (approval && approval.editing) setEditing(approval, false); };
   $("approve-word").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); answerApproval("run"); } });
   $("end").onclick = () => { status("会話を終えました", ""); end(true); };
   $("pause").onclick = () => {

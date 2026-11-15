@@ -4,6 +4,7 @@
 偽の LLM（抽出を差し替え）・一時の Vault・一時の DB・偽の音声・偽のブラウザだけを使う。
 """
 
+from types import SimpleNamespace
 import queue
 
 import numpy as np
@@ -227,7 +228,7 @@ def test_capture_with_no_history_reviews_pending_candidates(monkeypatch):
         return "1 件を保存しました。"
     monkeypatch.setattr(chat_actions, "review_pending_with_cards", fake_review)
     ctx = orc.Context(terminal=False)
-    ctx.review = lambda text, spoken=None: "save"
+    ctx.review = lambda text, spoken=None, edit=None: "save"
     assert orc._capture({}, ctx, "ナレッジ化して") == ("1 件を保存しました。", []) and seen["called"]
     monkeypatch.setattr(chat_actions, "review_pending_with_cards", lambda decide, gate=None: None)
     assert orc._capture({}, ctx, "ナレッジ化して")[0] == "ナレッジ化する対話がまだありません。"
@@ -239,7 +240,7 @@ def _with_history():
     ctx = orc.Context(terminal=False)
     ctx.history = [Turn(Speaker.OWNER, "あれ、地下して")]
     spoken = []
-    ctx.review = lambda text, spoken_text=None: spoken.append(spoken_text) or "later"
+    ctx.review = lambda text, spoken_text=None, edit=None: spoken.append(spoken_text) or "later"
     return ctx, spoken
 
 
@@ -253,7 +254,7 @@ def test_no_new_candidate_reviews_pending_with_notice(monkeypatch, found):
         def fail(history):
             raise ExtractError("保存できる候補がありませんでした（候補なし）")
         monkeypatch.setattr(chat_actions, "capture_candidates", fail)
-    pending = [object(), object()]
+    pending = [SimpleNamespace(title="t1", body="b1"), SimpleNamespace(title="t2", body="b2")]
     monkeypatch.setattr("ckc.store.list_candidates", lambda *a, **k: pending)
     monkeypatch.setattr("ckc.review.card_text", lambda c, i, n: f"card {i}/{n}")
     monkeypatch.setattr("ckc.review.decide_each",

@@ -354,7 +354,8 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float, allowed_ho
             self._json(200, {"ok": True})
 
         def _approve(self, q, body: bytes):
-            """画面での承認 {"turn", "id", "decision": run|decline, "text"（2 段目の確認の語、任意）}（T-1504、BV-09、T-1702）。待っている要求と ID・発言の番号が
+            """画面での承認 {"turn", "id", "decision": run|decline|later|edit|hold, "text"（2 段目の確認の語、任意）,
+            "title"・"body"（edit の直した題名・本文、T-2900）}（T-1504、BV-09、T-1702）。hold は期限を延ばし {"expires_in"} を返す。待っている要求と ID・発言の番号が
             一致し、期限内のときだけ 200。違う・期限切れ・使用済み・会話が違うなら 409（何も実行しない）。"""
             session = sessions.get(q.get("session"))
             if session is None:
@@ -368,10 +369,18 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float, allowed_ho
             turn, approval_id, decision = data.get("turn"), data.get("id"), data.get("decision")
             text = data.get("text")           # 2 段目の確認で入力した語（T-1702。照合は session、記録しない）
             if (not isinstance(turn, int) or isinstance(turn, bool) or not isinstance(approval_id, str)
-                    or not 0 < len(approval_id) <= 64 or decision not in ("run", "decline", "later")
+                    or not 0 < len(approval_id) <= 64 or decision not in ("run", "decline", "later", "edit", "hold")
                     or (text is not None and not isinstance(text, str))):
                 return self._json(400, {"error": "bad_request"})
-            if session.approve(turn, approval_id, decision, text) != "ok":
+            if decision == "hold":            # 知識の候補の「直す」: 期限を延ばす（T-2900）
+                seconds = session.hold(turn, approval_id)
+                if seconds is None:
+                    return self._json(409, {"error": "stale_approval"})
+                return self._json(200, {"ok": True, "expires_in": seconds})
+            result = session.approve(turn, approval_id, decision, text, data.get("title"), data.get("body"))
+            if result == "bad":
+                return self._json(400, {"error": "bad_edit"})
+            if result != "ok":
                 return self._json(409, {"error": "stale_approval"})
             self._json(200, {"ok": True})
 

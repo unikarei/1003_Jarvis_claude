@@ -47,6 +47,9 @@ APPROVAL_SECONDS = 60         # 承認の要求の期限（T-1504）
 APPROVAL_SPOKEN = "書き込みがあります。画面で確認してください。"
 DECISIONS = {"run": "run", "decline": "declined", "later": "later"}   # /api/approve の decision → approval_done の result
 MAX_TYPED = 16                # 2 段目の確認で入力する語の長さの上限（T-1702）
+EDIT_SECONDS = 600            # 知識の候補を「直す」ときに延ばす期限（上位 spec §3.3.13 B、ADR-0042、T-2900）
+MAX_EDIT_TITLE = 80           # 直した題名の長さの上限（ckc.schema.MAX_TITLE_LEN と同じ）
+MAX_EDIT_BODY = 2000          # 直した本文の長さの上限
 OBSIDIAN_SKILL = orchestrator.OBSIDIAN_SKILL
 
 
@@ -81,16 +84,28 @@ class _Approval:
     """承認の要求 1 つ（T-1504）。answer は Owner の答え（run / declined）、result は確定した結果（approval_done の
     result）。どちらも 1 回だけ決まる。"""
 
-    __slots__ = ("id", "turn", "deadline", "answer", "result", "event", "expect", "review")
+    __slots__ = ("id", "turn", "deadline", "answer", "result", "event", "expect", "review", "edit", "held")
 
     def __init__(self, turn: int, deadline: float, expect: str | None = None, review: bool = False):
         self.id = secrets.token_urlsafe(16)
         self.turn, self.deadline = turn, deadline
         self.expect = expect              # 2 段目の確認で求める語（サーバーが決めて照合する、T-1702）
         self.review = review              # 知識の候補の確認（保存する・保存しない・あとで、T-1802）
+        self.edit: tuple[str, str] | None = None   # 「直して保存」の題名・本文（T-2900）
+        self.held = False                 # 「直す」で期限を延ばした（1 回だけ）
         self.answer: str | None = None
         self.result: str | None = None
         self.event = threading.Event()
+
+
+def edit_fields(title, body) -> tuple[str, str] | None:
+    """「直して保存」の題名・本文（T-2900）。前後の空白を除き、空・長すぎる・文字列でないなら None。"""
+    if not isinstance(title, str) or not isinstance(body, str):
+        return None
+    title, body = title.strip(), body.strip()
+    if not title or not body or len(title) > MAX_EDIT_TITLE or len(body) > MAX_EDIT_BODY:
+        return None
+    return title, body
 
 
 def confirm_prompt(prompt: str) -> str:
@@ -406,17 +421,26 @@ class WebSession:
                 except Exception as e:  # noqa: BLE001
                     print(f"[音声] エンジンを止められませんでした（{type(e).__name__}）", file=sys.stderr)
 
-    def approve(self, turn: int, approval_id: str, decision: str, text: str | None = None) -> str:
+    def approve(self, turn: int, approval_id: str, decision: str, text: str | None = None,
+                title: str | None = None, body: str | None = None) -> str:
         """画面の「実行する」（decision="run"）・「実行しない」（"decline"）。返り値は "ok" / "stale"。
         待っている要求と ID・発言の番号が一致し、期限内で、まだ答えていないときだけ受け付ける。stale は何もしない
         （server.py が 409 にする）。実行するかは要求を待っている側（_ask）が、割り込み・終了と合わせて決める。
         求める語のある要求（2 段目の確認、T-1702）の "run" は、text の前後の空白を除いたものが語に一致するときだけ
-        run。違う・ない・長すぎるときは declined で確定する（やり直しは受け付けない）。入力した語は残さない。"""
+        run。違う・ない・長すぎるときは declined で確定する（やり直しは受け付けない）。入力した語は残さない。
+        "edit"（「直して保存」、T-2900）は知識の候補の確認でだけ受け付け、title・body が空・長すぎるなら "bad"
+        （server.py が 400 にする。何も決めない）。"""
         answer = DECISIONS.get(decision)
+        edited = None
+        if decision == "edit":
+            edited = edit_fields(title, body)
+            if edited is None:
+                return "bad"
+            answer = "edited"
         with self._lock:
             req = self._approval
-            if req is not None and answer == "later" and not req.review:
-                answer = None                 # 「あとで」は知識の候補の確認でだけ受け付ける
+            if req is not None and answer in ("later", "edited") and not req.review:
+                answer = None                 # 「あとで」「直して保存」は知識の候補の確認でだけ受け付ける
             if (answer is None or self.closed or req is None or req.answer is not None or req.result is not None
                     or turn != req.turn or turn in self._cut
                     or not hmac.compare_digest(req.id.encode(), str(approval_id).encode())
@@ -427,8 +451,23 @@ class WebSession:
                 if typed is None or not hmac.compare_digest(typed.encode(), req.expect.encode()):
                     answer = "declined"
             req.answer = answer
+            req.edit = edited
             req.event.set()
         return "ok"
+
+    def hold(self, turn: int, approval_id: str) -> float | None:
+        """知識の候補の「直す」（T-2900）: 待っている要求の期限を EDIT_SECONDS 先に 1 回だけ延ばし、残りの秒数を返す。
+        知識の候補でない・ID や発言の番号が違う・期限切れ・答えた後・2 回目は None（server.py が 409 にする）。"""
+        with self._lock:
+            req = self._approval
+            if (self.closed or req is None or not req.review or req.held or req.answer is not None
+                    or req.result is not None or turn != req.turn or turn in self._cut
+                    or not hmac.compare_digest(req.id.encode(), str(approval_id).encode())
+                    or self.clock() >= req.deadline):
+                return None
+            req.held = True
+            req.deadline = self.clock() + EDIT_SECONDS
+            return float(EDIT_SECONDS)
 
     def _capture_in_background(self, history: list) -> None:
         import chat_actions
@@ -444,12 +483,17 @@ class WebSession:
 
     # ------------------------------------------------------------ 承認（T-1504）
 
-    def _review(self, turn: int, text: str, spoken: str | None = None) -> str:
+    def _review(self, turn: int, text: str, spoken: str | None = None, edit: dict | None = None):
         """知識の候補 1 件の確認（T-1802）。画面の「保存する」→ "save"、「保存しない」→ "reject"、「あとで」・期限切れ →
-        "later"。割り込み・終了・切断・会話が終わっている → "stop"（残りの候補も保存待ちにする）。声の発言は答えにならない。"""
-        answer = self._ask(turn, text, spoken=spoken, review=True)
+        "later"。割り込み・終了・切断・会話が終わっている → "stop"（残りの候補も保存待ちにする）。声の発言は答えにならない。
+        edit（直す欄の初期値 {"title", "body"}）を渡せば「直す」を出し、「直して保存」→ ckc.review.Edited（T-2900）。"""
+        holder: list = []
+        answer = self._ask(turn, text, spoken=spoken, review=True, edit=edit, edited=holder)
         if answer == "y":
             return "save"
+        if answer == "edited" and holder:
+            from ckc.review import Edited
+            return Edited(*holder[0])
         if answer == "reject":
             return "reject"
         with self._lock:
@@ -458,7 +502,7 @@ class WebSession:
         return "later"
 
     def _ask(self, turn: int, prompt: str, spoken: str | None = None, expect: str | None = None,
-             review: bool = False) -> str:
+             review: bool = False, edit: dict | None = None, edited: list | None = None) -> str:
         """orchestrator.execute の確認。発言 turn 専用の承認の要求を作って画面に出し、答え・期限・割り込み・終了の
         どれかまで待つ。「実行する」が、その ID・その発言・期限内・会話が続いている・割り込まれていない、のすべてを
         満たしたときだけ "y"。それ以外はすべて "n"。
@@ -472,6 +516,8 @@ class WebSession:
             extra = {"input": True, "word": expect} if expect is not None else {}
             if review:
                 extra = {"choices": "review"}   # 画面のボタンを「保存する・保存しない・あとで」にする
+                if edit is not None:            # 「直す」の入力欄の初期値（T-2900）
+                    extra["edit"] = {"title": str(edit.get("title", "")), "body": str(edit.get("body", ""))}
             self._send_locked("approval", turn, id=req.id, text=confirm_prompt(prompt), expires_in=APPROVAL_SECONDS,
                               **extra)
         self.speaker.say(spoken or APPROVAL_SPOKEN, turn=turn)   # 割り込まれていれば番号が違うので読まない
@@ -482,14 +528,18 @@ class WebSession:
                         req.result = req.answer
                     elif self.clock() >= req.deadline:
                         req.result = "expired"
-                    if req.result is not None and req.result != "run":
+                    if req.result is not None and req.result not in ("run", "edited"):
                         if self._approval is req:
                             self._approval = None
                         self._send_locked("approval_done", turn, id=req.id, result=req.result)
-                    # run は実行の直前（_before_run）まで要求を残し、それまでの割り込み・終了で取り消せるようにする
+                    # run・edited は実行（保存）の直前（_before_run）まで要求を残し、それまでの割り込み・終了で取り消せるようにする
                 if req.result is not None:
                     if req.review and req.result == "declined":
                         return "reject"
+                    if req.review and req.result == "edited":
+                        if edited is not None and req.edit is not None:
+                            edited.append(req.edit)
+                        return "edited"
                     if req.result != "run":
                         return "n"
                     return req.expect if req.expect is not None else "y"
@@ -501,11 +551,12 @@ class WebSession:
         割り込み・終了と同じロックで判定するので、実行を始めた後の取り消しと、取り消した後の実行は起きない。"""
         with self._lock:
             req = self._approval
-            if req is None or req.turn != turn or req.result != "run" or self.closed or turn in self._cut:
+            if (req is None or req.turn != turn or req.result not in ("run", "edited") or self.closed
+                    or turn in self._cut):
                 return False
             self._approval = None
             self._ran.add(turn)
-            self._send_locked("approval_done", turn, id=req.id, result="run")
+            self._send_locked("approval_done", turn, id=req.id, result=req.result)
             return True
 
     def _cancel_approval_locked(self, turn: int | None = None) -> None:
@@ -516,7 +567,7 @@ class WebSession:
         if req is None or (turn is not None and req.turn != turn):
             return
         self._approval = None
-        if req.result in (None, "run"):
+        if req.result in (None, "run", "edited"):
             req.result = "cancelled"
             self._emit_locked("approval_done", req.turn, id=req.id, result="cancelled")
         req.event.set()
@@ -689,7 +740,7 @@ class WebSession:
         ctx.stream = stream
         ctx.cancel = lambda t=turn: self.closed or t != self.speaker.turn   # voice_chat.run_barge_in と同じ
         ctx.before_run = lambda t=turn: self._before_run(t)   # 承認の後、実行の直前にもう一度確かめる（T-1504）
-        ctx.review = lambda text, spoken=None, t=turn: self._review(t, text, spoken)   # 知識の候補の確認（T-1802）
+        ctx.review = lambda text, spoken=None, edit=None, t=turn: self._review(t, text, spoken, edit)   # 知識の候補の確認（T-1802・T-2900）
         try:
             outcome = self.handle(text, ctx, ask=lambda prompt, spoken=None, expect=None:   # 確認は画面で（T-1504）
                                   self._ask(turn, prompt, spoken=spoken, expect=expect))

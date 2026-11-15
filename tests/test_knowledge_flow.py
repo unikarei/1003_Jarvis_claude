@@ -29,7 +29,7 @@ def test_recognition_alias_preserves_edit_route():
 def test_inline_save_content_reaches_capture(monkeypatch):
     import chat_actions
     text = '売り主は売却に前向き。進捗として記録しておいて'
-    ctx = orc.Context(terminal=False, review=lambda *args: 'later')
+    ctx = orc.Context(terminal=False, review=lambda *args, **kw: 'later')
     seen = []
     monkeypatch.setattr(chat_actions, 'run_ckc_with_cards', lambda history, *a: (seen.extend(history) or '候補', False))
     orc._capture({}, ctx, text)
@@ -92,7 +92,7 @@ def test_save_review_then_retrieve_in_new_context(project, vault_name, choice, d
         return body + '。[1]'
 
     monkeypatch.setattr(llm, 'complete', fake)
-    ctx = orc.Context(terminal=False, review=lambda card, spoken: cards.append(card) or choice)
+    ctx = orc.Context(terminal=False, review=lambda card, spoken, edit=None: cards.append(card) or choice)
     outcome = orc.handle(request, ctx, ask=lambda *a: 'y', use_llm=False)
     assert outcome.ok, outcome.text
     assert cards and vault_name in cards[0]
@@ -153,7 +153,7 @@ def test_obsidian_knowledge_request_includes_target_context(monkeypatch):
     import chat_actions
     text = '売り主は売却に前向き。大洗のObsidianにナレッジを入れて'
     seen = []
-    ctx = orc.Context(terminal=False, review=lambda *a: 'later')
+    ctx = orc.Context(terminal=False, review=lambda *a, **kw: 'later')
     monkeypatch.setattr(chat_actions, 'run_ckc_with_cards', lambda history, *a: (seen.extend(history) or '候補', False))
     orc._capture({}, ctx, text)
     assert seen[-1].text == text

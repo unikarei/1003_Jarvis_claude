@@ -161,7 +161,8 @@
   const APPROVAL_RESULTS = { run: "実行しました", declined: "実行しませんでした",
                              expired: "期限が切れたので実行しませんでした",
                              cancelled: "取り消したので実行しませんでした",
-                             later: "あとで（保存待ち）にしました" };
+                             later: "あとで（保存待ち）にしました",
+                             edited: "直した内容で保存します" };
 
   function approvalResultText(result) {
     return APPROVAL_RESULTS[result] || "実行しませんでした";
@@ -170,6 +171,14 @@
   // 発話の検出のイベント（start・end）をどう扱うか（T-2503、上位 spec §3.4.9、ADR-0040）。
   // 確認のカードを出している間は、声・物音・読み上げの回り込みで確認を取り消さないよう、割り込みも送信もしない（ボタンだけで決める）。
   //   "ignore": 何もしない / "barge": 割り込んで録り始める / "start": 録り始める / "send": 録った発話を送る
+  // 「直して保存」で送る題名・本文（T-2900、上位 spec §3.3.13 B）。前後の空白を除き、空・長すぎるなら null（送らない）
+  const MAX_EDIT_TITLE = 80, MAX_EDIT_BODY = 2000;
+  function editPayload(title, body) {
+    const t = String(title || "").trim(), b = String(body || "").trim();
+    if (!t || !b || t.length > MAX_EDIT_TITLE || b.length > MAX_EDIT_BODY) return null;
+    return { title: t, body: b };
+  }
+
   function micAction(type, awaiting, approvalOpen) {
     if (approvalOpen) return "ignore";
     if (type === "start") return awaiting ? "barge" : "start";
@@ -178,7 +187,7 @@
 
   const api = { PLAYBACK_FAILS_TO_WARN, SILENCE_LIMIT_MS, PROBLEMS, problem, micErrorKind, createSeqFilter,
                 turnDecision, createFailCounter, bargeTiming, bargeNote, postOutcome, createCutHold,
-                approvalShown, approvalMatches, secondsLeft, approvalResultText, micAction };
+                approvalShown, approvalMatches, secondsLeft, approvalResultText, micAction, editPayload };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JarvisPage = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

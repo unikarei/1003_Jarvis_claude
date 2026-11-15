@@ -26,10 +26,14 @@ button:disabled { opacity:.5; cursor:default; }
 .approval-text { white-space:pre-wrap; word-break:break-word; margin-bottom:8px; }
 .approval .controls { margin-bottom:0; align-items:center; }
 .approval input { font-size:16px; padding:6px 8px; width:9em; }
+.approval .edit-area { display:flex; flex-direction:column; gap:6px; margin-bottom:8px; }
+.approval .edit-area[hidden] { display:none; }
+.approval .edit-area input, .approval .edit-area textarea { width:100%; box-sizing:border-box; font-size:16px; padding:6px 8px; font-family:inherit; }
+.approval .edit-area textarea { min-height:8em; resize:vertical; }
 @media (max-width:600px) { main, header { padding-left:16px; padding-right:16px; } }
 </style></head><body>
 <header><h1>JARVIS 声の会話</h1>
-<div class="muted">「会話を始める」を 1 回押してマイクを許可すると、話すたびに自動で区切って送ります。認識した文と回答を文字で表示し、回答を文ごとに読み上げます。考えている間・読み上げている間に話し始めると、読み上げを止めて新しい発言を聞きます。始めに短いあいさつを流してスピーカーからの回り込みを測ります（黙っていてください）。接続が切れたら会話を終えます（もう一度「会話を始める」で新しい会話）。「終了」と話しても終わります。書き込みのある操作は、画面の「実行する」を 60 秒以内に押したときだけ実行します（声の「はい」では実行しません。確認を待っている間は、声や物音では取り消されません。やめるときは「実行しない」を押してください）。Obsidian のノートの削除・全体の置き換えは、続けて入力欄に「削除」「置き換え」と入力して送ったときだけ実行します。</div></header>
+<div class="muted">「会話を始める」を 1 回押してマイクを許可すると、話すたびに自動で区切って送ります。認識した文と回答を文字で表示し、回答を文ごとに読み上げます。考えている間・読み上げている間に話し始めると、読み上げを止めて新しい発言を聞きます。始めに短いあいさつを流してスピーカーからの回り込みを測ります（黙っていてください）。接続が切れたら会話を終えます（もう一度「会話を始める」で新しい会話）。「終了」と話しても終わります。書き込みのある操作は、画面の「実行する」を 60 秒以内に押したときだけ実行します（知識の候補は「直す」で題名・本文を書き換えて「直して保存」もできます。声の「はい」では実行しません。確認を待っている間は、声や物音では取り消されません。やめるときは「実行しない」を押してください）。Obsidian のノートの削除・全体の置き換えは、続けて入力欄に「削除」「置き換え」と入力して送ったときだけ実行します。</div></header>
 <main>
 <div class="controls">
   <button id="start">会話を始める</button>
@@ -40,12 +44,21 @@ button:disabled { opacity:.5; cursor:default; }
 <div id="note" class="muted"></div>
 <div id="approval" class="approval" role="alertdialog" aria-labelledby="approval-text" hidden>
   <div id="approval-text" class="approval-text"></div>
+  <div id="edit-area" class="edit-area" hidden>
+    <label class="muted" for="edit-title">題名（80 文字まで）</label>
+    <input id="edit-title" type="text" maxlength="80" autocomplete="off">
+    <label class="muted" for="edit-body">本文（2,000 文字まで）</label>
+    <textarea id="edit-body" maxlength="2000"></textarea>
+  </div>
   <div class="controls">
     <button id="approve-run">実行する</button>
     <input id="approve-word" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="16" hidden aria-label="確認の語">
     <button id="approve-send" hidden>送る</button>
     <button id="approve-decline">実行しない</button>
     <button id="approve-later" hidden>あとで</button>
+    <button id="approve-edit" hidden>直す</button>
+    <button id="edit-save" hidden>直して保存</button>
+    <button id="edit-cancel" hidden>やめる</button>
     <span id="approval-left" class="muted"></span>
   </div>
 </div>

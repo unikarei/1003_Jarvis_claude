@@ -55,7 +55,7 @@ class Context:
     ask: Callable | None = None                   # 自分で確認するスキル（SELF_CONFIRM）にだけ渡す確認（T-1702）
     active_skill: str | None = None               # 振り分けが決まってから終わるまでのスキル名（声の会話の割り込み、T-1702）
     note_meta: dict | None = None                 # private な結果の記録に残す項目（op・vault・path・結果の短い文）
-    review: Callable | None = None                # 知識の候補を画面で 1 件ずつ聞く（ブラウザ、T-1802）。(表示, 読み上げ) → 答え
+    review: Callable | None = None                # 知識の候補を画面で 1 件ずつ聞く（ブラウザ、T-1802）。(表示, 読み上げ, edit=直す欄の初期値) → 答え
     harness: str = field(default_factory=lambda: _initial_harness())   # auto か ollama・claude・codex（ADR-0035）
     resting: dict = field(default_factory=dict)   # 休止中のハーネス → (期限の clock(), 理由)。保存しない
     llm_info: dict | None = None                  # 直前の答えのハーネス・プロバイダー・切り替えの理由（Task の記録）
@@ -773,14 +773,14 @@ def _capture_with_cards(ctx):
 
     def decide(c, index, total):
         spoken = REVIEW_SPOKEN.format(n=total) if index == 1 else None
-        return ctx.review(card_text(c, index, total), spoken)
+        return ctx.review(card_text(c, index, total), spoken, edit={"title": c.title, "body": c.body})
     if not ctx.history:
         # まだ対話がない（会話の始め）: 保存待ちの候補（前の会話の終わりに作ったもの、T-1803）があれば確認する
         message = review_pending_with_cards(decide, ctx.before_run)
         return message or "ナレッジ化する対話がまだありません。", []
     def pending_decide(c, index, total):
         spoken = PENDING_SPOKEN.format(n=total) if index == 1 else None
-        return ctx.review(card_text(c, index, total), spoken)
+        return ctx.review(card_text(c, index, total), spoken, edit={"title": c.title, "body": c.body})
     message, captured = run_ckc_with_cards(ctx.history, decide, ctx.before_run,
                                            lambda: review_pending_with_cards(pending_decide, ctx.before_run))
     if captured:
