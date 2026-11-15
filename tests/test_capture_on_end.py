@@ -231,3 +231,60 @@ def test_capture_with_no_history_reviews_pending_candidates(monkeypatch):
     assert orc._capture({}, ctx, "ナレッジ化して") == ("1 件を保存しました。", []) and seen["called"]
     monkeypatch.setattr(chat_actions, "review_pending_with_cards", lambda decide, gate=None: None)
     assert orc._capture({}, ctx, "ナレッジ化して")[0] == "ナレッジ化する対話がまだありません。"
+
+
+# ---------------------------------------------------------------- 会話の途中のナレッジ化で候補がないとき（T-2504、上位 spec §3.3.13 B）
+
+def _with_history():
+    ctx = orc.Context(terminal=False)
+    ctx.history = [Turn(Speaker.OWNER, "あれ、地下して")]
+    spoken = []
+    ctx.review = lambda text, spoken_text=None: spoken.append(spoken_text) or "later"
+    return ctx, spoken
+
+
+@pytest.mark.parametrize("found", ["none", "extract_error"])
+def test_no_new_candidate_reviews_pending_with_notice(monkeypatch, found):
+    from ckc.extract import ExtractError
+
+    if found == "none":
+        monkeypatch.setattr(chat_actions, "capture_candidates", lambda history: [])
+    else:
+        def fail(history):
+            raise ExtractError("保存できる候補がありませんでした（候補なし）")
+        monkeypatch.setattr(chat_actions, "capture_candidates", fail)
+    pending = [object(), object()]
+    monkeypatch.setattr("ckc.store.list_candidates", lambda *a, **k: pending)
+    monkeypatch.setattr("ckc.review.card_text", lambda c, i, n: f"card {i}/{n}")
+    monkeypatch.setattr("ckc.review.decide_each",
+                        lambda cands, decide, gate=None: ([decide(c, i, len(cands)) for i, c in enumerate(cands, 1)]
+                                                          and {"saved": 0, "rejected": 0, "later": 2, "failed": 0}))
+    ctx, spoken = _with_history()
+    message, _ = orc._capture({}, ctx, "ナレッジ化して")
+    assert message.startswith("この会話からは新しい候補がありませんでした。保存待ちの候補: ")
+    assert "2 件は保存待ちにしました" in message
+    assert spoken == [orc.PENDING_SPOKEN.format(n=2), None]   # 最初のカードだけ、新しい候補がなかったことと件数を読む
+
+
+
+def test_no_new_candidate_and_no_pending_keeps_the_old_message(monkeypatch):
+    monkeypatch.setattr(chat_actions, "capture_candidates", lambda history: [])
+    monkeypatch.setattr("ckc.store.list_candidates", lambda *a, **k: [])
+    ctx, spoken = _with_history()
+    assert orc._capture({}, ctx, "ナレッジ化して")[0] == "知識の候補はありませんでした。" and spoken == []
+
+
+def test_capture_failure_or_new_candidates_do_not_show_pending(monkeypatch):
+    from ckc.capture import CaptureError
+    called = []
+    monkeypatch.setattr(chat_actions, "review_pending_with_cards", lambda *a, **k: called.append(1) or "x")
+
+    def fail(history):
+        raise CaptureError("秘密情報を検出しました")
+    monkeypatch.setattr(chat_actions, "capture_candidates", fail)
+    ctx, _ = _with_history()
+    assert orc._capture({}, ctx, "ナレッジ化して")[0] == "[CKC] 秘密情報を検出しました"
+    monkeypatch.setattr(chat_actions, "capture_candidates", lambda history: ["new"])
+    monkeypatch.setattr("ckc.review.decide_each", lambda c, d, g=None: {"saved": 1, "rejected": 0, "later": 0, "failed": 0})
+    ctx, _ = _with_history()
+    assert orc._capture({}, ctx, "ナレッジ化して")[0] == "1 件を保存しました。" and called == []

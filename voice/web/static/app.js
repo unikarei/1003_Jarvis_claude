@@ -325,9 +325,16 @@
     if (current) current.push(samples);
     const ev = detector.push(rms);
     if (!ev) return;
+    const action = P.micAction(ev.type, awaiting, approval !== null);
+    if (action === "ignore") {              // 確認のカードを出している間はボタンだけで決める（T-2503）
+      current = null;
+      ring = [];
+      if (ev.type === "start") note("確認を待っている間は声を受け付けません。画面のボタンで選んでください");
+      return;
+    }
     if (ev.type === "start") {
       current = ring.slice();               // 判定の窓と、その前の 0.3 秒を含める
-      if (awaiting) barge(t, ev.onsetFrames);   // 考えている間・話している間なら割り込み
+      if (action === "barge") barge(t, ev.onsetFrames);   // 考えている間・話している間なら割り込み
       return;
     }
     const frames = current;
