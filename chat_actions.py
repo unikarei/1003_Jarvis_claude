@@ -55,8 +55,10 @@ def summary_text(counts: dict) -> str:
     return "。".join(parts) + "。"
 
 
-def run_ckc_with_cards(history: list[Turn], decide, gate=None) -> tuple[str, bool]:
-    """画面で 1 件ずつ答えるナレッジ化（ブラウザでの声の会話、T-1802）。（結果の文, 取り込めたか）。"""
+def run_ckc_with_cards(history: list[Turn], decide, gate=None, on_none=None) -> tuple[str, bool]:
+    """画面で 1 件ずつ答えるナレッジ化（ブラウザでの声の会話、T-1802）。（結果の文, 取り込めたか）。
+    on_none: この会話から新しい候補が出なかった（0 件・抽出で保存できる候補がない）ときに呼ぶ。保存待ちの候補を出して
+    その結果の文を返す（なければ None）。取り込みの失敗（CaptureError）では呼ばない（上位 spec §3.3.13 B、T-2504）。"""
     if not history:
         return "ナレッジ化する対話がまだありません。", False
     from ckc.capture import CaptureError
@@ -65,11 +67,18 @@ def run_ckc_with_cards(history: list[Turn], decide, gate=None) -> tuple[str, boo
 
     try:
         candidates = capture_candidates(history)
-    except (CaptureError, ExtractError) as e:
+    except CaptureError as e:
         return f"[CKC] {e}", False
-    if not candidates:
-        return "知識の候補はありませんでした。", True
-    return summary_text(decide_each(candidates, decide, gate)), True
+    except ExtractError as e:
+        message, captured = f"[CKC] {e}", False
+    else:
+        if candidates:
+            return summary_text(decide_each(candidates, decide, gate)), True
+        message, captured = "知識の候補はありませんでした。", True
+    pending = on_none() if on_none is not None else None
+    if pending:
+        return f"この会話からは新しい候補がありませんでした。保存待ちの候補: {pending}", captured
+    return message, captured
 
 
 def review_pending_with_cards(decide, gate=None) -> str | None:
