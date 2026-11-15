@@ -23,6 +23,7 @@ import latency
 import llm
 import knowledge_connections
 import obsidian_note
+import capture_intent
 import prompts
 import skills
 import tuning
@@ -109,7 +110,7 @@ class Pending:
 class Route:
     skill: str
     inputs: dict
-    method: str          # rule / llm / default
+    method: str          # rule / llm / default / context
 
 
 @dataclass
@@ -331,17 +332,27 @@ def route(text: str, ctx: Context, use_llm: bool | None = None) -> Route:
     use_llm = config.ROUTE_WITH_LLM if use_llm is None else use_llm
     if knowledge_connections.matches(text):
         return Route("knowledge-stats", {}, "rule")
-    if obsidian_note.is_knowledge_request(text) and CAPTURE_SKILL in skills.active():
+    active = skills.active()
+    knowledge_request = obsidian_note.is_knowledge_request(text) and CAPTURE_SKILL in active
+    save_request = obsidian_note.is_capture_request(text)
+    note_request = obsidian_note.matches(text)
+    rule = route_by_rule(text, active)
+    capture_request = knowledge_request or save_request or (
+        not note_request and rule is not None and rule.skill == CAPTURE_SKILL)
+    if capture_request and not capture_intent.immediate(text, ctx.history):
+        # Mentioning saving is not permission to skip an interview, research, or clarification.
+        return Route(CHAT_SKILL if CHAT_SKILL in active else DEFAULT_SKILL,
+                     {"question": text}, "context")
+    if knowledge_request:
         # 「Obsidian にナレッジを入れて」はノートの編集ではなくナレッジ化（spec §3.4.11、T-2202）
         return Route(CAPTURE_SKILL, {}, "rule")
-    if obsidian_note.is_capture_request(text):
+    if save_request:
         return Route(CAPTURE_SKILL, {}, "rule")
-    if obsidian_note.matches(text):
+    if note_request:
         # コードの判定を正とする: 索引の宣言の有無・中身によらず、ほかのスキル・LLM に渡さない（T-1702）。
         # 索引で使えなければ execute が定型文を返す
         return Route(OBSIDIAN_SKILL, {}, "rule")
-    active = skills.active()
-    found = route_by_rule(text, active) or (route_by_llm(text, llm_candidates(active), ctx) if use_llm else None)
+    found = rule or (route_by_llm(text, llm_candidates(active), ctx) if use_llm else None)
     if found:
         return found
     if CHAT_SKILL in active and not is_knowledge_question(text):
