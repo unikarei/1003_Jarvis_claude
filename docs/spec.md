@@ -374,3 +374,7 @@ Owner 事前承認（上位 AGENTS.md §2.1、2026-11-12 の依頼範囲）。`p
 ## 4-16. 管理画面のアドレス案内（T-2700）
 
 状態: Approved（2026-11-15 Owner 指示、詳細は Owner 事前承認（上位 AGENTS.md §2.1））。正本は統合ワークスペース docs/spec.md §3.4.5。control-center の成功時に全経路で Windows/Tailscale・Mac本体・Windows/SSH転送のURLと接続条件を表示する。
+
+## 4-17. ブラウザ音声の雑音による取消を防ぐ（T-2801）
+
+Approved（Owner指示、詳細は上位AGENTS.md §2.1の事前承認）。要件の正本は統合ワークスペース spec §3.4.9、ADR-0041、testing §22。仮停止・既存Sileroでの確認・雑音からの再生復帰を行い、確認だけでは会話・DB・ツールを変更しない。
