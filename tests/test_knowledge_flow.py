@@ -5,6 +5,13 @@ import obsidian_note
 import skills
 from ckc.models import Speaker, Turn
 
+@pytest.fixture(autouse=True)
+def _clear_capture_intent(monkeypatch):
+    # These integration cases exercise capture/review/storage with explicit requests.
+    # Context classification and its failure cases are isolated in test_capture_intent.py.
+    import capture_intent
+    monkeypatch.setattr(capture_intent, 'classify', lambda current, turns: True)
+
 @pytest.mark.parametrize('text', [
     '売り主は売却に前向き。進捗として要約して記録しておいて。',
     'この話を残して', 'この話を残しておいてください', 'この内容を保存してください', '毎朝30分練習する。覚えておいて',
