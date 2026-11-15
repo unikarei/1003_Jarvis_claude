@@ -762,6 +762,8 @@ def _capture(inputs, ctx, text):
 
 
 REVIEW_SPOKEN = "知識の候補が {n} 件あります。画面で 1 件ずつ答えてください。"
+# 会話の途中のナレッジ化で新しい候補がなく、保存待ちを続けて出すとき（上位 spec §3.3.13 B、T-2504）
+PENDING_SPOKEN = "この会話からは新しい候補がありませんでした。保存待ちの候補が {n} 件あります。画面で 1 件ずつ答えてください。"
 
 
 def _capture_with_cards(ctx):
@@ -776,7 +778,11 @@ def _capture_with_cards(ctx):
         # まだ対話がない（会話の始め）: 保存待ちの候補（前の会話の終わりに作ったもの、T-1803）があれば確認する
         message = review_pending_with_cards(decide, ctx.before_run)
         return message or "ナレッジ化する対話がまだありません。", []
-    message, captured = run_ckc_with_cards(ctx.history, decide, ctx.before_run)
+    def pending_decide(c, index, total):
+        spoken = PENDING_SPOKEN.format(n=total) if index == 1 else None
+        return ctx.review(card_text(c, index, total), spoken)
+    message, captured = run_ckc_with_cards(ctx.history, decide, ctx.before_run,
+                                           lambda: review_pending_with_cards(pending_decide, ctx.before_run))
     if captured:
         ctx.history.clear()
     return message, []
