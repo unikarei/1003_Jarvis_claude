@@ -684,7 +684,7 @@ print("OK")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node がない")
-@pytest.mark.parametrize("name", ["vad.test.js", "page.test.js"])
+@pytest.mark.parametrize("name", ["vad.test.js", "page.test.js", "noise.test.js"])
 def test_page_js_with_node(name):
     r = subprocess.run(["node", "--test", str(ROOT / "tests" / "js" / name)], cwd=ROOT,
                        capture_output=True, text=True, timeout=60)

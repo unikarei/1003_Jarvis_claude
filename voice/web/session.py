@@ -325,6 +325,12 @@ class WebSession:
                          daemon=True).start()
         return st.turn
 
+    def can_check_speech(self, turn: int) -> bool:
+        """Read-only validity check; a probe never cancels a turn or approval."""
+        with self._lock:
+            return (not self.closed and self.turn == turn and self._active is not None
+                    and self._active.turn == turn)
+
     def interrupt(self, turn: int) -> str:
         """ブラウザが割り込んだ（/api/interrupt）。返り値は "ok" / "stale"（今処理している発言の番号でない・
         すでに割り込んだ・処理を終えた・終えた会話）。stale は何もしない（server.py が 409 にする）。"""

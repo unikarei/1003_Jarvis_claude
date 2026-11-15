@@ -18,6 +18,7 @@
   let detector = null, paused = false, background = [], ring = [], current = null, answerEl = null;
   // 読み上げ: turn は今の発言の番号、cut は割り込んだ発言の番号の最大。items は順番 → {id, buffer, state, ctrl}
   let turn = 0, cut = -1, items = new Map(), next = 0, source = null, lastEnd = -Infinity;
+  let candidate = null, sourceState = null, heldPlayback = null;
   let turnDone = false;                     // 今の発言の turn_done が届いた（その後の同じ発言の音は再生しない）
   let awaiting = false;                     // 送った発言の turn_done を待っている（考えている間・話している間）
   let sendId = 0, pendingSend = 0;          // 送った発言の通し番号。pendingSend は応答（番号）を待っている発言
@@ -147,7 +148,9 @@
 
   async function openMic() {
     const sid = session;
-    const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
+    const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    const settings = s.getAudioTracks()[0].getSettings();
+    if (settings.noiseSuppression === false) note("このマイクではブラウザの雑音抑制が有効になっていません");
     if (session !== sid) { s.getTracks().forEach(t => t.stop()); return; }   // 許可を待つ間に会話が終わった
     stream = s;
     stream.getAudioTracks().forEach(t => {
@@ -301,7 +304,7 @@
 
   // 再生している間（文の start から最後の文の終了の 0.3 秒後まで）は再生中のしきい値
   function playingNow() {
-    return source !== null || performance.now() - lastEnd < AFTER_SPEECH_MS;
+    return source !== null || heldPlayback !== null || performance.now() - lastEnd < AFTER_SPEECH_MS;
   }
 
   function onFrame(rms, samples, t) {
@@ -319,14 +322,25 @@
       if (calibration.playing) calibration.rms.push(rms);
       return;
     }
+    if (!awaiting && !playingNow() && !detector.speaking && rms < detector.threshold) {
+      background.push(rms);
+      if (background.length > 200) background.shift();
+      const target = V.thresholdFrom(background, config.threshold_factor, config.min_threshold);
+      detector.setThreshold(detector.threshold * 0.99 + target * 0.01);
+    }
     detector.setPlaying(playingNow());
     ring.push(samples);
     if (ring.length > detector.backFrames) ring.shift();
     if (current) current.push(samples);
+    if (candidate && !candidate.probing && current && current.length >= 60) probeSpeech(candidate);
     const ev = detector.push(rms);
+    if (candidate && candidate.evidence && (detector.hasEnoughSpeech || (ev && ev.keep))) {
+      finishCandidate(candidate, true);
+    }
     if (!ev) return;
     const action = P.micAction(ev.type, awaiting, approval !== null);
     if (action === "ignore") {              // 確認のカードを出している間はボタンだけで決める（T-2503）
+      if (candidate && !candidate.confirmed) finishCandidate(candidate, false);
       current = null;
       ring = [];
       if (ev.type === "start") note("確認を待っている間は声を受け付けません。画面のボタンで選んでください");
@@ -334,15 +348,95 @@
     }
     if (ev.type === "start") {
       current = ring.slice();               // 判定の窓と、その前の 0.3 秒を含める
-      if (action === "barge") barge(t, ev.onsetFrames);   // 考えている間・話している間なら割り込み
+      if (action === "barge") beginCandidate(t, ev.onsetFrames);
       return;
     }
     const frames = current;
     current = null;
     ring = [];
     if (ev.reason === "max") note("長いので区切りました（" + config.max_seconds + " 秒）");
+    if (candidate) {
+      const c = candidate;
+      if (!ev.keep) { if (c.confirmed) candidate = null; else finishCandidate(c, false); return; }
+      c.frames = frames;
+      if (c.confirmed) { candidate = null; send(frames); }
+      else if (!c.probing) probeSpeech(c, frames);
+      return;
+    }
     if (!ev.keep) return;                   // 短すぎる音（咳・物音）は送らない
-    send(frames);
+    if (!frames.noise) send(frames);
+  }
+
+  // Energy is only a candidate. Keep the current sentence and offset until local VAD confirms speech.
+  function beginCandidate(t, onsetFrames) {
+    if (candidate) return;
+    const c = { sid: session, turn, t, onsetFrames, probing: false, confirmed: false,
+                ctrl: new AbortController(), timer: null, frames: null };
+    candidate = c;
+    if (source && sourceState) {
+      heldPlayback = { ...sourceState, offset: sourceState.offset + audio.currentTime - sourceState.started };
+      source.onended = null;
+      source.stop(); source.disconnect(); source = null; sourceState = null;
+    }
+    holdApproval(c);
+    status("発話を確認しています", "busy");
+  }
+
+  async function probeSpeech(c, frames = current) {
+    if (candidate !== c || c.probing || !frames) return;
+    c.probing = true;
+    c.timer = setTimeout(() => finishCandidate(c, false), 1500);
+    const tail = frames.slice(-90);
+    const pcm = new Float32Array(tail.reduce((n, f) => n + f.length, 0));
+    let at = 0;
+    for (const f of tail) { pcm.set(f, at); at += f.length; }
+    try {
+      const r = await fetch("/api/speech-check?session=" + encodeURIComponent(c.sid) +
+        "&turn=" + c.turn + "&rate=" + audio.sampleRate, {
+          method: "POST", credentials: "same-origin", signal: c.ctrl.signal,
+          headers: { ...H, "Content-Type": "audio/wav" }, body: V.encodeWav(pcm, audio.sampleRate) });
+      const body = r.ok ? await r.json() : null;
+      if (body && body.speech === true && candidate === c && !c.frames && !detector.hasEnoughSpeech) {
+        c.evidence = true;  // A short voiced sound must also pass the existing minimum-duration rule.
+      } else finishCandidate(c, !!body && body.speech === true);
+    } catch (e) { finishCandidate(c, false); }
+  }
+
+  function finishCandidate(c, speech) {
+    if (candidate !== c || c.confirmed) return;
+    clearTimeout(c.timer); c.ctrl.abort();
+    if (session !== c.sid || turn !== c.turn || turnDone) { candidate = null; heldPlayback = null; return; }
+    if (speech) {
+      c.confirmed = true;
+      barge(c.t, c.onsetFrames);
+      if (c.frames) { candidate = null; send(c.frames); }
+      return;
+    }
+    candidate = null;
+    restoreApproval(c);
+    // Ignore this recording through its end; it has already been classified as noise.
+    if (current) current.noise = true;
+    const held = heldPlayback; heldPlayback = null;
+    if (held) playItem(held.item, held.turn, held.offset, true);
+    else pump();
+    status(source ? "話しています" : "聞いています", source ? "speaking" : "listening");
+  }
+
+  const approvalControls = ["approve-run", "approve-decline", "approve-send", "approve-word", "approve-later"];
+  function holdApproval(c) {
+    c.approval = approval;
+    c.buttons = approvalControls.map(id => $(id).disabled);
+    if (approval) approvalControls.forEach(id => { $(id).disabled = true; });
+  }
+  function restoreApproval(c) {
+    if (!approval || approval !== c.approval || performance.now() >= approval.deadline) return;
+    approvalControls.forEach((id, i) => { $(id).disabled = c.buttons[i]; });
+  }
+
+  function cancelCandidate() {
+    if (candidate) { clearTimeout(candidate.timer); candidate.ctrl.abort(); }
+    if (candidate && current) current.noise = true;
+    candidate = null; heldPlayback = null;
   }
 
   // 割り込み: サーバーの応答を待たずに再生を止め、待ちの音を捨て、まだ取りに行っていない音を取りに行かない。
@@ -432,6 +526,7 @@
 
   // 新しい発言を始める（前の発言の音を捨てる。取った WAV の参照も外す）
   function resetPlayback(t) {
+    cancelCandidate();
     discardPlayback();
     if (approval && approval.turn !== t) withdrawApproval();   // 前の発言の承認は出さない（結果は出す）
     next = 0;
@@ -441,6 +536,7 @@
 
   // 再生中・取得中・再生待ちの音を捨てる（取りに行く途中の要求も止め、取った WAV の参照も外す）
   function discardPlayback() {
+    heldPlayback = null; sourceState = null;
     if (source) {
       source.onended = null;
       try { source.stop(); } catch (e) { /* 止まっていれば何もしない */ }
@@ -499,7 +595,7 @@
 
   // 順番（index）どおりに 1 文ずつ続けて再生する（全文を待たない）。再生できない文は飛ばして続ける
   function pump() {
-    while (!source && audio && !turnDone && items.has(next)) {
+    while (!candidate && !source && audio && !turnDone && items.has(next)) {
       const item = items.get(next), t = turn;
       if (item.state === "loading") return;
       if (item.state === "error") {
@@ -509,33 +605,31 @@
         playbackFailed();
         continue;
       }
-      try {
-        const s = audio.createBufferSource();
-        s.buffer = item.buffer;
-        s.connect(audio.destination);
-        s.onended = () => {
-          s.onended = null;
-          s.disconnect();
-          if (source === s) source = null;
-          item.buffer = null;                   // 取った WAV の参照を外す
-          lastEnd = performance.now();
-          fails.ok();
-          played(item, t, "end");
-          if (t === turn) pump();
-        };
-        s.start();
-        source = s;
-        items.delete(next);
-        next += 1;
-        played(item, t, "start");
-        if (!paused) status("話しています", "speaking");
-      } catch (e) {
-        item.buffer = null;
-        items.delete(next);
-        next += 1;
-        played(item, t, "error");
-        playbackFailed();
-      }
+      items.delete(next++);
+      playItem(item, t);
+
+    }
+  }
+
+  function playItem(item, t, offset = 0, resumed = false) {
+    try {
+      const s = audio.createBufferSource();
+      s.buffer = item.buffer; s.connect(audio.destination);
+      s.onended = () => {
+        s.onended = null; s.disconnect();
+        if (source !== s) return;
+        source = null; sourceState = null; item.buffer = null;
+        lastEnd = performance.now(); fails.ok(); played(item, t, "end");
+        if (t === turn) pump();
+      };
+      source = s;
+      sourceState = { item, turn: t, offset, started: audio.currentTime };
+      s.start(0, Math.min(offset, item.buffer.duration));
+      if (!resumed) played(item, t, "start");
+      if (!paused) status("話しています", "speaking");
+    } catch (e) {
+      source = null; sourceState = null; item.buffer = null;
+      played(item, t, "error"); playbackFailed();
     }
   }
 
@@ -543,6 +637,7 @@
   function onTurnDone(t) {
     if (t !== turn) return;
     // この発言の取得中・再生待ち・再生中の音を捨て、後から届く同じ発言の音も再生しない
+    cancelCandidate();
     turnDone = true;
     awaiting = false;
     discardPlayback();
@@ -580,6 +675,8 @@
     };
     tick();
     a.timer = setInterval(tick, 250);
+    a.deadline = started + Math.max(0, ev.expires_in) * 1000;
+    if (candidate) holdApproval(candidate);
     $("approval").hidden = false;
     status(a.input ? "確認を待っています（入力欄に入力して送ってください）" : "確認を待っています（画面のボタンで答えてください）",
            "busy");
@@ -588,7 +685,7 @@
   // 押したら 1 回だけ送り、ボタンを無効にする（結果は approval_done で出す）
   function answerApproval(decision) {
     const a = approval;
-    if (!a || !session) return;
+    if (!a || !session || candidate) return;
     $("approve-run").disabled = true;
     $("approve-decline").disabled = true;
     $("approve-send").disabled = true;
@@ -719,6 +816,8 @@
   $("approve-word").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); answerApproval("run"); } });
   $("end").onclick = () => { status("会話を終えました", ""); end(true); };
   $("pause").onclick = () => {
+    if (candidate && candidate.confirmed) cancelCandidate();
+    else if (candidate) finishCandidate(candidate, false);
     paused = !paused;
     if (detector) detector.reset();
     current = null; ring = [];
