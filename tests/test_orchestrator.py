@@ -258,7 +258,7 @@ def test_answer_shows_only_cited_sources(monkeypatch):
 
 @pytest.mark.parametrize("terminal", [True, False])
 def test_control_center_opens_on_mac_only_from_terminal(monkeypatch, tmp_path, terminal):
-    """ブラウザの会話（terminal=False）では Mac mini の画面で開かず、話している端末で開ける URL を返す。"""
+    """全経路でWindows向けURLを返し、Macでの自動表示は端末に限る（T-2700）。"""
     import subprocess
 
     from acc import build as acc
@@ -271,6 +271,7 @@ def test_control_center_opens_on_mac_only_from_terminal(monkeypatch, tmp_path, t
     monkeypatch.setattr(acc, "build_html", lambda *a, **k: "<html></html>")
     monkeypatch.setattr(acc, "DEFAULT_OUT", tmp_path / "acc" / "index.html")
     monkeypatch.setattr(acc, "IMPROVEMENT_JSON", tmp_path / "none.json")
+    monkeypatch.setattr(orc, "ACC_URL", "https://test-mac.example:8443/acc/")  # 設定の上書きも保持する
     opened = []
     monkeypatch.setattr(subprocess, "run", lambda cmd, **k: opened.append(cmd))
     text, _ = orc._control_center({}, orc.Context(terminal=terminal), "管理画面")
@@ -279,4 +280,8 @@ def test_control_center_opens_on_mac_only_from_terminal(monkeypatch, tmp_path, t
         assert opened and opened[0][0] == "open"
     else:
         assert opened == []
-        assert orc.ACC_URL in text
+    assert orc.ACC_URL in text and "Tailscale 接続" in text
+    assert "Mac mini 本体: http://127.0.0.1:8765/acc/" in text
+    assert "http://localhost:8765/acc/" in text and "転送した場合" in text
+    assert "ローカル番号に置き換えて" in text
+    assert text.index(orc.ACC_URL) < text.index("http://127.0.0.1:8765/acc/")

@@ -370,3 +370,7 @@ Owner 事前承認（上位 AGENTS.md §2.1、2026-11-12 の依頼範囲）。`p
 ## 4-15. ツールの初回承認（T-2501）
 
 状態: Approved（2026-11-15 Owner 指示。詳細は Owner 事前承認（上位 AGENTS.md §2.1））。正本は統合ワークスペース docs/spec.md §3.4.12 J。本節が 4-14 の Claude 自動許可・Codex 道具なしの扱いに優先する。
+
+## 4-16. 管理画面のアドレス案内（T-2700）
+
+状態: Approved（2026-11-15 Owner 指示、詳細は Owner 事前承認（上位 AGENTS.md §2.1））。正本は統合ワークスペース docs/spec.md §3.4.5。control-center の成功時に全経路で Windows/Tailscale・Mac本体・Windows/SSH転送のURLと接続条件を表示する。

@@ -737,10 +737,13 @@ def _control_center(inputs, ctx, text):
         improvement = None
     acc.DEFAULT_OUT.parent.mkdir(parents=True, exist_ok=True)
     acc.DEFAULT_OUT.write_text(acc.build_html(registry, collect(registry), improvement), encoding="utf-8")
-    if not ctx.terminal:                  # ブラウザの会話: Mac mini の画面ではなく、話している端末で開けるリンクを返す
-        return f"管理画面を最新にしました。画面のリンクから開いてください。\n{ACC_URL}", []
-    subprocess.run(["open", str(acc.DEFAULT_OUT)], check=False)
-    return f"管理画面を作って開きました: {acc.DEFAULT_OUT}", []
+    if ctx.terminal:
+        subprocess.run(["open", str(acc.DEFAULT_OUT)], check=False)
+    return ("管理画面を最新にしました。画面に表示したアドレスから開いてください。\n"
+            f"Windows・ほかの端末（Tailscale 接続）: {ACC_URL}\n"
+            "Mac mini 本体: http://127.0.0.1:8765/acc/\n"
+            "Windows（VS Code で Mac の8765番を転送した場合）: http://localhost:8765/acc/\n"
+            "転送先が別の番号なら、VS Code の「ポート」に表示されたローカル番号に置き換えてください。"), []
 
 
 def _capture(inputs, ctx, text):
