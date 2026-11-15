@@ -178,3 +178,10 @@ test("「直して保存」で送る題名・本文は空白を除き、空・�
   assert.ok(P.editPayload("x".repeat(80), "y".repeat(2000)));
   assert.match(P.approvalResultText("edited"), /直した内容で保存/);
 });
+
+test("会話の記録は一番下を見ているときだけ新しい行で送る（T-2902）", () => {
+  assert.strictEqual(P.atBottom(600, 400, 1000), true);     // ちょうど一番下
+  assert.strictEqual(P.atBottom(570, 400, 1000), true);     // 少しの差（32 px まで）は一番下とみなす
+  assert.strictEqual(P.atBottom(500, 400, 1000), false);    // 上を読んでいる間は送らない
+  assert.strictEqual(P.atBottom(0, 400, 300), true);        // 記録が短く、スクロールしない
+});

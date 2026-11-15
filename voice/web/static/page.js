@@ -179,6 +179,12 @@
     return { title: t, body: b };
   }
 
+  // 会話の記録が一番下にあるか（T-2902）。一番下なら新しい行で送り続け、上を読んでいる間は送らない
+  const FOLLOW_SLACK_PX = 32;
+  function atBottom(scrollTop, clientHeight, scrollHeight) {
+    return scrollHeight - (scrollTop + clientHeight) <= FOLLOW_SLACK_PX;
+  }
+
   function micAction(type, awaiting, approvalOpen) {
     if (approvalOpen) return "ignore";
     if (type === "start") return awaiting ? "barge" : "start";
@@ -187,7 +193,7 @@
 
   const api = { PLAYBACK_FAILS_TO_WARN, SILENCE_LIMIT_MS, PROBLEMS, problem, micErrorKind, createSeqFilter,
                 turnDecision, createFailCounter, bargeTiming, bargeNote, postOutcome, createCutHold,
-                approvalShown, approvalMatches, secondsLeft, approvalResultText, micAction, editPayload };
+                approvalShown, approvalMatches, secondsLeft, approvalResultText, micAction, editPayload, atBottom };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.JarvisPage = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
