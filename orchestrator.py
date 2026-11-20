@@ -62,13 +62,14 @@ class Context:
     resting: dict = field(default_factory=dict)   # 休止中のハーネス → (期限の clock(), 理由)。保存しない
     llm_info: dict | None = None                  # 直前の答えのハーネス・プロバイダー・切り替えの理由（Task の記録）
     llm_tools: list = field(default_factory=list)  # 直前の答えでハーネスが使った道具の名前（ADR-0038。引数・結果は残さない）
+    briefing: str | None = None                   # 会話の始めの、使えるものの概要（上位 spec §3.4.12 K、T-3200。1 回だけ作る）
     tool_ask: Callable | None = None              # ツールの初回承認。自動承認・input の代用はしない（T-2501）
 
 
 def renew_context(ctx, **kwargs) -> "Context":
     """声の割り込みで文脈を作り直す（履歴・会話 ID・経路と、その会話の切り替え・休止を引き継ぐ。ADR-0038）。"""
     return Context(history=list(ctx.history), session_id=ctx.session_id, channel=ctx.channel, harness=ctx.harness,
-                   resting=dict(ctx.resting), **kwargs)
+                   resting=dict(ctx.resting), briefing=ctx.briefing, **kwargs)
 
 
 def prewarm_session(ctx) -> None:

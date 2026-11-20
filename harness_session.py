@@ -161,7 +161,8 @@ def _start(ctx, harness: str):
     """新しいセッションの中身を作る。claude はプロセスを起動、codex はスレッドを作る。"""
     import conversation_tools
     tools = config.HARNESS_TOOLS
-    rules = prompts.rules(tools=tools, voice=ctx.voice)
+    import briefing
+    rules = prompts.rules(tools=tools, voice=ctx.voice, briefing=briefing.for_ctx(ctx))   # 会話の始めの概要（T-3200）
     if tools:
         rules += conversation_tools.guide()
     if harness == "claude":
@@ -275,8 +276,9 @@ def _between(ctx, session: Session) -> str:
 
 def _one_shot(ctx, provider, kind, question, context, name, pack, stream):
     """ollama・予備の 1 回限りの呼び出し: 引き継ぎメモ付きの 1 つのプロンプト（道具なし）。"""
+    import briefing
     prompt = prompts.one_shot(kind, question, context, handoff_memo(canonical_turns(ctx)), _pack_text(pack),
-                              ctx.voice, name)
+                              ctx.voice, name, briefing=briefing.for_ctx(ctx))
     if stream is not None:
         extra = {"cancel": ctx.cancel} if ctx.cancel is not None else {}   # 取り消しのない呼び出しは従来どおり
         return llm.complete_stream(prompt, stream, provider=provider, **extra)
