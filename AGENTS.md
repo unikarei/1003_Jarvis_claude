@@ -259,3 +259,7 @@ T-3101 の要件は上位 spec §3.4.5・§3.4.9・§3.4.12 B と本リポジト
 ## 言いかけの文で答え始めない
 
 T-3102 の要件は上位 spec §3.4.9 と本リポジトリ spec 4-23。判定は `voice/web/turn_end.py`、待つ・つなげる処理は `voice/web/session.py`（`_hold_for_more`・`_merge_locked`）。テストの `make_session` は既定で待たない（`continue_seconds=0`）。
+
+## 会話の始めの概要
+
+T-3200 の要件は上位 spec §3.4.12 K と本リポジトリ spec 4-24。`briefing.py` が読み取りだけで概要を作り、`ctx.briefing` に 1 回だけ置く。スキル・Vault を足したら `briefing.CAPABILITIES` の言い方も足す。

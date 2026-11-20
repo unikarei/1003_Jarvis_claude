@@ -410,3 +410,7 @@ Approved（Owner指示、詳細はOwner事前承認 AGENTS.md §2.1）。要件�
 ## 4-23. 言いかけの文で答え始めない（T-3102）
 
 要件の正本は上位 spec §3.4.9（受け入れ基準は上位 testing §30）。Claude 承認（上位 AGENTS.md §2.2）。`voice/web/turn_end.py` が文末の形で言いかけを判定し、待つ長さ（`JARVIS_VOICE_WEB_CONTINUE_SECONDS`、既定 1.5 秒、0 で無効）を決める。`voice/web/session.py` は言いかけの発言を `held` にして待ち、その間の `/api/interrupt`・`/api/utterance` では `_merge_locked` で答えずに終え（履歴・遅延に入れない）、文を `_carry` に移して次の発話の認識結果の頭につなげる。`/api/speech-check` が来たら `speech_started` で期限を `EXTEND_SECONDS`（2 秒）延ばす。ページの変更はない。
+
+## 4-24. 会話の始めに、使えるものの概要を読み込む（T-3200）
+
+要件の正本は上位 spec §3.4.12 K（受け入れ基準は上位 testing §31）。Claude 承認（上位 AGENTS.md §2.2）。`briefing.py` の `build()` が検索 DB の件数（`knowledge_engine.stats()`）・保存待ち・Vault ごとのノートの名前（`vault.list_notes`、`_jarvis/` は件数だけ）・記憶の件数・有効なスキルの言い方を読み取りだけで集め、4,000 字以内の概要にする。`for_ctx(ctx)` が会話ごとに 1 回だけ作り（`Context.briefing`、`renew_context` で引き継ぐ）、`harness_session._start`（セッションの決まりの文）と `_one_shot`（1 回限りのプロンプト）が `prompts.rules(..., briefing=)` に入れる。決まりの文（`prompts.py`）は Obsidian の編集を「できない」と言わず言い方を案内する。
