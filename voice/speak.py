@@ -35,6 +35,29 @@ def _plain(text: str) -> str:
     return speakable(PAREN.sub("", text).replace("_", " "))
 
 
+CONNECTIONS_HEAD = "ナレッジの接続状況"     # knowledge_connections.report() の見出し
+
+
+def _connections_summary(lines: list[str]) -> str:
+    """接続の報告の読み上げ: 検索DB・Vault ごと・保存待ち（T-3101。前は見出しだけを読んでいた）。"""
+    parts = []
+    for line in lines[1:]:
+        if line.startswith("検索DB"):
+            m = re.search(r"知識 (\d+) 件", line)
+            parts.append(f"検索DBは知識 {m.group(1)} 件" if m else "検索DBは未接続" if "未接続" in line else "検索DBは未確認")
+            continue
+        m = re.match(r"^([\w.-]+): (.*) / 検索DBの知識 (\S+) 件$", line)
+        if m:
+            state = "使えます" if m.group(2).startswith("存在") else _plain(m.group(2))
+            count = f"{m.group(3)} 件" if m.group(3) != "未確認" else "件数は未確認"
+            parts.append(f"{m.group(1).replace('-', ' ')}は{state}、{count}")
+            continue
+        m = re.match(r"^CKC保存待ち: (\S+) 件", line)
+        if m:
+            parts.append(f"保存待ちは {m.group(1)} 件" if m.group(1) != "未確認" else "保存待ちは未確認")
+    return "。".join(parts) + "です。" if parts else CONNECTIONS_HEAD
+
+
 def speech_summary(skill: str, text: str) -> str:
     """一覧・レポートを返すスキルの、読み上げ用の短い要約（声での会話、T-1214）。"""
     lines = [line for line in text.splitlines() if line.strip()]
@@ -49,6 +72,8 @@ def speech_summary(skill: str, text: str) -> str:
         if source:
             return f"出典は、{_plain(source.split('← 出典:', 1)[1])}です。"
         return _plain(lines[0]) if lines else ""
+    if skill == "knowledge-stats" and lines and lines[0].startswith(CONNECTIONS_HEAD):
+        return _connections_summary(lines)
     if skill == "knowledge-stats":
         items = []
         for line in lines:
