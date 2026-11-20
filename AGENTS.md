@@ -255,3 +255,7 @@ T-2903 の要件は上位 spec §3.4.9 と本リポジトリ spec 4-21。ブラ�
 ## 2026-11-20 の会話の修正
 
 T-3101 の要件は上位 spec §3.4.5・§3.4.9・§3.4.12 B と本リポジトリ spec 4-22。発言の例は、説明の途中（例の前に語があり後ろに 8 字を超える続き）では当てない（`RULE_TAIL_MAX`）。接続の報告は中身を読み上げる。
+
+## 言いかけの文で答え始めない
+
+T-3102 の要件は上位 spec §3.4.9 と本リポジトリ spec 4-23。判定は `voice/web/turn_end.py`、待つ・つなげる処理は `voice/web/session.py`（`_hold_for_more`・`_merge_locked`）。テストの `make_session` は既定で待たない（`continue_seconds=0`）。
