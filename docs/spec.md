@@ -402,3 +402,7 @@ Approved（Owner指示、詳細はOwner事前承認 AGENTS.md §2.1）。要件�
 
 要件の正本は上位 spec §3.4.9（受け入れ基準は上位 testing §28）。`orchestrator._capture_with_cards` が実行の間 `ctx.hold_mic(True/False)` を呼び、`voice/web/session.py` が `mic_hold`（on・off）をページに送って、その間の `interrupt` を stale（409）にする。ページは `mic_hold` の間、確認のカードと同じく発話の検出を使わない（仮に止めた読み上げは続ける）。新しい発話の送信（`/api/utterance`）と「会話を終える」は今までどおり。あわせて、「直す」の後に次のカードの「実行しない」が隠れたままになる不具合（T-2900）を直す。
 
+
+## 4-22. 2026-11-20 の会話でかみ合わなかった点の修正（T-3101）
+
+要件の正本は上位 spec §3.4.5・§3.4.9・§3.4.12 B（受け入れ基準は上位 testing §29）。Claude 承認（上位 AGENTS.md §2.2）。(1) `voice/speak.py` の `speech_summary` は、接続の報告（見出し「ナレッジの接続状況」）を検索 DB・Vault ごと・保存待ちの件数で読む。(2) `orchestrator.route_by_rule` は、例の前に語があり後ろに 8 字（`RULE_TAIL_MAX`）を超える続きがある発言の例を当てない（`knowledge-capture` と `requires_any` のスキル、頭に例がある言い方は変えない）。(3) `harness_command` は頭のつなぎの語に「まずは」「オーケー」などを、聞き取りの揺れに「クローデン」「クロデン」を足し、「今喋ってるのは Codex 君それとも Cloud 君」のような質問を状態の質問にする。

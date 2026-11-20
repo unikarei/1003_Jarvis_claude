@@ -156,6 +156,19 @@ def _norm(text: str) -> str:
     return obsidian_note.normalize(text)
 
 
+RULE_TAIL_MAX = 8      # 発言の例の後ろに続いてよい文字数（「ください」「くれる？」など。T-3101）
+
+
+def _short_tail(text: str, phrase: str) -> bool:
+    """発言の例の後ろが短い結びだけか。説明の途中の例（「…を探して、最大マッハ数の…」）は当てない（T-3101）。
+    ナレッジ化（CAPTURE_SKILL）は capture_intent が別に判定するので、この制限の外に置く。"""
+    idx = text.find(phrase)
+    if not _strip(text[:idx]):
+        return True          # 例が頭にあり、後ろが入力の言い方（「テーマ登録: 太陽光」）
+    tail = text[idx + len(phrase):]
+    return len(re.sub(r"[\s、。，．,.!！?？「」]", "", tail)) <= RULE_TAIL_MAX
+
+
 def route_by_rule(text: str, active: dict[str, skills.Skill]) -> Route | None:
     """発言に含まれる最も長い発言の例のスキル。入力を作れなければ None。
     requires_any を持つスキルは、発言の例のどれかと requires_any のどれかの両方を含むときだけ当たり、
@@ -168,7 +181,8 @@ def route_by_rule(text: str, active: dict[str, skills.Skill]) -> Route | None:
         inputs = _rule_inputs(skill, text, phrase)
         if inputs is not None:
             return Route(skill.name, inputs, "rule")
-    matches = sorted(((len(p), p, s) for s in active.values() if not s.requires_any for p in s.phrases if p in text),
+    matches = sorted(((len(p), p, s) for s in active.values() if not s.requires_any for p in s.phrases
+                      if p in text and (s.name == CAPTURE_SKILL or _short_tail(text, p))),
                      key=lambda m: m[0], reverse=True)
     for _, phrase, skill in matches:
         inputs = _rule_inputs(skill, text, phrase)
@@ -994,19 +1008,28 @@ def _execute_self_confirm(handler, r: Route, ctx: Context, text: str, ask, done)
 HARNESS_SKILL = "harness-switch"          # 記録の上のスキル名（索引のスキルではない。LLM を呼ばない）
 _HARNESS_NAMES = {
     "codex": ("codex", "コーデックス", "コデックス", "コレックス", "コテックス", "コードex"),
-    "claude": ("claude", "クロード", "クラウドコード", "クロードコード"),
+    "claude": ("claude", "クロード", "クラウドコード", "クロードコード", "クローデン", "クロデン"),
     "ollama": ("ollama", "オラマ", "オーラマ", "オラーマ", "ポーラマ", "大山", "ローカル", "ローカルllm"),
     "auto": ("おまかせ", "お任せ", "自動"),
 }
 _SWITCH_VERBS = r"(?:に|へ)(?:切り替えて|切りかえて|切替えて|切り替え|変えて|かえて|替えて|変更して|して|戻して)"
+# 「クロードに」が詰まって聞こえた揺れ（「クローデンして」、T-3101）。「に」をすでに含むので後ろは動詞だけ
+_MERGED_NAMES = ("クローデン", "クロデン")
+_MERGED_VERBS = r"(?:切り替えて|切りかえて|変えて|して)"
 _POLITE = r"(?:ください|下さい|くれ|ちょうだい|もらえる|もらえますか|くれる)?"
 # 頭のつなぎの語・言いよどみ（T-2201。「じゃあ、コデックスに切り替えて音声。」が通らなかった）
-_FILLERS = re.compile(r"^(?:それじゃあ|それじゃ|それでは|じゃあ|じゃ|では|えっと|えーと|ええと|あの|ちょっと|よし|うん|はい|なら|次は|今度は)+")
+_FILLERS = re.compile(r"^(?:それじゃあ|それじゃ|それでは|じゃあ|じゃ|では|まずは|とりあえず|ひとまず|オーケー|おーけー|おっけー|ok|okay|えっと|えーと|ええと|あの|ちょっと|よし|うん|はい|なら|次は|今度は)+")
 # 末尾の短い語が質問・否定なら切り替えにしない（「Codex にしてない」「Codex にしてどう」など）
 _QUESTION_TAIL = re.compile(r"か|何|なに|どう|ない|ません|なかっ")
 _STATUS_PATTERN = re.compile(r"^(?:今|いま)?(?:どれ|どのモデル|どのllm|どのハーネス|ハーネスは|モデルは|"
                              r"今のモデルは|今のハーネスは|どのモデルを使ってる|どのモデルを使っていますか|"
                              r"どのモデルで答えてる|何のモデル)(?:ですか|なの|使ってる|使っていますか)?$")
+# 「今喋ってるのは Codex 君それとも Cloud 君、誰だろう」も状態の質問（T-3101）。
+# 名前・問いの語・話している・Jarvis 自身を指す語の 4 つを含むとき（「誰が Claude を使ってるの？」は当てない）
+_STATUS_WHO = re.compile(r"codex|コーデックス|コデックス|claude|cloud|クロード|クラウド|ollama|オラマ|オーラマ|モデル|llm|ハーネス")
+_STATUS_ASK = re.compile(r"誰|だれ|どっち|どちら|どれ|どの|それとも|何|なに")
+_STATUS_SPEAK = re.compile(r"喋って|しゃべって|話して|答えて|動いて|応答して")
+_STATUS_SELF = re.compile(r"今|いま|君|くん|あなた|jarvis|ジャービス|裏で")
 
 
 def _command_text(text: str) -> str:
@@ -1030,11 +1053,14 @@ def harness_command(text: str) -> str | None:
         return "auto"
     for name, words in _HARNESS_NAMES.items():
         for word in words:
-            m = re.fullmatch(re.escape(word.lower()) + _SWITCH_VERBS + _POLITE + r"(.{0,4})", t)
+            verbs = _MERGED_VERBS if word in _MERGED_NAMES else _SWITCH_VERBS
+            m = re.fullmatch(re.escape(word.lower()) + verbs + _POLITE + r"(.{0,4})", t)
             if m and not _QUESTION_TAIL.search(m.group(1)):   # 末尾の短い聞き取りの崩れは許す（質問・否定は除く、T-2201）
                 return name
             if name == "auto" and re.fullmatch(re.escape(word) + r"(?:で|モード)(?:お願い|頼む)?", t):
                 return name
+    if all(p.search(t) for p in (_STATUS_WHO, _STATUS_ASK, _STATUS_SPEAK, _STATUS_SELF)):
+        return "status"      # 切り替えの命令の判定の後（T-3101）
     return None
 
 
