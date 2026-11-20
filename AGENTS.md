@@ -263,3 +263,7 @@ T-3102 の要件は上位 spec §3.4.9 と本リポジトリ spec 4-23。判定�
 ## 会話の始めの概要
 
 T-3200 の要件は上位 spec §3.4.12 K と本リポジトリ spec 4-24。`briefing.py` が読み取りだけで概要を作り、`ctx.briefing` に 1 回だけ置く。スキル・Vault を足したら `briefing.CAPABILITIES` の言い方も足す。
+
+## Obsidian のノートの編集を会話から使う
+
+T-3201 の要件は上位 spec §3.4.11（2026-11-21 追加）と本リポジトリ spec 4-25。ノートの名前は揺れをそろえて近いものを候補にする（`find_notes`・`near_notes`）。直前の会話は Ollama にだけ渡す。「ToDo」＋操作の語は `is_todo_request` でこのスキルに回す。
