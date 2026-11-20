@@ -414,3 +414,7 @@ Approved（Owner指示、詳細はOwner事前承認 AGENTS.md §2.1）。要件�
 ## 4-24. 会話の始めに、使えるものの概要を読み込む（T-3200）
 
 要件の正本は上位 spec §3.4.12 K（受け入れ基準は上位 testing §31）。Claude 承認（上位 AGENTS.md §2.2）。`briefing.py` の `build()` が検索 DB の件数（`knowledge_engine.stats()`）・保存待ち・Vault ごとのノートの名前（`vault.list_notes`、`_jarvis/` は件数だけ）・記憶の件数・有効なスキルの言い方を読み取りだけで集め、4,000 字以内の概要にする。`for_ctx(ctx)` が会話ごとに 1 回だけ作り（`Context.briefing`、`renew_context` で引き継ぐ）、`harness_session._start`（セッションの決まりの文）と `_one_shot`（1 回限りのプロンプト）が `prompts.rules(..., briefing=)` に入れる。決まりの文（`prompts.py`）は Obsidian の編集を「できない」と言わず言い方を案内する。
+
+## 4-25. Obsidian のノートの編集を会話から使う（T-3201）
+
+要件の正本は上位 spec §3.4.11 の 2026-11-21 追加（受け入れ基準は上位 testing §32）。Claude 承認（上位 AGENTS.md §2.2）。`obsidian_note.find_notes` は完全一致・部分一致で当たらなければ、ToDo の揺れ（`_TODO`）をそろえ一般語（`_GENERIC`）を除いた形で、含まれるか 2 文字の並びの Dice 係数（`FUZZY_MIN` 0.5 以上）で最大 3 件を選ぶ。見つからないときは `near_notes`（0.2 以上）を聞き返しに添える。`extract` は直前の会話（6 往復）を Ollama にだけ渡す。`matches`・`is_capture_request` は「ToDo」＋操作の語の依頼（質問は除く、`is_todo_request`）をこのスキルに回す。書く前の確認・承認の使い切りは変えない。
