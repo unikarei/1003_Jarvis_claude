@@ -414,6 +414,7 @@ def make_handler(token: str, sessions: Sessions, ping_seconds: float, allowed_ho
             session = sessions.get(q.get("session"))
             if session is None or not session.can_check_speech(turn):
                 return self._json(409, {"error": "stale_turn"})
+            session.speech_started(turn)      # 言いかけで待っている間なら待つ期限を延ばす（T-3102）
             data = self.rfile.read(length)
             try:
                 speech = speech_check(data, rate)

@@ -42,10 +42,12 @@ def handler(data, query, session):
 def test_probe_is_read_only_and_checks_turn_twice(monkeypatch):
     calls = []
     active = [True, True]
-    session = SimpleNamespace(can_check_speech=lambda turn: calls.append(turn) or active.pop(0))
+    started = []
+    session = SimpleNamespace(can_check_speech=lambda turn: calls.append(turn) or active.pop(0),
+                              speech_started=started.append)   # 言いかけの待ちを延ばすだけ（T-3102）
     monkeypatch.setattr(noise, 'speech_check', lambda data, rate: True)
     assert handler(wav(), {'session':'sid','turn':'7','rate':'48000'}, session) == (200, {'speech':True})
-    assert calls == [7, 7]
+    assert calls == [7, 7] and started == [7]
     active[:] = [True, False]
     assert handler(wav(), {'turn':'7','rate':'48000'}, session)[0] == 409
 
@@ -56,7 +58,7 @@ def test_probe_failures_are_safe(monkeypatch, kind, status):
         raise {'busy':noise.CheckBusy(), 'failure':RuntimeError('private'),
                'invalid':AudioError(400,'private')}[kind]
     monkeypatch.setattr(noise,'speech_check',check)
-    session=SimpleNamespace(can_check_speech=lambda turn: True)
+    session=SimpleNamespace(can_check_speech=lambda turn: True, speech_started=lambda turn: None)
     result=handler(wav(), {'turn':'1','rate':'48000'}, session)
     assert result[0] == status
     assert 'private' not in json.dumps(result)

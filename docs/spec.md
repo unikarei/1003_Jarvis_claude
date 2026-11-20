@@ -406,3 +406,7 @@ Approved（Owner指示、詳細はOwner事前承認 AGENTS.md §2.1）。要件�
 ## 4-22. 2026-11-20 の会話でかみ合わなかった点の修正（T-3101）
 
 要件の正本は上位 spec §3.4.5・§3.4.9・§3.4.12 B（受け入れ基準は上位 testing §29）。Claude 承認（上位 AGENTS.md §2.2）。(1) `voice/speak.py` の `speech_summary` は、接続の報告（見出し「ナレッジの接続状況」）を検索 DB・Vault ごと・保存待ちの件数で読む。(2) `orchestrator.route_by_rule` は、例の前に語があり後ろに 8 字（`RULE_TAIL_MAX`）を超える続きがある発言の例を当てない（`knowledge-capture` と `requires_any` のスキル、頭に例がある言い方は変えない）。(3) `harness_command` は頭のつなぎの語に「まずは」「オーケー」などを、聞き取りの揺れに「クローデン」「クロデン」を足し、「今喋ってるのは Codex 君それとも Cloud 君」のような質問を状態の質問にする。
+
+## 4-23. 言いかけの文で答え始めない（T-3102）
+
+要件の正本は上位 spec §3.4.9（受け入れ基準は上位 testing §30）。Claude 承認（上位 AGENTS.md §2.2）。`voice/web/turn_end.py` が文末の形で言いかけを判定し、待つ長さ（`JARVIS_VOICE_WEB_CONTINUE_SECONDS`、既定 1.5 秒、0 で無効）を決める。`voice/web/session.py` は言いかけの発言を `held` にして待ち、その間の `/api/interrupt`・`/api/utterance` では `_merge_locked` で答えずに終え（履歴・遅延に入れない）、文を `_carry` に移して次の発話の認識結果の頭につなげる。`/api/speech-check` が来たら `speech_started` で期限を `EXTEND_SECONDS`（2 秒）延ばす。ページの変更はない。

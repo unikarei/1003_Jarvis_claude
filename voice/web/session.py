@@ -30,7 +30,7 @@ import voice_chat
 from ckc.models import Speaker as Who, Turn
 from voice import tts
 from voice.duplex import DuplexSpeaker
-from voice.web import limits
+from voice.web import limits, turn_end
 from voice.web.player import BrowserPlayer
 from voice_chat import QUIT_WORDS, is_noise   # voice_chat の import では音声の機器を開かない（sounddevice は関数の中だけ）
 
@@ -41,6 +41,8 @@ CALIBRATION_TEXT = "ジャービスです。どうぞ。"   # 回り込みの測
 # 雑音だったら、取り消した発言にもう一度答える。書き込みのないスキルだけ（None は振り分けの前）
 REANSWER_SECONDS = 15.0
 REANSWER_SKILLS = (None, "general-chat", "knowledge-answer")
+# 言いかけで待った文を次の発話につなげる期限（T-3102）。次の発話は最長の発話の後に届くことがあるので、その長さ＋余裕
+CARRY_SECONDS = limits.max_seconds() + 10.0
 CALIBRATION_TURN = 0          # あいさつの番号（発言は 1 から。履歴・遅延の記録に入れない）
 CALIBRATE_TIMEOUT = 60.0      # あいさつの合成を待つ上限（最初の合成はエンジンの起動を待つ）
 APPROVAL_SECONDS = 60         # 承認の要求の期限（T-1504）
@@ -68,7 +70,7 @@ class Busy(Exception):
 class _TurnState:
     """発言 1 回分の状態（割り込みのときに履歴・遅延の記録を確定するために使う）。"""
 
-    __slots__ = ("turn", "lat", "text", "outcome", "record", "done", "ctx", "reanswer")
+    __slots__ = ("turn", "lat", "text", "outcome", "record", "done", "ctx", "reanswer", "held", "deadline", "resume")
 
     def __init__(self, turn: int, lat: "latency.Turn"):
         self.turn, self.lat = turn, lat
@@ -78,6 +80,9 @@ class _TurnState:
         self.done = threading.Event()     # この発言の処理（_process）が終わった（T-1702）
         self.ctx = None                   # この発言が使った文脈（割り込みの判定に使う、T-1702）
         self.reanswer = False             # 雑音の割り込みで消えた発言に答え直している（T-2203）
+        self.held: str | None = None      # 言いかけで続きを待っている文（T-3102）
+        self.deadline = 0.0               # 続きを待つ期限（time.monotonic）
+        self.resume = threading.Event()   # 続きが来た（つなげた）
 
 
 class _Approval:
@@ -204,7 +209,7 @@ class WebSession:
     再生の待つ期限・承認の期限の時計（clock）を差し替えられる。launcher を渡さなければエンジンを起動・停止しない。"""
 
     def __init__(self, transcribe=None, handle=None, emit=None, record=None, synth=None, launcher=None,
-                 clock=time.monotonic, capture_on_end=None, pending_count=None):
+                 clock=time.monotonic, capture_on_end=None, pending_count=None, continue_seconds=None):
         self.id = secrets.token_urlsafe(12)
         self.transcribe = transcribe or _transcribe
         self.handle = handle or orchestrator.handle
@@ -231,6 +236,9 @@ class WebSession:
         self._after: _TurnState | None = None
         # 雑音の割り込みで消えた発言（Owner の発言, 割り込んだ時刻）。次の発話が雑音なら答え直す（T-2203）
         self._recover: tuple[str, float] | None = None
+        # 言いかけで待った文（文, つなげた時刻）。次の発話の認識結果の頭につなげる（T-3102）
+        self._carry: tuple[str, float] | None = None
+        self.continue_seconds = turn_end.continue_seconds() if continue_seconds is None else continue_seconds
         self.player = BrowserPlayer(emit=self._player_event, clock=clock)
         self.speaker = DuplexSpeaker(self.player, voice=voice_chat.VOICE,
                                      synth=_FirstSynth(launcher, synth, self._notice, lambda: self.closed,
@@ -329,7 +337,11 @@ class WebSession:
         with self._lock:
             if self.closed:
                 raise Busy("会話は終わっています")
-            cut = self._interrupt_locked(self._active) if self._active is not None else None
+            cut = None
+            if self._active is not None and self._active.held is not None:
+                self._merge_locked(self._active)    # 言いかけの続き: 前の文は次の発話につなげる（T-3102）
+            elif self._active is not None:
+                cut = self._interrupt_locked(self._active)
             self.turn = self.speaker.new_turn()     # 読み上げの側と同じ番号（古い発言の音を捨てる）
             st = _TurnState(self.turn, latency.Turn("web", at=accepted))   # 発話を受け付けた時刻から
             self._active = st
@@ -370,6 +382,9 @@ class WebSession:
             st = self._active
             if st is None or st.turn != turn:
                 return "stale"
+            if st.held is not None:
+                self._merge_locked(st)        # 言いかけの続きを話し始めた（T-3102）
+                return "ok"
             self._interrupt_locked(st)
         self._finish_interrupted(st)
         return "ok"
@@ -589,6 +604,42 @@ class WebSession:
 
     # ------------------------------------------------------------ 割り込み
 
+    def _merge_locked(self, st: _TurnState) -> None:
+        """言いかけで待っている発言 st を、答えずに終える（self._lock の中で呼ぶ、T-3102）。文は履歴に入れず、
+        次の発話の認識結果の頭につなげる。遅延も記録しない（つなげた発言の側で記録する）。"""
+        self._carry = (st.held, time.monotonic())
+        st.held, st.record = None, False
+        self._cut.add(st.turn)
+        self._active = None
+        if self._latency is not None and self._latency[0] == st.turn:
+            self._latency = None
+        self._emit_locked("turn_done", st.turn, interrupted=True)
+        st.resume.set()
+
+    def speech_started(self, turn: int) -> None:
+        """ページが発話の確認を始めた（/api/speech-check）。言いかけで待っている間なら、続きを話し始めたとみなして
+        待つ期限を延ばす（T-3102）。状態の確認だけで、発言・承認は変えない。"""
+        with self._lock:
+            st = self._active
+            if st is not None and st.turn == turn and st.held is not None:
+                st.deadline = max(st.deadline, time.monotonic() + turn_end.EXTEND_SECONDS)
+
+    def _hold_for_more(self, st: _TurnState, text: str) -> bool:
+        """言いかけの文なら、続きを待つ（T-3102）。続きにつなげたら True（この発言では答えない）。"""
+        if self.continue_seconds <= 0 or st.reanswer or not turn_end.continues(text):
+            return False
+        with self._lock:
+            if self.closed or st.turn in self._cut or self._active is not st:
+                return False              # 後の判定（答えない）に任せる
+            st.held, st.deadline = text, time.monotonic() + self.continue_seconds
+        while not self.closed:
+            remaining = st.deadline - time.monotonic()
+            if remaining <= 0 or st.resume.wait(min(remaining, POLL_SECONDS * 5)):
+                break
+        with self._lock:
+            st.held = None
+            return st.turn in self._cut
+
     def _interrupt_locked(self, st: _TurnState) -> _TurnState:
         """発言 st に割り込む（self._lock の中で呼ぶ）。voice_chat.run_barge_in と同じく、番号を進めて古い合成・保持した
         音を捨て（生成は ctx.cancel・stream で止まる）、履歴に Owner の発言と、ブラウザが再生し終えた文に割り込みの印を
@@ -719,6 +770,10 @@ class WebSession:
             result["last"] = ("error", {"kind": "stt", "message": f"認識できませんでした（{type(e).__name__}）"})
             return
         st.lat.mark("stt")
+        with self._lock:
+            carry, self._carry = self._carry, None
+        if carry is not None and time.monotonic() - carry[1] <= CARRY_SECONDS:
+            text = carry[0] if is_noise(text) else carry[0] + text   # 言いかけで待った文につなげる（T-3102）
         if is_noise(text):
             recovered = self._take_recover()
             if recovered is None:
@@ -730,6 +785,8 @@ class WebSession:
             with self._lock:
                 self._recover = None
         self._settle_after()                  # 前の発言が Obsidian のノートの編集の途中なら、その終わりを待つ（T-1702）
+        if self._hold_for_more(st, text):
+            return                            # 続きの発話につなげた（その発言で答える、T-3102）
         with self._lock:
             if self.closed or turn in self._cut:
                 return                        # 認識している間に割り込まれた・終えた（答えない）

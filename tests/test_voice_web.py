@@ -164,7 +164,8 @@ def make_session(fake=None, browser=None, synth=None, **kw):
     events = Events(browser)
     s = WebSession(transcribe=fake.transcribe, handle=kw.get("handle", fake.handle), emit=events,
                    record=kw.get("record", fake.record), synth=synth or Synth(), launcher=kw.get("launcher"),
-                   clock=kw.get("clock", time.monotonic))
+                   clock=kw.get("clock", time.monotonic),
+                   continue_seconds=kw.get("continue_seconds", 0))   # 言いかけの待ち（T-3102）は専用のテストで
     browser.session, browser.events = s, events
     return s, events, fake
 
