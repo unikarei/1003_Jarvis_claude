@@ -434,3 +434,7 @@ Approved（Owner指示、詳細はOwner事前承認 AGENTS.md §2.1）。要件�
 ## 4-29. Insight Reporter のレポートを会話で使う（T-3401）
 
 要件の正本は上位 spec §3.6（受け入れ基準は上位 testing §36、ADR-0044）。Claude 承認（上位 AGENTS.md §2.2）。`ir_reports.py` が 1004 の `reports/<id>/<日付>/report.json`（1004 の AGENTS.md が JARVIS の読み取りを想定している場所。読むだけ）を読む。`ingest_all` は記事の一覧（items）を持つ調査のレポートを、回ごとのまとめ（出典の URL `insight-reporter://<id>/<generated_at>`）と記事ごと（`#<順位>`）の Knowledge にする（分類 manufacturing、meta の projects に physical-ai・turbine-research）。同じ URL は重ねず、中身が違えば更新する。`run_daily.py` が毎朝取り込む（失敗しても続ける）。スキル `report-digest` は `matches`（Insight Reporter かレポートの種類＋レポート・スキャンの語と、一覧・題目・まとめ・中身などの語で、話題が残らない発言）で振り分け、`digest` が一覧・回ごとの概要と題目を 1004 のファイルから答える（LLM を呼ばない）。ピアノ教室の取り込み（`ingest_insight_reporter.py`、最新の数値）は変えない。
+
+## 4-30. 物についての質問をスキルに回さない（T-3402）
+
+要件の正本は上位 spec §3.4.5 の 2026-11-21 追加（受け入れ基準は上位 testing §37）。Claude 承認（上位 AGENTS.md §2.2）。`orchestrator._short_tail` は、発言の例の直後が「って」「ってのは」「とは」「は何」「はなに」（`_ABOUT`）なら、例が頭にあってもルールに当てない（「管理画面って自動で更新されるの？」を管理画面の作り直しに回さない）。「管理ページ」は jarvis-skills の control-center の発言の例に足した。
