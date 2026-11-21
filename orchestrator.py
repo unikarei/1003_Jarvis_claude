@@ -22,6 +22,7 @@ import config
 import latency
 import llm
 import knowledge_connections
+import news_rank
 import obsidian_note
 import capture_intent
 import prompts
@@ -349,6 +350,9 @@ def route(text: str, ctx: Context, use_llm: bool | None = None) -> Route:
     if knowledge_connections.matches(text):
         return Route("knowledge-stats", {}, "rule")
     active = skills.active()
+    if news_rank.SKILL in active and news_rank.matches(text):
+        # 話題のない「今日の主要なニュースは？」「今日のニュースは何件？」（上位 spec §3.5.2、T-3300）
+        return Route(news_rank.SKILL, {}, "rule")
     knowledge_request = obsidian_note.is_knowledge_request(text) and CAPTURE_SKILL in active
     save_request = obsidian_note.is_capture_request(text)
     note_request = obsidian_note.matches(text)
@@ -851,12 +855,18 @@ def _obsidian(inputs, ctx, text):
     return result.message, []
 
 
+def _news(inputs, ctx, text):
+    """主要なニュース（採点済みの点数を読むだけ、T-3300）。"""
+    return news_rank.digest(text), []
+
+
 # スキル名 → 1003 の関数（inputs, ctx, 発言）→ (表示する文章, 文脈に覚える知識)
 HANDLERS: dict[str, Callable] = {
     "knowledge-answer": _answer, "general-chat": _chat, "knowledge-search": _search, "knowledge-trace": _trace,
     "knowledge-audit": _audit, "knowledge-stats": _stats, "system-status": _system_status, "dev-board": _dev_board,
     "improvement-review": _improvement, "control-center": _control_center,
     "knowledge-capture": _capture, "theme-register": _theme, "code-task": _code, OBSIDIAN_SKILL: _obsidian,
+    news_rank.SKILL: _news,
 }
 
 

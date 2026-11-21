@@ -418,3 +418,7 @@ Approved（Owner指示、詳細はOwner事前承認 AGENTS.md §2.1）。要件�
 ## 4-25. Obsidian のノートの編集を会話から使う（T-3201）
 
 要件の正本は上位 spec §3.4.11 の 2026-11-21 追加（受け入れ基準は上位 testing §32）。Claude 承認（上位 AGENTS.md §2.2）。`obsidian_note.find_notes` は完全一致・部分一致で当たらなければ、ToDo の揺れ（`_TODO`）をそろえ一般語（`_GENERIC`）を除いた形で、含まれるか 2 文字の並びの Dice 係数（`FUZZY_MIN` 0.5 以上）で最大 3 件を選ぶ。見つからないときは `near_notes`（0.2 以上）を聞き返しに添える。`extract` は直前の会話（6 往復）を Ollama にだけ渡す。`matches`・`is_capture_request` は「ToDo」＋操作の語の依頼（質問は除く、`is_todo_request`）をこのスキルに回す。書く前の確認・承認の使い切りは変えない。
+
+## 4-26. ニュースの採点と主要なニュース（T-3300）
+
+要件の正本は上位 spec §3.5.1・§3.5.2（受け入れ基準は上位 testing §33、ADR-0043）。Claude 承認（上位 AGENTS.md §2.2）。`news_rank.py` が、取得元の名前（`feed_name`）を持つ Source から作った Knowledge をニュースとして扱う。`score_pending` は直近 3 日の未採点を 25 件ずつ claude_cli → codex → ollama で採点し、`config.NEWS_DIR`（既定 `data/news/`）の `scores.jsonl` に追記する。jarvis.db には書かない。`run_daily.py` は要約の後に採点し、失敗しても続ける。スキル `news-digest` は `matches`（ニュースの語＋順位・件数・日付の語で、話題が残らない発言）で振り分け、`digest` が点数の順に答える（LLM を呼ばない）。声は件数と上位 3 件の見出し（`voice/speak._news_summary`）。会話の始めの概要（4-24）に取り込みを始めた日・取得元・直近 7 日の件数・言い方を足す（`news_rank.briefing_lines`）。

@@ -267,3 +267,7 @@ T-3200 の要件は上位 spec §3.4.12 K と本リポジトリ spec 4-24。`bri
 ## Obsidian のノートの編集を会話から使う
 
 T-3201 の要件は上位 spec §3.4.11（2026-11-21 追加）と本リポジトリ spec 4-25。ノートの名前は揺れをそろえて近いものを候補にする（`find_notes`・`near_notes`）。直前の会話は Ollama にだけ渡す。「ToDo」＋操作の語は `is_todo_request` でこのスキルに回す。
+
+## ニュースの採点と主要なニュース
+
+T-3300 の要件は上位 spec §3.5.1・§3.5.2 と本リポジトリ spec 4-26。点数は jarvis.db の外（`data/news/scores.jsonl`、追記だけ）。過去の分は `python news_rank.py score --days N`、答えの確認は `python news_rank.py top 昨日のニュースのトップ10`。分類を足したら `news_rank.CATEGORY_LABELS` と `CATEGORY_WORDS` も足す。

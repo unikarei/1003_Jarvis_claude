@@ -84,6 +84,8 @@ def speech_summary(skill: str, text: str) -> str:
         if not items:
             return _plain(lines[0]) if lines else ""
         return "上位は、" + "。".join(items) + "です。"
+    if skill == "news-digest" and lines:
+        return _news_summary(lines)
     if skill == "system-status" and lines:
         counts = re.match(r"(エラー \d+ 件・警告 \d+ 件)", lines[0])
         errors = []
@@ -96,6 +98,21 @@ def speech_summary(skill: str, text: str) -> str:
         head = counts.group(1).replace("・", "、") + "です。" if counts else _plain(lines[0])
         return head + (f"エラーは、{errors[0]}。" if errors and "エラー 0 件" not in lines[0] else "")
     return summary_line(text)
+
+
+def _news_summary(lines: list[str]) -> str:
+    """主要なニュース（T-3300）: 件数と、上位 3 件の見出しを順に読む。"""
+    head = lines[0]
+    m = re.search(r"(\d+月\d+日)(?:（.）)?(?:〜(\d+月\d+日)(?:（.）)?)?に取り込んだ(.*?)ニュース (\d+) 件", head)
+    items = []
+    for line in lines:
+        item = re.match(r"^(\d+)\. \[\d+\] (.+?)（[^（）]*）— ", line)
+        if item and len(items) < 3:
+            items.append(f"{item.group(1)} 位、{speakable(item.group(2))}")
+    if not m or not items:
+        return summary_line("\n".join(lines))
+    span = m.group(1) + (f"から{m.group(2)}" if m.group(2) else "")
+    return f"{span}の{m.group(3)}ニュース {m.group(4)} 件のうち、" + "。".join(items) + "。"
 
 
 def summary_line(text: str) -> str:

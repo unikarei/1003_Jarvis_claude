@@ -25,6 +25,9 @@ MEMORY_PACK_CHARS = 1200
 MEMORY_MIN_SCORE = 1.0
 MEMORY_DIR = Path(os.environ.get("JARVIS_MEMORY_DIR", CKC_DATA_DIR.parent / "memory"))
 
+# ニュースの点数（news_rank.py、T-3300・ADR-0043）。jarvis.db の外。CKC と同じ data/ の下に置く
+NEWS_DIR = Path(os.environ.get("JARVIS_NEWS_DIR", CKC_DATA_DIR.parent / "news"))
+
 LATENCY_LOG = Path(os.environ.get("JARVIS_LATENCY_LOG", CKC_DATA_DIR.parent / "latency" / "latency.jsonl"))
 
 # Vault とプロジェクトの正本は Architecture Registry（../jarvis-architecture-registry）。registry.py が
