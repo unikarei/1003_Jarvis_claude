@@ -9,7 +9,7 @@
 | 層 | 役割 | 現在のモジュール | 今後 |
 |---|---|---|---|
 | L0 Architecture Registry | 全体構造の正本（別リポジトリ） | なし（JARVISは参照する側。`jarvis-architecture-registry` は未作成） | Registry の読み込み。Discovery / Guardian は本リポジトリの内部モジュールとして実装（MAP Phase 2〜3、ADR-0009） |
-| L1 Orchestration | タスク分解・ルーティング・エージェント制御 | `run_daily.py`（取得 → 要約 → `news_rank.py` の採点 → レポート）/ `run_task.py` / `llm.py`（`ask_claude_tiered()`）/ `code_agent.py` / `agent_log.py`、定期実行（launchd / タスクスケジューラ） | Agent Manager、Task Manager、Codex / Claude 連携（MAP Phase 9） |
+| L1 Orchestration | タスク分解・ルーティング・エージェント制御 | `run_daily.py`（取得 → 要約 → `news_rank.py` の採点 → `news_page.py` のページ → レポート）/ `run_task.py` / `llm.py`（`ask_claude_tiered()`）/ `code_agent.py` / `agent_log.py`、定期実行（launchd / タスクスケジューラ） | Agent Manager、Task Manager、Codex / Claude 連携（MAP Phase 9） |
 | L2 Data Foundation | 外部取得・Raw Data・DB・ログ | `fetch_news.py` / `fetch_search_console.py` / `fetch_ga4.py` / `ingest_insight_reporter.py` / `ingest_oarai_project_os.py` / `ingest_obsidian.py` / `github_auth.py`、SQLite（`db.py` / `schema.sql`）、`jarvis_agent.log` | 証券API、SNS API、スクレイピング、MCP |
 | L3 Knowledge | 長期知識（Obsidian / Markdown / Git）・意思決定履歴 | `update_obsidian.py`（oarai-obsidian への書き込み）、`oarai_project_os.py`（Project OS への変更提案） | Obsidian 連携の拡大（MAP Phase 7） |
 | L4 Intelligence | 要約・検索・分析・ナレッジグラフ | `summarize.py`、`db.py`（`search_knowledge()` / `extract_keywords()`、nodes/edges グラフ）、`ask.py`（`answer()`）、`piano_analytics.py` | Knowledge Engine（RAG・意味検索・鮮度管理）、スキルライブラリ。本リポジトリの内部モジュールとして開発（MAP Phase 7、ADR-0010） |
