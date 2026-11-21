@@ -160,15 +160,19 @@ def _norm(text: str) -> str:
 
 
 RULE_TAIL_MAX = 8      # 発言の例の後ろに続いてよい文字数（「ください」「くれる？」など。T-3101）
+# 例の直後がこれなら、その物についての質問（「管理画面って自動で更新されるの？」）。ルールに当てない（T-3402）
+_ABOUT = re.compile(r"\s*(?:って|とは|は何|はなに|ってなに|ってのは)")
 
 
 def _short_tail(text: str, phrase: str) -> bool:
     """発言の例の後ろが短い結びだけか。説明の途中の例（「…を探して、最大マッハ数の…」）は当てない（T-3101）。
     ナレッジ化（CAPTURE_SKILL）は capture_intent が別に判定するので、この制限の外に置く。"""
     idx = text.find(phrase)
+    tail = text[idx + len(phrase):]
+    if _ABOUT.match(tail):
+        return False         # その物についての質問（T-3402）
     if not _strip(text[:idx]):
         return True          # 例が頭にあり、後ろが入力の言い方（「テーマ登録: 太陽光」）
-    tail = text[idx + len(phrase):]
     return len(re.sub(r"[\s、。，．,.!！?？「」]", "", tail)) <= RULE_TAIL_MAX
 
 
