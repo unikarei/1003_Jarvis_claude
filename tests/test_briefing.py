@@ -61,7 +61,7 @@ def test_briefing_does_not_write(vaults):
 
 def test_for_ctx_builds_once_and_survives_renew(monkeypatch):
     calls = []
-    monkeypatch.setattr(briefing, "build", lambda: calls.append(1) or "概要")
+    monkeypatch.setattr(briefing, "build", lambda **k: calls.append(1) or "概要")
     ctx = orc.Context()
     assert briefing.for_ctx(ctx) == "概要" and briefing.for_ctx(ctx) == "概要" and calls == [1]
     assert briefing.for_ctx(orc.renew_context(ctx, voice=True, terminal=False)) == "概要" and calls == [1]
@@ -93,7 +93,7 @@ def test_harness_session_start_uses_briefing(monkeypatch):
     import harness_session
     import llm
     seen = {}
-    monkeypatch.setattr(briefing, "build", lambda: "# 今あなた（JARVIS）が使えるもの（試験）")
+    monkeypatch.setattr(briefing, "build", lambda **k: "# 今あなた（JARVIS）が使えるもの（試験）")
     monkeypatch.setattr(llm, "ClaudeSession", lambda rules: seen.setdefault("rules", rules))
     harness_session._start(orc.Context(), "claude")
     assert "使えるもの（試験）" in seen["rules"]

@@ -426,3 +426,7 @@ Approved（Owner指示、詳細はOwner事前承認 AGENTS.md §2.1）。要件�
 ## 4-27. ニュースの一覧のページ（T-3301）
 
 要件の正本は上位 spec §3.5.3（受け入れ基準は上位 testing §34）。Claude 承認（上位 AGENTS.md §2.2）。`news_page.py` が `reports/news/index.html`・`data/index.json`・`data/<日>.json` を一時ファイルから置き換えて作る（読み取りだけ）。日ごとの JSON は `news_rank.ranked` の順（点数の高い順、未採点は後ろ）で、要約の先頭 100 字（`short`）と、RSS の本文から HTML のタグを除いた文字（`body`、2 万字まで）を持つ。ページは記事の文字を `textContent` だけで入れ、http(s) 以外のリンクは出さない。外部の読み込みはしない。`run_daily.py` は採点の後にページを作り、失敗しても続ける。詳細の本文は RSS が配る抜粋で、記事の全文は保存していない（元の記事へのリンクで読む）。
+
+## 4-28. Jarvis の仕組みのダイジェストと前の会話の時刻（T-3400）
+
+要件の正本は上位 spec §3.4.12 L（受け入れ基準は上位 testing §35、ADR-0044）。Claude 承認（上位 AGENTS.md §2.2）。`briefing.build` は会話の始めの概要に、`docs/self-digest.md`（人が書く仕組みのダイジェスト）、Registry の `scheduled_job`・`service`（`_jobs`）、直近 7 日の PR のマージ（`git log --merges`、`_changes`）、直前の会話の始めと終わりの時刻（`_last_sessions`、今の会話を除く）を足す。上限は 7,000 字で、超えたら `SHRINK_STEPS` の順（ノートの一覧 → 最近の変更 → 定期の仕事）に短くする。会話の記憶の要約（`memory.recall` の想起・検索）には `session_span` で時刻を付ける。
