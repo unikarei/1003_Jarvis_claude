@@ -19,6 +19,7 @@ CAPABILITIES = (
     ("obsidian-note", "Obsidian のノートの追加・作成・書き直し・削除（内容と保存先を確認してから書く。ToDo の登録もこれ）",
      "「Obsidian の大洗_最優先ToDo に〇〇を追加して」"),
     ("knowledge-capture", "会話の内容をナレッジとして Obsidian に保存（候補を確認してから保存）", "「ナレッジ化して」"),
+    ("news-digest", "集めたニュースの主要なもの（点数の順）と件数", "「今日の主要なニュースは？」「昨日のニュースのトップ10」"),
     ("knowledge-search", "ナレッジの検索の一覧", "「〇〇を探して」"),
     ("knowledge-stats", "ナレッジの件数・接続の状態", "「ナレッジは何件？」「ナレッジの接続状況」"),
     ("knowledge-trace", "答えの出典", "「その出典は？」"),
@@ -99,6 +100,14 @@ def _vault_lines(vaults, limit: int) -> list[str]:
     return lines
 
 
+def _news() -> list[str]:
+    try:
+        import news_rank
+        return news_rank.briefing_lines()
+    except Exception:  # noqa: BLE001
+        return ["- ニュース: 未確認"]
+
+
 def _memory() -> list[str]:
     if not config.MEMORY_ENABLED:
         return ["- 会話の記憶: 無効（設定）"]
@@ -125,7 +134,8 @@ def build(now: datetime | None = None) -> str:
             "どの書庫・ナレッジ・ノートにアクセスできるか、何ができるかを聞かれたら、この範囲で答える）",
             "## ナレッジ（検索 DB。質問の答えの資料に使う）", *_knowledge(),
             "## Obsidian の Vault（中身は検索 DB に取り込み済み。ノートの編集は下の機能で行う）"]
-    tail = ["## 会話の記憶", *_memory(),
+    tail = ["## ニュース（日次処理で集めた記事。上の知識の「Web の記事」）", *_news(),
+            "## 会話の記憶", *_memory(),
             "## Owner の言葉で動く Jarvis の機能（答えの役とは別のスキルが実行する。頼まれたら「できない」と言わず、この言い方を案内する）",
             *_capabilities(),
             "## ないもの",

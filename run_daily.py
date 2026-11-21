@@ -19,6 +19,14 @@ def main():
     new_knowledge = summarize_all()
     print(f"[2/4] 新規Knowledge: {len(new_knowledge)}件")
 
+    # ニュースの採点（上位 spec §3.5.1、T-3300）。失敗しても続く処理は行う
+    try:
+        from news_rank import score_pending
+        scored, failed = score_pending()
+        print(f"[2/4] ニュースの採点: {scored}件、採点できず: {failed}件")
+    except Exception as e:
+        print(f"[2/4] ニュースの採点: スキップ（{type(e).__name__}: {e}）")
+
     try:
         from piano_analytics import run_piano_update
         print(f"[3/4] ①ピアノ教室: {run_piano_update()}")
