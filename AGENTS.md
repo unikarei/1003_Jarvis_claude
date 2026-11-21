@@ -275,3 +275,7 @@ T-3300 の要件は上位 spec §3.5.1・§3.5.2 と本リポジトリ spec 4-26
 ## ニュースの一覧のページ
 
 T-3301 の要件は上位 spec §3.5.3 と本リポジトリ spec 4-27。`python news_page.py` で `reports/news/` を作り直す。ワークスペースの `docs/news` がこのフォルダへのリンクで、ランチャーの「ニュース」から開く。ページの HTML は `news_page.PAGE` にあり、記事の文字は `textContent` だけで入れる（`innerHTML` を使わない、テストで確かめる）。
+
+## 仕組みのダイジェスト（必ず直す）
+
+T-3400 の要件は上位 spec §3.4.12 L と本リポジトリ spec 4-28。`docs/self-digest.md` は会話の始めに Jarvis へそのまま渡す。**機能・定期の仕事・画面・確認の決まりを足し・変えた PR では、`docs/self-digest.md` も同じ PR で直す**（古い説明が Jarvis の答えになるため）。定期の仕事の一覧は Registry、最近の変更は Git から自動で作るので書かない。

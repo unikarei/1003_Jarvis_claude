@@ -19,10 +19,31 @@ class MemoryPack:
     items: list[dict] = field(default_factory=list)
 
 
+CHANNEL_LABELS = {"text": "文字の会話", "voice": "音声の会話", "web": "ブラウザの会話"}
+
+
+def session_span(started_at: str | None, ended_at: str | None) -> str:
+    """会話の始めと終わりの時刻（例: 2026-11-21 08:53〜09:07。日をまたげば終わりも日付付き。T-3400）。"""
+    end = (ended_at or started_at or "")[:16].replace("T", " ")
+    start = (started_at or ended_at or "")[:16].replace("T", " ")
+    if not start:
+        return ""
+    if end[:10] == start[:10]:
+        return f"{start}〜{end[11:]}"
+    return f"{start}〜{end}"
+
+
+def _row_span(row) -> str:
+    keys = row.keys()
+    started = row["started_at"] if "started_at" in keys else None
+    ended = (row["ended_at"] if "ended_at" in keys and row["ended_at"] else None) or row["last_at"]
+    return session_span(started, ended)
+
+
 def _summary_item(row, body):
-    channel = {"text": "文字の会話", "voice": "音声の会話", "web": "ブラウザの会話"}.get(row["channel"], "会話")
+    channel = CHANNEL_LABELS.get(row["channel"], "会話")
     return {"kind": "summary", "session_id": row["session_id"], "date": row["last_at"][:10],
-            "text": f'- [会話の要約 {row["last_at"][:10]} {channel}]\n{body}'}
+            "text": f'- [会話の要約 {_row_span(row)} {channel}]\n{body}'}
 
 
 NOTE_KIND_LABELS = {"fact": "事実", "decision": "決定", "preference": "好み"}
@@ -150,10 +171,10 @@ def search(query: str, session_id: str | None, limit: int = 5) -> list[dict]:
         conn.row_factory = sqlite3.Row
         for row in _notes(conn):
             docs.append({"body": row["text"], "text": _note_item(row)["text"], "at": row["created_at"]})
-        for row in conn.execute("SELECT session_id, last_at, summary FROM memory_sessions "
+        for row in conn.execute("SELECT session_id, started_at, last_at, ended_at, summary FROM memory_sessions "
                                 "WHERE summary_status='done' AND summary IS NOT NULL"):
             docs.append({"body": row["summary"], "at": row["last_at"],
-                         "text": f'- [会話の要約 {row["last_at"][:10]}] {row["summary"]}'})
+                         "text": f'- [会話の要約 {_row_span(row)}] {row["summary"]}'})
         for row in conn.execute("SELECT session_id, speaker, text, created_at FROM memory_turns "
                                 "WHERE session_id=? OR created_at>=? ORDER BY created_at DESC LIMIT ?",
                                 (session_id or "", since, SEARCH_TURN_LIMIT)):
