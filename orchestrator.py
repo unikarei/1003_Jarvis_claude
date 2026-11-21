@@ -357,6 +357,8 @@ def route(text: str, ctx: Context, use_llm: bool | None = None) -> Route:
     save_request = obsidian_note.is_capture_request(text)
     note_request = obsidian_note.matches(text)
     rule = route_by_rule(text, active)
+    if rule is not None and rule.skill == news_rank.SKILL:
+        rule = None          # 発言の例だけでは回さない（「NVIDIA の大きなニュースは？」は話題の質問、T-3300）
     capture_request = knowledge_request or save_request or (
         not note_request and rule is not None and rule.skill == CAPTURE_SKILL)
     if capture_request and not capture_intent.immediate(text, ctx.history):

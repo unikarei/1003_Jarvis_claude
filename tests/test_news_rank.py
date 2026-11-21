@@ -164,7 +164,7 @@ def index(tmp_path, monkeypatch):
         "knowledge-answer": s("普通の質問に答える", inputs={"question": {"type": "string", "required": True}}),
         "knowledge-search": s("知識を検索する", ["を探して"], {"query": {"type": "string", "required": True}}),
         "knowledge-stats": s("件数", ["件数", "何件"]),
-        "news-digest": s("主要なニュース", ["主要なニュース"]),
+        "news-digest": s("主要なニュース", ["主要なニュース", "大きなニュース"]),
     }}, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setenv("JARVIS_SKILLS_JSON", str(path))
     skills.reset_cache()
@@ -183,6 +183,7 @@ def test_route_and_execute_without_llm(index, news, monkeypatch):
     out = orc.execute(r, ctx, "今日のニュースは何件？")
     assert out.ok and "ニュース 1 件" in out.text
     assert orc.route("NVIDIA のニュースで大きいのは？", ctx).skill != "news-digest"
+    assert orc.route("NVIDIAの大きなニュースは？", ctx).skill != "news-digest"     # 発言の例だけでは回さない
 
 
 def test_not_routed_when_skill_inactive(news, tmp_path, monkeypatch):
