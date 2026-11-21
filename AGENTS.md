@@ -271,3 +271,7 @@ T-3201 の要件は上位 spec §3.4.11（2026-11-21 追加）と本リポジト
 ## ニュースの採点と主要なニュース
 
 T-3300 の要件は上位 spec §3.5.1・§3.5.2 と本リポジトリ spec 4-26。点数は jarvis.db の外（`data/news/scores.jsonl`、追記だけ）。過去の分は `python news_rank.py score --days N`、答えの確認は `python news_rank.py top 昨日のニュースのトップ10`。分類を足したら `news_rank.CATEGORY_LABELS` と `CATEGORY_WORDS` も足す。
+
+## ニュースの一覧のページ
+
+T-3301 の要件は上位 spec §3.5.3 と本リポジトリ spec 4-27。`python news_page.py` で `reports/news/` を作り直す。ワークスペースの `docs/news` がこのフォルダへのリンクで、ランチャーの「ニュース」から開く。ページの HTML は `news_page.PAGE` にあり、記事の文字は `textContent` だけで入れる（`innerHTML` を使わない、テストで確かめる）。

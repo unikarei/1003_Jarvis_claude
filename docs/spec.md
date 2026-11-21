@@ -422,3 +422,7 @@ Approved（Owner指示、詳細はOwner事前承認 AGENTS.md §2.1）。要件�
 ## 4-26. ニュースの採点と主要なニュース（T-3300）
 
 要件の正本は上位 spec §3.5.1・§3.5.2（受け入れ基準は上位 testing §33、ADR-0043）。Claude 承認（上位 AGENTS.md §2.2）。`news_rank.py` が、取得元の名前（`feed_name`）を持つ Source から作った Knowledge をニュースとして扱う。`score_pending` は直近 3 日の未採点を 25 件ずつ claude_cli → codex → ollama で採点し、`config.NEWS_DIR`（既定 `data/news/`）の `scores.jsonl` に追記する。jarvis.db には書かない。`run_daily.py` は要約の後に採点し、失敗しても続ける。スキル `news-digest` は `matches`（ニュースの語＋順位・件数・日付の語で、話題が残らない発言）で振り分け（索引の発言の例だけでは回さない）、`digest` が点数の順に答える（LLM を呼ばない）。声は件数と上位 3 件の見出し（`voice/speak._news_summary`）。会話の始めの概要（4-24）に取り込みを始めた日・取得元・直近 7 日の件数・言い方を足す（`news_rank.briefing_lines`）。
+
+## 4-27. ニュースの一覧のページ（T-3301）
+
+要件の正本は上位 spec §3.5.3（受け入れ基準は上位 testing §34）。Claude 承認（上位 AGENTS.md §2.2）。`news_page.py` が `reports/news/index.html`・`data/index.json`・`data/<日>.json` を一時ファイルから置き換えて作る（読み取りだけ）。日ごとの JSON は `news_rank.ranked` の順（点数の高い順、未採点は後ろ）で、要約の先頭 100 字（`short`）と、RSS の本文から HTML のタグを除いた文字（`body`、2 万字まで）を持つ。ページは記事の文字を `textContent` だけで入れ、http(s) 以外のリンクは出さない。外部の読み込みはしない。`run_daily.py` は採点の後にページを作り、失敗しても続ける。詳細の本文は RSS が配る抜粋で、記事の全文は保存していない（元の記事へのリンクで読む）。

@@ -26,6 +26,12 @@ def main():
         print(f"[2/4] ニュースの採点: {scored}件、採点できず: {failed}件")
     except Exception as e:
         print(f"[2/4] ニュースの採点: スキップ（{type(e).__name__}: {e}）")
+    # ニュースの一覧のページ（上位 spec §3.5.3、T-3301）。失敗しても続く処理は行う
+    try:
+        from news_page import build as build_news_page
+        print(f"[2/4] ニュースのページ: {build_news_page()}")
+    except Exception as e:
+        print(f"[2/4] ニュースのページ: スキップ（{type(e).__name__}: {e}）")
 
     try:
         from piano_analytics import run_piano_update
