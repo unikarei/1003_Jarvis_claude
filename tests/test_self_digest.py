@@ -52,10 +52,9 @@ def test_digest_file_is_written_for_the_llm():
 
 
 def test_shrinks_changes_when_long(setup, monkeypatch):
-    monkeypatch.setattr(briefing, "_self_digest", lambda: ["- " + "長い説明" * 1000])          # 4,000 字: 全部入る
-    text = briefing.build()
-    assert "## 最近入った変更" in text and len(text) <= briefing.MAX_CHARS
-    monkeypatch.setattr(briefing, "_self_digest", lambda: ["- " + "長い説明" * 1400])          # 5,600 字: 変更を落とす
+    full = briefing.build()
+    assert "## 最近入った変更" in full and len(full) <= briefing.MAX_CHARS
+    monkeypatch.setattr(briefing, "MAX_CHARS", len(full) - 1)        # 1 字でも超えたら、順に短くして変更を落とす
     text = briefing.build()
     assert "## 最近入った変更" not in text and "## 定期の仕事" in text and len(text) <= briefing.MAX_CHARS
 

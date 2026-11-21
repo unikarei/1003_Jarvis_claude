@@ -84,12 +84,13 @@ Insight Reporterの定期収集を**上位ソース**として優先し、JARVIS
 
 - JARVISはInsight Reporter配下のファイルを変更・import しない（読み取り専用）。逆方向も同様（Insight
   Reporter側のclaude.mdにもJARVIS非変更の方針が明記されている）
-- 連携は `reports/<report_id>/latest.json` の読み取りのみで行う（`ingest_insight_reporter.py`）
+- 連携はファイルの読み取りのみで行う。ピアノ教室は `reports/<report_id>/latest.json`（`ingest_insight_reporter.py`）、調査のレポート（physical_ai・turbine_research）は `reports/<report_id>/<日付>/report.json`（`ir_reports.py`、T-3401。1004 の AGENTS.md が想定する場所）
 - 「上位ソースとして十分」の判定（`is_sufficient()`）: レポートが存在し、必須フィールドが揃い、
   生成から一定日数以内（既定10日、週次更新を想定）であること。不足する場合はJARVIS独自の取得
   （例: ①ピアノ教室は`piano_analytics.run_piano_analysis()`）にフォールバックする
-- 現時点でInsight Reporterが実装しているレポート種別は `piano_growth`（①ピアノ教室）のみ。他カテゴリ
-  （②〜⑥）はInsight Reporter側に型が用意されるまで、引き続きJARVIS独自のRSS収集を使う
+- 現時点でInsight Reporterが実装しているレポート種別は `piano_growth`（①ピアノ教室、数値）と、調査の
+  `physical_ai`・`turbine_research`（⑤製造業、記事の一覧）の 3 つ（2026-11-21 確認）。ニュースなど他のカテゴリは
+  引き続きJARVIS独自のRSS収集を使う
 
 ## 外部プロジェクトとの連携（1004_Insight_Reporter以外: oarai-project-os / oarai-obsidian）
 
@@ -279,3 +280,7 @@ T-3301 の要件は上位 spec §3.5.3 と本リポジトリ spec 4-27。`python
 ## 仕組みのダイジェスト（必ず直す）
 
 T-3400 の要件は上位 spec §3.4.12 L と本リポジトリ spec 4-28。`docs/self-digest.md` は会話の始めに Jarvis へそのまま渡す。**機能・定期の仕事・画面・確認の決まりを足し・変えた PR では、`docs/self-digest.md` も同じ PR で直す**（古い説明が Jarvis の答えになるため）。定期の仕事の一覧は Registry、最近の変更は Git から自動で作るので書かない。
+
+## Insight Reporter のレポートを会話で使う
+
+T-3401 の要件は上位 spec §3.6 と本リポジトリ spec 4-29。`python ir_reports.py ingest` で過去の分も取り込む（何度動かしても重ねない）。答えの確認は `python ir_reports.py show 11月20日のフィジカルAIスキャンの題目を全部`。1004 にレポートの種類が増えたら `ir_reports.REPORTS` に呼び名・言い方・プロジェクトを足す。

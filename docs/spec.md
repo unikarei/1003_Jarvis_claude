@@ -430,3 +430,7 @@ Approved（Owner指示、詳細はOwner事前承認 AGENTS.md §2.1）。要件�
 ## 4-28. Jarvis の仕組みのダイジェストと前の会話の時刻（T-3400）
 
 要件の正本は上位 spec §3.4.12 L（受け入れ基準は上位 testing §35、ADR-0044）。Claude 承認（上位 AGENTS.md §2.2）。`briefing.build` は会話の始めの概要に、`docs/self-digest.md`（人が書く仕組みのダイジェスト）、Registry の `scheduled_job`・`service`（`_jobs`）、直近 7 日の PR のマージ（`git log --merges`、`_changes`）、直前の会話の始めと終わりの時刻（`_last_sessions`、今の会話を除く）を足す。上限は 7,000 字で、超えたら `SHRINK_STEPS` の順（ノートの一覧 → 最近の変更 → 定期の仕事）に短くする。会話の記憶の要約（`memory.recall` の想起・検索）には `session_span` で時刻を付ける。
+
+## 4-29. Insight Reporter のレポートを会話で使う（T-3401）
+
+要件の正本は上位 spec §3.6（受け入れ基準は上位 testing §36、ADR-0044）。Claude 承認（上位 AGENTS.md §2.2）。`ir_reports.py` が 1004 の `reports/<id>/<日付>/report.json`（1004 の AGENTS.md が JARVIS の読み取りを想定している場所。読むだけ）を読む。`ingest_all` は記事の一覧（items）を持つ調査のレポートを、回ごとのまとめ（出典の URL `insight-reporter://<id>/<generated_at>`）と記事ごと（`#<順位>`）の Knowledge にする（分類 manufacturing、meta の projects に physical-ai・turbine-research）。同じ URL は重ねず、中身が違えば更新する。`run_daily.py` が毎朝取り込む（失敗しても続ける）。スキル `report-digest` は `matches`（Insight Reporter かレポートの種類＋レポート・スキャンの語と、一覧・題目・まとめ・中身などの語で、話題が残らない発言）で振り分け、`digest` が一覧・回ごとの概要と題目を 1004 のファイルから答える（LLM を呼ばない）。ピアノ教室の取り込み（`ingest_insight_reporter.py`、最新の数値）は変えない。

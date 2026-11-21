@@ -22,6 +22,7 @@ import config
 import latency
 import llm
 import knowledge_connections
+import ir_reports
 import news_rank
 import obsidian_note
 import capture_intent
@@ -350,6 +351,9 @@ def route(text: str, ctx: Context, use_llm: bool | None = None) -> Route:
     if knowledge_connections.matches(text):
         return Route("knowledge-stats", {}, "rule")
     active = skills.active()
+    if ir_reports.SKILL in active and ir_reports.matches(text):
+        # Insight Reporter のレポートの一覧・題目・まとめ（上位 spec §3.6、T-3401）
+        return Route(ir_reports.SKILL, {}, "rule")
     if news_rank.SKILL in active and news_rank.matches(text):
         # 話題のない「今日の主要なニュースは？」「今日のニュースは何件？」（上位 spec §3.5.2、T-3300）
         return Route(news_rank.SKILL, {}, "rule")
@@ -357,7 +361,7 @@ def route(text: str, ctx: Context, use_llm: bool | None = None) -> Route:
     save_request = obsidian_note.is_capture_request(text)
     note_request = obsidian_note.matches(text)
     rule = route_by_rule(text, active)
-    if rule is not None and rule.skill == news_rank.SKILL:
+    if rule is not None and rule.skill in (news_rank.SKILL, ir_reports.SKILL):
         rule = None          # 発言の例だけでは回さない（「NVIDIA の大きなニュースは？」は話題の質問、T-3300）
     capture_request = knowledge_request or save_request or (
         not note_request and rule is not None and rule.skill == CAPTURE_SKILL)
@@ -862,13 +866,18 @@ def _news(inputs, ctx, text):
     return news_rank.digest(text), []
 
 
+def _reports(inputs, ctx, text):
+    """Insight Reporter のレポートの一覧・題目（1004 のファイルを読むだけ、T-3401）。"""
+    return ir_reports.digest(text), []
+
+
 # スキル名 → 1003 の関数（inputs, ctx, 発言）→ (表示する文章, 文脈に覚える知識)
 HANDLERS: dict[str, Callable] = {
     "knowledge-answer": _answer, "general-chat": _chat, "knowledge-search": _search, "knowledge-trace": _trace,
     "knowledge-audit": _audit, "knowledge-stats": _stats, "system-status": _system_status, "dev-board": _dev_board,
     "improvement-review": _improvement, "control-center": _control_center,
     "knowledge-capture": _capture, "theme-register": _theme, "code-task": _code, OBSIDIAN_SKILL: _obsidian,
-    news_rank.SKILL: _news,
+    news_rank.SKILL: _news, ir_reports.SKILL: _reports,
 }
 
 
