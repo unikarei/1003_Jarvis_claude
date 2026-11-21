@@ -39,6 +39,13 @@ def main():
     except Exception as e:
         print(f"[3/4] ①ピアノ教室アクセス分析: スキップ（{type(e).__name__}）")
 
+    # Insight Reporter の調査のレポート（過去の分も記事ごと、上位 spec §3.6、T-3401）。失敗しても続ける
+    try:
+        from ir_reports import ingest_all
+        print(f"[3/4] Insight Reporter の調査のレポート: {ingest_all()}")
+    except Exception as e:
+        print(f"[3/4] Insight Reporter の調査のレポート: スキップ（{type(e).__name__}: {e}）")
+
     categories = sorted({feed["category"] for feed in RSS_FEEDS} | {"piano"})
     for i, category in enumerate(categories, 1):
         report_path = write_report(category=category)

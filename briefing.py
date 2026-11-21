@@ -20,6 +20,7 @@ CAPABILITIES = (
      "「Obsidian の大洗_最優先ToDo に〇〇を追加して」"),
     ("knowledge-capture", "会話の内容をナレッジとして Obsidian に保存（候補を確認してから保存）", "「ナレッジ化して」"),
     ("news-digest", "集めたニュースの主要なもの（点数の順）と件数", "「今日の主要なニュースは？」「昨日のニュースのトップ10」"),
+    ("report-digest", "Insight Reporter のレポートの一覧・回ごとの概要と題目", "「インサイトレポートの一覧」「11月20日のフィジカルAIスキャンの題目を全部」"),
     ("knowledge-search", "ナレッジの検索の一覧", "「〇〇を探して」"),
     ("knowledge-stats", "ナレッジの件数・接続の状態", "「ナレッジは何件？」「ナレッジの接続状況」"),
     ("knowledge-trace", "答えの出典", "「その出典は？」"),
@@ -112,6 +113,14 @@ def _news() -> list[str]:
         return news_rank.briefing_lines()
     except Exception:  # noqa: BLE001
         return ["- ニュース: 未確認"]
+
+
+def _reports() -> list[str]:
+    try:
+        import ir_reports
+        return ir_reports.briefing_lines()
+    except Exception:  # noqa: BLE001
+        return ["- Insight Reporter のレポート: 未確認"]
 
 
 def _memory(session_id: str | None = None) -> list[str]:
@@ -220,6 +229,7 @@ def build(now: datetime | None = None, session_id: str | None = None) -> str:
             "## ナレッジ（検索 DB。質問の答えの資料に使う）", *_knowledge(),
             "## Obsidian の Vault（中身は検索 DB に取り込み済み。ノートの編集は下の機能で行う）"]
     tail = ["## ニュース（日次処理で集めた記事。上の知識の「Web の記事」）", *_news(),
+            "## Insight Reporter のレポート（1004 が毎週作る。中身は検索 DB にも入っている）", *_reports(),
             "## 会話の記憶", *memory,
             "## Owner の言葉で動く Jarvis の機能（答えの役とは別のスキルが実行する。頼まれたら「できない」と言わず、この言い方を案内する）",
             *_capabilities(),

@@ -84,6 +84,13 @@ def speech_summary(skill: str, text: str) -> str:
         if not items:
             return _plain(lines[0]) if lines else ""
         return "上位は、" + "。".join(items) + "です。"
+    if skill == "report-digest" and lines:
+        if lines[0].startswith("Insight Reporter のレポート（"):
+            kinds = sum(1 for line in lines if line.startswith("- "))
+            return f"Insight Reporter のレポートは {kinds} 種類です。一覧を画面に出しました。"
+        if re.search(r"の記事は \d+ 件です。$", lines[0]):
+            return _plain(lines[0]) + "題目は画面に並べました。"
+        return summary_line(text)
     if skill == "news-digest" and lines:
         return _news_summary(lines)
     if skill == "system-status" and lines:
